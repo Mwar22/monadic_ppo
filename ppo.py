@@ -1,115 +1,105 @@
 import jax
+import distrax
+import optax
 import jax.numpy as jnp
-from jax import make_jaxpr
-from flax import struct
-from typing import Callable, Tuple, NewType, Any
-
-State = NewType("State", jax.Array)
+import flax.linen as nn
+from enviroment import Env, Data, Action
+from enviroment import create_env, my_step
 
 
-@struct.dataclass
-class Data:
-    obs: jax.Array
-    reward: jax.Array
-    done: jax.Array
+class Policy(nn.Module):
+    action_dim: int
+    discrete: bool
+
+    @nn.compact
+    def __call__(self, obs):
+        x = nn.Dense(64)(obs)
+        x = nn.tanh(x)
+        x = nn.Dense(64)(x)
+        x = nn.tanh(x)
+        logits = nn.Dense(self.action_dim)(x)  # discrete actions
+        return logits
 
 
-@struct.dataclass
-class Env:
+class Critic(nn.Module):
+    @nn.compact
+    def __call__(self, obs):
+        x = nn.Dense(64)(obs)
+        x = nn.tanh(x)
+        x = nn.Dense(64)(x)
+        x = nn.tanh(x)
+        value = nn.Dense(1)(x)
+        return value.squeeze(-1)
+
+
+#######################################################################################
+def get_action(policy: nn.Module) -> Env:
     """
-    Immutable dataclass, where the enviroment by itself is a state monad
-    step:: s -> (s', r)
-    """
-
-    exec: Callable[[jax.Array], Tuple[jax.Array, Any]]
-
-    def run(self, state):
-        return self.exec(state)
-
-    def bind(self, f):
-        """
-        :: Env s x -> (x -> Env s y)-> Env s y
-        """
-
-        def new_exec(state):
-            new_state, ret_data = self.exec(state)
-            return f(ret_data).exec(new_state)
-
-        return Env(new_exec)
-
-    def map(self, f):
-        """
-        :: Env s x -> (x -> y) -> Env s y
-        """
-
-        def new_exec(state):
-            new_state, ret_data = self.exec(state)
-            return new_state, f(ret_data)
-
-        return Env(new_exec)
-
-
-"""
-Tiny env for testing.
-----------------------
-State: an integer s representing position on a 1D line.
-Range: 0 to 4.
-Actions: +1 (move right) or -1 (move left).
-Reward: +1 when the agent reaches the goal state 4, 0 otherwise.
-Done: True when s == 4.
-Max episode length: 5 steps (to keep it short for debugging).
-"""
-
-
-def my_step(action):
-    """
-    :: a -> (s -> (s', d))
+    :: p -> s -> (s', d)
     """
 
-    def step(state):
-        new_state = jnp.clip(state + action, 0, 4)
-        reward = jnp.where(new_state == 4, 1.0, 0.0)
-        done = new_state == 4
-        return new_state, Data(new_state, reward, done)
+    def disc_eval(logits, rng):
+        action = jax.random.categorical(rng, logits)
+        return action, jax.nn.log_softmax(logits)[action]
 
-    return Env(step)
+    def cont_eval(mu, sigma, rng):
+        dist = distrax.MultivariateNormalDiag(mu, sigma)
+        action = dist.sample(seed=rng)
+        return action, dist.log_prob(action)
+
+    def func(state):
+        last_obs, rng = state
+        rng, rng2 = jax.random.split(rng)
+
+        output = policy(last_obs)
+
+        action, logprob = jax.lax.cond(
+            policy.discrete,
+            lambda logits: disc_eval(logits, rng),  # discrete
+            lambda mu_sigma: cont_eval(
+                mu_sigma[0], mu_sigma[1], rng
+            ),  #  musigma = (mu, sigma)
+            operand=output,
+        )
+
+        new_state = (last_obs, rng2)
+        action_data = {"action": action, "logprob": logprob}
+
+        return new_state, action_data
+
+    return Env(func)
 
 
-def create_env():
-    return my_step(jnp.array(0))
+def update_reward(data: Data):
+    new_data = data.clone()
+    return new_data
 
 
-def my_reset():
-    def reset(state):
-        return jnp.array(0), Data(jnp.array(0), jnp.array(0), jnp.array(0))
-
-    return Env(reset)
+def update_done(data: Data):
+    new_data = data.clone()
+    return new_data
 
 
-def policy(data):
-    return jnp.where(data.obs < 4, 1, 0)
+def step(action_data):
+    def func(state):
+        last_obs, rng = state
+        new_state = None
+        return new_state, Data(obs=last_obs, info=action_data)
 
-
-def show_obs(data):
-    print(f"ran show_obs: {data.obs}")
-    return data
-
-
-"""
-my_env = (
-    my_reset().map(lambda data: policy(data)).bind(lambda action: my_step(action))
-    # .map(lambda data: show_obs(data))
-    # my_env.map(lambda _, data: show_state(data))
-    # my_env.map(lambda _, data: policy(data.obs))
-    # my_env.bind(lambda state, action: my_step(state, action))
-    # .run(jnp.array(0))
-)
-"""
+    return Env(func)
 
 
 def compose_pipeline(env: Env) -> Env:
-    # Compose pipeline once
-    return env.map(policy).bind(my_step)
+    # Aplica o pipeline de transformações.
+    # primeiro obtem as ações por meio da politica
+    # depois obtem o proximo passo com a ação recebida
+    policy = Policy(action_dim=1, discrete=True)
+    return (
+        env.bind(lambda _: get_action(policy))
+        .bind(lambda action_data: step(action_data))
+        .map(update_reward)
+        .map(update_done)
+    )
 
 
 def rollout(init_state: jax.Array, num_steps: int, base_env: Env):
@@ -123,6 +113,81 @@ def rollout(init_state: jax.Array, num_steps: int, base_env: Env):
     return final_state, traj
 
 
+def general_advantage_estimator(data, critic, lam, gamma):
+    obs, rewards, dones = data.obs, data.reward, data.done
+
+    values = critic(obs)
+    next_values = jnp.concatenate([values[1:], values[-1:]])  # bootstrap
+    inputs = (rewards, values, next_values, dones)
+
+    def gae_scan_fn(carry, inputs):
+        gae_next = carry
+        reward, value, next_value, done = inputs
+
+        delta = reward + gamma * next_value * (1 - done) - value
+        gae = delta + gamma * lam * (1 - done) * gae_next
+        return gae, gae
+
+    # faz do ultimo para o primeiro
+    _, advantages = jax.lax.scan(gae_scan_fn, 0.0, inputs, reverse=True)
+    returns = advantages + values
+    return advantages, returns
+
+
+def ppo_loss(
+    data,
+    policy,
+    critic,
+    params,
+    actions,
+    advantages,
+    returns,
+    old_log_probs,
+    clip_eps=0.2,
+    c1=0.5,
+    c2=0.0,
+):
+    """
+    params: policy network parameters
+    apply_fn: policy network forward function, obs -> logits
+    obs: [T, ...] observations
+    actions: [T,] discrete actions
+    advantages: [T,] from GAE
+    returns: [T,] discounted returns
+    old_log_probs: [T,] log probs of actions under old policy
+    """
+    logits = policy(params, data.obs)  # [T, num_actions]
+    log_probs = jax.nn.log_softmax(logits)
+
+    # reune os log probs das ações feitas
+    logp_act = jnp.take_along_axis(log_probs, actions[:, None], axis=1).squeeze(1)
+
+    # razão entre as politicas antiga e nova
+    ratio = jnp.exp(logp_act - old_log_probs)
+
+    # clipped surrogate
+    unclipped = ratio * advantages
+    clipped = jnp.clip(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * advantages
+
+    # minimo entre o valor clipado e não clipado
+    policy_loss = -jnp.mean(
+        jnp.minimum(unclipped, clipped)
+    )  # maximizar -> minimizar negativo
+
+    # value loss
+    values = critic(params, data.obs)
+    value_loss = c1 * jnp.mean((returns - values) ** 2)
+
+    # bonus entropia
+    probs = jax.nn.softmax(logits)
+    entropy = c2 * jnp.mean(-jnp.sum(probs * log_probs, axis=1))
+
+    total_loss = policy_loss + value_loss - entropy
+    return total_loss
+
+
+##########################################################################
+
 # Initialize
 init_state = jnp.array(0)
 num_steps = 5
@@ -131,7 +196,7 @@ num_steps = 5
 jit_rollout = jax.jit(rollout, static_argnums=(1, 2))
 
 my_env = create_env()
-"""
+
 final_state, trajectory = jit_rollout(init_state, num_steps, my_env)
 
 
@@ -144,3 +209,5 @@ print("Trajectory observations:", trajectory.obs)
 
 jaxpr = make_jaxpr(rollout, static_argnums=(1, 2))(init_state, num_steps, my_env)
 print(jaxpr)
+
+"""
