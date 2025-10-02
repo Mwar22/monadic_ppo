@@ -134,10 +134,10 @@ def general_advantage_estimator(data, critic, lam, gamma):
         return gae, gae
 
     # faz do ultimo para o primeiro
-    inputs = (rewards, values_t, next_values, dones)
+    inputs = (rewards[:-1], values_t, next_values, dones[:-1])
     _, advantages = jax.lax.scan(gae_scan_fn, 0.0, inputs, reverse=True)
 
-    returns = advantages + values
+    returns = advantages + values_t
     return advantages, returns
 
 
@@ -215,6 +215,11 @@ print("Final state:", final_state)
 print("Trajectory rewards:", trajectory.reward)
 print("Trajectory dones:", trajectory.done)
 print("Trajectory observations:", trajectory.obs)
+
+gae = general_advantage_estimator(
+    trajectory, lambda obs: 0.5 * jnp.ones_like(obs), 0.1, 0.1
+)
+print("gae: ", gae)
 
 """
 
