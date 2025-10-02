@@ -1,15 +1,27 @@
 import jax
 import jax.numpy as jnp
 from flax import struct
-from typing import Callable, Tuple, Any, Dict
+from typing import Callable, Tuple, Any, Dict, Optional
+
+
+@struct.dataclass
+class State:
+    rng: jax.Array
+    data: Dict[str, Any]
+
+
+@struct.dataclass()
+class Action:
+    value: jax.Array
+    logprob: jax.Array
 
 
 @struct.dataclass
 class Data:
-    obs: jax.Array = jnnp.array(0)
-    reward: jax.Array = jnp.array(0)
-    done: jax.Array = jnp.array(0)
-    info: Dict[str, Any] | None = None
+    obs: jax.Array
+    reward: jax.Array
+    done: jax.Array
+    info: Optional[Dict[str, Any]]
 
     def clone(self):
         return Data(self.obs, self.reward, self.done, self.info)
@@ -24,12 +36,12 @@ class Env:
 
     exec: Callable[
         [
-            Any,
+            State,
         ],
-        Tuple[Any, Any],
+        Tuple[State, Any],
     ]
 
-    def run(self, state):
+    def run(self, state: State) -> Tuple[State, Any]:
         return self.exec(state)
 
     def bind(self, f):
@@ -37,7 +49,7 @@ class Env:
         :: Env s x -> (x -> Env s y)-> Env s y
         """
 
-        def new_exec(state):
+        def new_exec(state: State):
             new_state, ret_data = self.exec(state)
             return f(ret_data).exec(new_state)
 
@@ -48,7 +60,7 @@ class Env:
         :: Env s x -> (x -> y) -> Env s y
         """
 
-        def new_exec(state):
+        def new_exec(state: State):
             new_state, ret_data = self.exec(state)
             return new_state, f(ret_data)
 
@@ -74,14 +86,17 @@ def my_step(action):
     :: a -> (s -> (s', d))
     """
 
-    def step(state: Any):
-        last_obs, rng = state
+    def step(state: State):
+        rng = state.rng
+        last_obs = state.data["obs"]
 
-        new_state = (jnp.clip(last_obs + action, 0, 4), rng)
-        reward = jnp.where(new_state[0] == 4, 1.0, 0.0)
-        done = new_state[0] == 4
+        new_obs = jnp.clip(last_obs + action, 0, 4)
+        done = new_obs == 4
+        reward = jnp.where(done, 1.0, 0.0)
 
-        return new_state, Data(obs=new_state[0], reward=reward, done=done, info=None)
+        new_state = State(rng, {"obs": new_obs})
+
+        return new_state, Data(obs=new_obs, reward=reward, done=done, info=None)
 
     return Env(step)
 
@@ -91,17 +106,19 @@ def create_env():
 
 
 def my_reset():
-    def reset(state):
-        _, rng = state
-        return (jnp.array(0), rng), Data(jnp.array(0), jnp.array(0), jnp.array(0), None)
+    def reset(state: State):
+        rng = state.rng
+        return State(rng, {"obs": jnp.array(0)}), Data(
+            jnp.array(0), jnp.array(0), jnp.array(0), None
+        )
 
     return Env(reset)
 
 
-def policy(data):
+def policy(data: Data):
     return jnp.where(data.obs < 4, 1, 0)
 
 
-def show_obs(data):
+def show_obs(data: Data):
     print(f"ran show_obs: {data.obs}")
     return data

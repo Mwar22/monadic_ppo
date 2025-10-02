@@ -3,133 +3,140 @@ import distrax
 import optax
 import jax.numpy as jnp
 import flax.linen as nn
-from enviroment import Env, Data, Action
+from enviroment import Env, Data, State, Action
 from enviroment import create_env, my_step
+from typing import Tuple
 
 
 class Policy(nn.Module):
     action_dim: int
     discrete: bool
 
+    """
     @nn.compact
     def __call__(self, obs):
-        x = nn.Dense(64)(obs)
-        x = nn.tanh(x)
-        x = nn.Dense(64)(x)
+        x = nn.Dense(2)(obs)
         x = nn.tanh(x)
         logits = nn.Dense(self.action_dim)(x)  # discrete actions
         return logits
+    """
+
+    def __call__(self, obs):
+        return jnp.where(obs < 4, 1, 0)
 
 
 class Critic(nn.Module):
     @nn.compact
     def __call__(self, obs):
-        x = nn.Dense(64)(obs)
-        x = nn.tanh(x)
-        x = nn.Dense(64)(x)
+        x = nn.Dense(3)(obs)
         x = nn.tanh(x)
         value = nn.Dense(1)(x)
         return value.squeeze(-1)
 
 
 #######################################################################################
-def get_action(policy: nn.Module) -> Env:
+def get_action(policy: nn.Module, params) -> Env:
     """
     :: p -> s -> (s', d)
     """
 
-    def disc_eval(logits, rng):
+    def disc_sample(logits: jax.Array, rng: jax.Array):
+        """amostra a saida da politica para o caso discreto"""
         action = jax.random.categorical(rng, logits)
-        return action, jax.nn.log_softmax(logits)[action]
+        return action.astype(jnp.float32), jax.nn.log_softmax(logits)[action]
 
-    def cont_eval(mu, sigma, rng):
-        dist = distrax.MultivariateNormalDiag(mu, sigma)
-        action = dist.sample(seed=rng)
-        return action, dist.log_prob(action)
+    def func(state: State) -> Tuple[State, Action]:
+        last_obs = state.data["obs"]
+        rng1, rng2 = jax.random.split(state.rng)
 
-    def func(state):
-        last_obs, rng = state
-        rng, rng2 = jax.random.split(rng)
+        # forward
+        output = policy.apply(params, last_obs)
+        # action_value, logprob = disc_sample(output, rng1)
 
-        output = policy(last_obs)
-
-        action, logprob = jax.lax.cond(
-            policy.discrete,
-            lambda logits: disc_eval(logits, rng),  # discrete
-            lambda mu_sigma: cont_eval(
-                mu_sigma[0], mu_sigma[1], rng
-            ),  #  musigma = (mu, sigma)
-            operand=output,
-        )
-
-        new_state = (last_obs, rng2)
-        action_data = {"action": action, "logprob": logprob}
-
-        return new_state, action_data
+        action_value = output
+        logprob = 1
+        return State(rng2, state.data), Action(action_value, logprob)
 
     return Env(func)
 
 
 def update_reward(data: Data):
-    new_data = data.clone()
-    return new_data
+    reward = jnp.where(data.done, 1.0, 0.0)
+    return Data(data.obs, reward, data.done, data.info)
 
 
 def update_done(data: Data):
-    new_data = data.clone()
-    return new_data
+    done = data.obs == 4
+    return Data(data.obs, data.reward, done, data.info)
 
 
-def step(action_data):
-    def func(state):
-        last_obs, rng = state
-        new_state = None
-        return new_state, Data(obs=last_obs, info=action_data)
+def step(action: Action) -> Env:
+    def func(state: State):
+        rng = state.rng
+        last_obs = state.data["obs"]
+
+        new_obs = jnp.clip(last_obs + action.value, 0, 4)
+        new_state = State(rng, {"obs": new_obs})
+
+        return new_state, Data(
+            new_obs, jnp.array(0), jnp.array(0), info={"action": action}
+        )
 
     return Env(func)
 
 
-def compose_pipeline(env: Env) -> Env:
+def compose_pipeline(rng: jax.Array, env: Env) -> Env:
     # Aplica o pipeline de transformações.
     # primeiro obtem as ações por meio da politica
     # depois obtem o proximo passo com a ação recebida
     policy = Policy(action_dim=1, discrete=True)
+
+    dummy_obs = jnp.ones((1,))  # Example: batch of 1 with 1 features
+    params = policy.init(rng, dummy_obs)
+
     return (
-        env.bind(lambda _: get_action(policy))
+        env.bind(lambda _: get_action(policy, params))
         .bind(lambda action_data: step(action_data))
-        .map(update_reward)
         .map(update_done)
+        .map(update_reward)
     )
 
 
-def rollout(init_state: jax.Array, num_steps: int, base_env: Env):
-    pipeline = compose_pipeline(base_env)
+def rollout(init_state: State, num_steps: int, base_env: Env):
+    rng, rng1 = jax.random.split(init_state.rng)
+    pipeline = compose_pipeline(rng1, base_env)
 
-    def scan_fn(state, _):
+    def scan_fn(state: State, _):
         new_state, data = pipeline.run(state)
         return new_state, data
 
-    final_state, traj = jax.lax.scan(scan_fn, init_state, None, length=num_steps)
-    return final_state, traj
+    final_state, trajectory = jax.lax.scan(
+        scan_fn, State(rng, init_state.data), None, length=num_steps
+    )
+    return final_state, trajectory
 
 
 def general_advantage_estimator(data, critic, lam, gamma):
     obs, rewards, dones = data.obs, data.reward, data.done
 
     values = critic(obs)
-    next_values = jnp.concatenate([values[1:], values[-1:]])  # bootstrap
-    inputs = (rewards, values, next_values, dones)
+    values_t = values[:-1]
+    next_values = values[1:]
 
-    def gae_scan_fn(carry, inputs):
+    def gae_scan_fn(carry, step_inputs):
         gae_next = carry
-        reward, value, next_value, done = inputs
+        reward, value, next_value, done = step_inputs
 
         delta = reward + gamma * next_value * (1 - done) - value
         gae = delta + gamma * lam * (1 - done) * gae_next
+
+        # next_carry, y
         return gae, gae
 
     # faz do ultimo para o primeiro
+    inputs = (rewards, values_t, next_values, dones)
     _, advantages = jax.lax.scan(gae_scan_fn, 0.0, inputs, reverse=True)
+
     returns = advantages + values
     return advantages, returns
 
@@ -148,13 +155,14 @@ def ppo_loss(
     c2=0.0,
 ):
     """
-    params: policy network parameters
-    apply_fn: policy network forward function, obs -> logits
-    obs: [T, ...] observations
-    actions: [T,] discrete actions
-    advantages: [T,] from GAE
-    returns: [T,] discounted returns
-    old_log_probs: [T,] log probs of actions under old policy
+    Parameters
+    ----------
+    policy:
+        Rede da política (Actor)
+
+    critic:
+        Rede do crítico
+
     """
     logits = policy(params, data.obs)  # [T, num_actions]
     log_probs = jax.nn.log_softmax(logits)
@@ -169,12 +177,12 @@ def ppo_loss(
     unclipped = ratio * advantages
     clipped = jnp.clip(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * advantages
 
-    # minimo entre o valor clipado e não clipado
+    # valor experado do minimo entre o valor clipado e não clipado
     policy_loss = -jnp.mean(
         jnp.minimum(unclipped, clipped)
-    )  # maximizar -> minimizar negativo
+    )  # maximizar -> sinal de negativo, já que o otimizador minimiza
 
-    # value loss
+    # value loss, MSE entre os retornos e os valores previstos
     values = critic(params, data.obs)
     value_loss = c1 * jnp.mean((returns - values) ** 2)
 
@@ -189,7 +197,10 @@ def ppo_loss(
 ##########################################################################
 
 # Initialize
-init_state = jnp.array(0)
+rng = jax.random.PRNGKey(42)
+data = {"obs": jnp.array(0)}
+
+init_state = State(rng, data)
 num_steps = 5
 
 # JIT compile the rollout
