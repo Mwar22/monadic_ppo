@@ -335,16 +335,16 @@ def sample_config_coordinates(range_config: RangeConfig, config_name: str, goal_
     :: r, c, g -> EnvState s g'
     """
 
-    def func(state: State):
+    def func(state):
         """
         :: s -> (s', p)
         """
-        rng, rng1 = jax.random.split(state.rng)
+        rng, rng1 = jax.random.split(state["rng"])
         config_value = getattr(range_config, config_name)
 
 
         # faz um sampleamento
-        samples = jax.random.uniform(rng1, shape=(3,))
+        samples = jax.random.uniform(rng, shape=(3,))
 
         # ajusta a escala para que fique dentro da faixa [min, max]
         def scale(_, input):
@@ -355,7 +355,8 @@ def sample_config_coordinates(range_config: RangeConfig, config_name: str, goal_
         _, scaled_coord = jax.lax.scan(scale, None, inputs)
 
         str_id = config_name + "_coordinates"
-        return State(rng, state.data), {**goal_data, str_id: scaled_coord}
+        new_state = {**state, "rng": rng1}
+        return new_state, {**goal_data, str_id: scaled_coord}
     
     return EnvState(func)
       
@@ -364,16 +365,16 @@ def sample_config_velocities(range_config: RangeConfig, config_name: str, goal_d
     Obtem comandos aleatórios para as velocidades
     :: r, c, g -> EnvState s g'
     """
-    def func(state: State):
+    def func(state):
         """
         :: s -> (s', p)
         """
-        rng, rng1 = jax.random.split(state.rng)
+        rng, rng1 = jax.random.split(state["rng"])
         config_value = getattr(range_config, config_name)
 
 
         # faz um sampleamento
-        samples = jax.random.uniform(rng1, shape=(3,))
+        samples = jax.random.uniform(rng, shape=(3,))
 
         # ajusta a escala para que fique dentro da faixa [0, max]
         def scale(_, input):
@@ -384,7 +385,8 @@ def sample_config_velocities(range_config: RangeConfig, config_name: str, goal_d
         _, scaled_coord = jax.lax.scan(scale, None, inputs)
 
         str_id = config_name + "_velocities"
-        return State(rng, state.data), {**goal_data, str_id: scaled_coord}
+        new_state = {**state, "rng": rng1}
+        return new_state, {**goal_data, str_id: scaled_coord}
     
     return EnvState(func)
 
@@ -559,8 +561,8 @@ def reward_pipeline(joystick: Joystic, env: EnvState):
             "reward": data["reward"] + 
                 stand_still_reward(
                     reward_config.stand_still,
-                    data["position_velocities"],
-                    data["orientation_velocities"],
+                    data["goal"]["position_velocities"],
+                    data["goal"]["orientation_velocities"],
                     joystick.default_pose,
                     data["joint_angles"]
                 )
@@ -578,9 +580,8 @@ def create_step(
 ) -> EnvState:
     
     def func(state):
-
-        rng, cmd_rng, noise_rng, pert_rng = jax.random.split(state.rng, 4)
-        last_obs = state.data["obs"]
+        rng = state["rng"]
+        rng, rng2 = jax.random.split(rng, 2)
 
         # configura novos alvos para os motores, de acordo com a ação  selecionada a partir da posição padrão
         motor_targets = joystick.default_pose + action.value * joystick.enviroment_config.action_scale
@@ -592,9 +593,15 @@ def create_step(
             joystick.mjx_model, state.data["mjx_data"], motor_targets, joystick.enviroment_config.n_substeps
         )
 
-        #obtem as observações a partir do pipeline
-        op = goal_pipeline(EnvState.pure(""), joystick.range_config)
-        op = tool_pipeline(op, joystick.mj_model, data)
+        op = goal_pipeline(EnvState.pure({}), joystick.range_config)
+
+        #obtem um novo alvo a partir do pipeline
+        goal_data = {"goal": state["goal"]}
+        if state["step"] > 500 or state["step"] == 0:
+            state, goal_data = op.run(state)
+            state["step"] = 0
+
+        op = tool_pipeline(EnvState.pure(goal_data), joystick.mj_model, data)
         op = other_pipeline(joystick, op, data)
         state, obs = op.run(state)
 
@@ -602,7 +609,7 @@ def create_step(
         rp = reward_pipeline(joystick, EnvState.pure(obs))
         state, rewards = rp.run(state)
 
-        new_state = State(rng, {"obs": obs})
+        new_state ={**state, "rng": rng2, "step": state["step"] + 1, "goal": goal_data["goal"]}
         return new_state, Data(obs, rewards, None)
 
     return EnvState(func)
