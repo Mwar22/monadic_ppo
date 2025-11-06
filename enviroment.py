@@ -19,11 +19,10 @@ class Action:
 class Data:
     obs: jax.Array
     reward: jax.Array
-    done: jax.Array
-    info: Dict[str, Any]
+    info: Dict[str, Any] | None
 
     def clone(self):
-        return Data(self.obs, self.reward, self.done, self.info)
+        return Data(self.obs, self.reward,  self.info)
 
 
 @struct.dataclass
@@ -35,12 +34,12 @@ class EnvState:
 
     exec: Callable[
         [
-            State,
+            Any,
         ],
-        Tuple[State, Any],
+        Tuple[Any, Any],
     ]
 
-    def run(self, state: State) -> Tuple[State, Any]:
+    def run(self, state: Any) -> Tuple[Any, Any]:
         return self.exec(state)
 
     def bind(self, f):
@@ -48,19 +47,24 @@ class EnvState:
         :: Env s x -> (x -> Env s y)-> Env s y
         """
 
-        def new_exec(state: State):
+        def new_exec(state: Any):
             new_state, ret_data = self.exec(state)
             return f(ret_data).exec(new_state)
 
         return EnvState(new_exec)
+
 
     def map(self, f):
         """
         :: Env s x -> (x -> y) -> Env s y
         """
 
-        def new_exec(state: State):
+        def new_exec(state: Any):
             new_state, ret_data = self.exec(state)
             return new_state, f(ret_data)
 
         return EnvState(new_exec)
+    
+    @staticmethod
+    def pure(value: Any):
+        return EnvState(lambda s: (s, value))

@@ -19,10 +19,12 @@ from mujoco import mjx
 from etils import epath
 from flax import struct
 from dataclasses import fields
-from typing import Any, Dict, Optional, Union, Tuple, List
+from typing import Any, Dict, Optional, Union, Tuple, List , NewType
 from mjx_base import ResetConfig, RangeConfig, RewardConfig, EnviromentConfig
 from enviroment import EnvState, Data, State, Action
 
+
+MjModel = NewType('MjModel', str)
 
 
 def create_joystick(
@@ -45,7 +47,7 @@ def create_joystick(
     mjx_base.update_assets(assets, meshes_path)
 
     # configura modelos do mujoco e do mujoco mjx_env
-    mj_model = mujoco.MjModel.from_xml_string(
+    mj_model = MjModel.from_xml_string(
         xml_path.read_text(), assets=assets
     )
 
@@ -133,7 +135,7 @@ def create_joystick(
 @struct.dataclass
 class Joystic:
     mjx_model: mjx.Model
-    mj_model: mujoco.MjModel
+    mj_model: MjModel
     init_q: jax.Array
     init_ctrl: jax.Array
     lowers: float
@@ -153,19 +155,6 @@ class Joystic:
     range_config: RangeConfig
     reset_config: ResetConfig
     
-        
-    def sample_command(self, rng: jax.Array) -> Dict[str, jax.Array]:
-        """
-        Obtem comandos aleatórios para as posições linear e angular da ferramenta
-        """
-
-        rng_pos, rng_vel = jax.random.split(rng)
-        return {
-            "goal/position": self._sample_config_coordinates(rng_pos, "position"),
-            "goal/lin_velocity": self._sample_config_velocities(rng_pos, "position"),
-            "goal/orientation": self._sample_config_coordinates(rng_pos, "orientation"),
-            "goal/ang_velocity": self._sample_config_velocities(rng_pos, "orientation"),
-        }
 
     def reset(self, state: State):
         """
@@ -304,25 +293,6 @@ class Joystic:
 
 
 
-
-
-    def sample_goal(self):
-        def func(state: State):
-            rng, rng_pos, rng_linvel, rng_or, rng_angvel = jax.random.split(state.rng, 5)
-
-            goal_dict = {
-                "goal/position": self._sample_config_coordinates(rng_pos, "position"),
-                "goal/lin_velocity": self._sample_config_velocities(rng_linvel, "position"),
-                "goal/orientation": self._sample_config_coordinates(rng_or, "orientation"),
-                "goal/ang_velocity": self._sample_config_velocities(rng_angvel, "orientation"),
-            }
-            return State(rng, state.data), goal_dict
-
-        return EnvState(func)
-
-
-
-
     def _get_obs(
         self,
         state: State,
@@ -352,303 +322,6 @@ class Joystic:
             obs += noise
         obs = jnp.roll(obs_history, obs.size).at[: obs.size].set(obs)
         return obs
-
-# ----------------------------------------MÉTODOS AUXILIARES--------------------------------------------
-    
-
-    def _get_stylus_tip_pos(self, data: mjx.Data) -> jax.Array:
-        """
-        Retorna a posição da ponta do robô, que será o ponto de referência para o treinamento de posição
-        
-        Params
-        ------
-        data: mjx.Data
-            Estado dinâmico do modelo, que atualiza a cada step.
-
-        Returns
-        -------
-        ret: jax.Array
-            Coordenadas de posição (global) da ponta.
-        """
-        return data.site_xpos[self.tool_tip_id]
-
-    def _quat_from_two_vecs(self, u: jax.Array, v: jax.Array, eps=1e-8) -> jax.Array:
-        """
-        Calcula o quaternion que rotaciona um  vetor u para o vetor v
-
-        Params
-        ------
-        u: jax.Array
-            Vetor de origem
-
-        v: jax.Array
-            Vetor de destino
-
-        eps: float
-            Pequeno valor para evitar divisão por zero.
-
-        Returns
-        -------
-        ret: jax.Array
-            Quaternion (w, x, y, z) que realiza a transformação.
-        """
-
-        # para garantir que os vetores sejam unitários
-        u = u / (jnp.linalg.norm(u) + eps)
-        v = v / (jnp.linalg.norm(v) + eps)
-
-        w = 1.0 + jnp.dot(u, v)
-        xyz = jnp.cross(u, v)
-        quat = jnp.concatenate((jnp.array([w]), xyz))
-
-        # lida com o caso em que u = -v (rotação de 180 graus)
-        def opposite_case():
-
-            # Tenta utilizar o vetor base "x" como segundo vetor
-            # para gerar um plano de rotação de u para v
-            axis = jnp.array([1.0, 0.0, 0.0])
-
-            # caso o vetor u esteja muito alinhado com o eixo x, usa o eixo y como
-            # eixo de rotação (evitar instabilidade numérica)
-            axis = jnp.where(jnp.abs(u[0]) > 0.9, jnp.array([0.0, 1.0, 0.0]), axis)
-
-            #calcula um novo vetor normal ao plano, que // ao eixo de rotação
-            normal = jnp.cross(u, axis)
-
-            # monta o quaternion. w = 0, já que u // v
-            return jnp.array([0.0, normal[0], normal[1], normal[2]])
-
-        quat = jnp.where(w < eps, opposite_case(), quat)
-        quat = quat / (jnp.linalg.norm(quat) + eps)
-        return quat
-
-    def _get_stylus_orientation(self, data: mjx.Data) -> jax.Array:
-        """
-        Retorna o quaternion que representa a orientação da ferramenta do robô. A ferramenta pode ser entendida 
-        como um vetor cuja origem se encontra ponta da ferramenta e vai de encontro à base, sendo que a transformação 
-        feita partindo-se de um vetor unitário alinhado com o eixo z
-
-        Params
-        ------
-        data: mjx.Data
-            Estado dinâmico do modelo, que atualiza a cada step.
-
-        Returns
-        -------
-        ret: jax.Array
-            Quaternion (w, x, y, z) que realiza a transformação.
-        """
-        z_axis = jnp.array([0.0, 0.0, 1.0])
-        tip_to_base = data.site_xpos[self.tool_base_id] - data.site_xpos[self.tool_tip_id]
-
-        return self._quat_from_two_vecs(z_axis, tip_to_base)
-
-    def _calculate_joint_span(self, p: float = 0.1) -> Tuple[float, float]:
-            """
-            Calcula uma faixa de valores mínimos e maximos em termos de deviação percentual dos mínimos
-            e máximos dos limites de junta. Por exemplo, para p = 0.1, teremos valores que se iniciam em 10%
-            acima do valor mínimo e vão até 10% do valor máximo, considerando o range de valores disponíveis.
-
-            Params
-            ------
-            p: float
-                proporção escolhida.
-
-            Returns
-            -------
-            ret: Tuple[float, float]
-                valor mínimo e máximo respectivamente calculados. 
-            """
-            span = self.uppers - self.lowers
-            lower = self.lowers + p * span
-            upper = self.uppers - p * span
-            return lower, upper
-
-    
-        
-# ------------------------------------------------------------------------------------------------------
-
-# ------------------------------OBTEM DADOS DO SENSOR (PONTA DA FERRAMENTA)-----------------------------
-    def _get_global_linvel(self, data: mjx.Data) -> jax.Array:
-        return mjx_base.get_sensor_data(self.mj_model, data, "global_linvel")
-
-    def _get_global_angvel(self, data: mjx.Data) -> jax.Array:
-        return mjx_base.get_sensor_data(self.mj_model, data, "global_angvel")
-        
-    def _get_local_linvel(self, data: mjx.Data) -> jax.Array:
-        return mjx_base.get_sensor_data(self.mj_model, data, "local_linvel")
-
-    def _get_tool_position(self, data: mjx.Data) -> jax.Array:
-        return mjx_base.get_sensor_data(self.mj_model, data, "tool_position")
-
-    def _get_tool_quaternion(self, data: mjx.Data) -> jax.Array:
-        """
-        Obtem o quaternion de orientação da ferramenta em relação ao Sistema de coordenadas global.
-        o eixo da ferramenta se alinha com o eixo z do sistema global
-        """
-        mj_quat = mjx_base.get_sensor_data(self.mj_model, data, "tool_orientation")
-        return self._conv2jax_quat(mj_quat)
-
-# ------------------------------------------------------------------------------------------------------
-# ------------------------------------FUNÇÕES DE RECOMPENSAS--------------------------------------------
-    def _get_reward(
-        self,
-        data: mjx.Data,
-        action: jax.Array,
-        info: dict[str, Any],
-        metrics: dict[str, Any],
-        done: jax.Array,
-    ) -> dict[str, jax.Array]:
-        del metrics  # não utilizado
-        return {
-            # Recompensas de percurso
-            "position_error": self._reward_position_error(data, info),
-            "orientation_error": self._reward_orientation_error(data, info),
-
-            # recompensas com regularização
-            "torques": self._cost_torques(data.qfrc_actuator),
-            "action_rate": self._cost_action_rate(action, info["last_act"]),
-            "stand_still": self._cost_stand_still(info, data.qpos[self.joint_qposadr]),
-            "termination": self._cost_termination(done, info["step"]),
-        }
-
-    def _position_error(self, goal_position: jax.Array,  data: mjx.Data) -> jax.Array:
-        """
-        Calcula o erro de posição.
-
-        Parameters
-        ----------
-        data: mjx.Data
-            Estado dinâmico que atualiza a cada step.
-
-        info: dict[str, Any]
-            Dicionario de informações
-        """
-        return jnp.linalg.norm(goal_position - self._get_tool_position(data), ord=2)
-    
-    def _orientation_error(self, goal_orientation: jax.Array, data: mjx.Data) -> jax.Array:
-        """
-        Calcula o erro de orientação
-
-        Parameters
-        ----------
-        data: mjx.Data
-            Estado dinâmico que atualiza a cada step.
-
-        info: dict[str, Any]
-            Dicionario de informações
-        """
-
-        # comando medido em rpy
-        r_target = Rotation.from_euler('zyx', goal_orientation)
-        r_measured = Rotation.from_quat(self._get_tool_quaternion(data))
-
-        # calcula a transformação  "erro", com base em: r_measured = r_error * r_target
-        r_error = r_measured * r_target.inv()
-
-        r_error = r_measured * r_target.inv()
-        return jnp.linalg.norm(r_error.as_rotvec())
- 
-    def _reward_position_error(
-        self,
-        data: mjx.Data,
-        info: dict[str, Any]
-    ) -> jax.Array:
-        """
-        Faz a recompensa por seguir corretamente a posição linear nos eixo X, Y e Z.
-
-        Parameters
-        ----------
-        data: mjx.Data
-            Estado dinâmico que atualiza a cada step.
-
-        info: dict[str, Any]
-            Dicionario de informações
-        """
-        pos_error = self._position_error(data, info)
-        return jnp.exp(-pos_error / self.reward_config.tracking_sigma)
-
-    def _reward_orientation_error(
-        self,
-        data: mjx.Data,
-        info: dict[str, Any]
-    ) -> jax.Array:
-        """
-        Faz a recompensa por seguir de acordo com o erro de posição  angular Yaw, Pitch, Row
-
-        Parameters
-        ----------
-        Parameters
-        ----------
-        data: mjx.Data
-            Estado dinâmico que atualiza a cada step.
-
-        info: dict[str, Any]
-            Dicionario de informações
-        """
-        angle_error = self._orientation_error(data, info)
-        return jnp.exp(-angle_error/ self.reward_config.tracking_sigma)
-
-    def _cost_torques(self, torques: jax.Array) -> jax.Array:
-        """
-        Penaliza os torques pela norma L1 e L2, de modo a evitar sobrecarga no torque dos motores.
-
-        Parameters
-        ----------
-        torques: jax.Array
-            Array com os torques de cada atuador.
-
-        Returns
-        -------
-        ret: jax.Array
-            Penalizações.
-        """
-        return jnp.linalg.norm(torques, ord=2) + jnp.linalg.norm(torques, ord=1)
-
-    def _cost_action_rate(self, act: jax.Array, last_act: jax.Array) -> jax.Array:
-        """
-        Penaliza as diferenças entre os vetores de ações por meio da norma L2
-
-        Parameters
-        ----------
-        act: jax.Array
-            Ação atual.
-        
-        last_act: jax.Array
-            Ação anterior
-        """
-        return jnp.linalg.norm(act - last_act, ord=2)
-
-    def _cost_stand_still(
-        self,
-        info: dict[str, Any],
-        joint_angles: jax.Array,
-    ) -> jax.Array:
-        """
-        Penaliza caso o comando (velocidades de movimentação) indicar que o robô deva estar parado.
-        Caso penalizado, a penalização é de acordo com a norma L1 encima das diferenças entre os
-        ângulos em joint_angles e a pose _default_pose.
-
-        Parameters
-        ----------
-        commands: Dict[str, jax.Array]
-            Dicionário que mapeia uma informação dos comandos sampleados.
-
-        joint_angles: jax.Array
-            Angulos atuais das juntas do robô
-        """
-        linear_velocity = jnp.linalg.norm(info["goal/lin_velocity"])
-        angular_velocity = jnp.linalg.norm(info["goal/ang_velocity"])
-
-        mask = jnp.logical_and(linear_velocity < 0.001, angular_velocity < 0.001)
-        return jnp.linalg.norm(joint_angles - self.default_pose) *  mask.astype(jnp.float32)
-
-    def _cost_termination(self, done: jax.Array, step: jax.Array) -> jax.Array:
-        """
-        Penaliza os que terminaram muito cedo (done em menos de 500 steps)
-        """
-        return done & (step < 500)
-    
 
 ##############################################################################################################
 def conv2jax_quat(mujoco_quat: jnp.ndarray) -> jnp.ndarray:
@@ -715,11 +388,10 @@ def sample_config_velocities(range_config: RangeConfig, config_name: str, goal_d
     
     return EnvState(func)
 
-
-def tool_position(model: mujoco.MjModel, data: mjx.Data) -> jax.Array:
+def tool_position(model: MjModel, data: mjx.Data) -> jax.Array:
         return mjx_base.get_sensor_data(model, data, "tool_position")
 
-def tool_quaternion(model: mujoco.MjModel, data: mjx.Data) -> jax.Array:
+def tool_quaternion(model: MjModel, data: mjx.Data) -> jax.Array:
     """
     Obtem o quaternion de orientação da ferramenta em relação ao Sistema de coordenadas global.
     o eixo da ferramenta se alinha com o eixo z do sistema global
@@ -727,7 +399,7 @@ def tool_quaternion(model: mujoco.MjModel, data: mjx.Data) -> jax.Array:
     mj_quat = mjx_base.get_sensor_data(model, data, "tool_orientation")
     return conv2jax_quat(mj_quat)
 
-def position_error(model: mujoco.MjModel, data: mjx.Data, position: jax.Array) -> jax.Array:
+def position_error(model: MjModel, data: mjx.Data, position: jax.Array) -> jax.Array:
     """
     Calcula o erro de posição.
 
@@ -741,7 +413,7 @@ def position_error(model: mujoco.MjModel, data: mjx.Data, position: jax.Array) -
     """
     return jnp.linalg.norm(position - tool_position(model, data), ord=2)
 
-def orientation_error(model: mujoco.MjModel, data: mjx.Data, orientation: jax.Array) -> jax.Array:
+def orientation_error(model: MjModel, data: mjx.Data, orientation: jax.Array) -> jax.Array:
     """
     Calcula o erro de orientação
 
@@ -763,7 +435,72 @@ def orientation_error(model: mujoco.MjModel, data: mjx.Data, orientation: jax.Ar
 
     r_error = r_measured * r_target.inv()
     return jnp.linalg.norm(r_error.as_rotvec())
+##################################################################################################################
 
+def exp_scale_reward(
+    gain,
+    sigma,
+    value: jax.Array
+) -> jax.Array:
+    
+    return gain * jnp.exp(-value/sigma)
+
+def l1_l2_reward(
+    gain_l1,
+    gain_l2,
+    value: jax.Array
+):
+    return gain_l2*jnp.linalg.norm(value, ord=2) + gain_l1*jnp.linalg.norm(value, ord=1)
+
+def _cost_action_rate(self, act: jax.Array, last_act: jax.Array) -> jax.Array:
+    """
+    Penaliza as diferenças entre os vetores de ações por meio da norma L2
+
+    Parameters
+    ----------
+    act: jax.Array
+        Ação atual.
+    
+    last_act: jax.Array
+        Ação anterior
+    """
+    return jnp.linalg.norm(act - last_act, ord=2)
+
+def stand_still_reward(
+    gain,
+    position_velocities: jax.Array,
+    orientation_velocities: jax.Array,
+    default_pose: jax.Array,
+    joint_angles: jax.Array,
+) -> jax.Array:
+    """
+    Penaliza caso o comando (velocidades de movimentação) indicar que o robô deva estar parado.
+    Caso penalizado, a penalização é de acordo com a norma L1 encima das diferenças entre os
+    ângulos em joint_angles e a pose _default_pose.
+
+    Parameters
+    ----------
+    commands: Dict[str, jax.Array]
+        Dicionário que mapeia uma informação dos comandos sampleados.
+
+    joint_angles: jax.Array
+        Angulos atuais das juntas do robô
+    """
+    linear_velocity = jnp.linalg.norm(position_velocities)
+    angular_velocity = jnp.linalg.norm(orientation_velocities)
+
+    mask = jnp.logical_and(linear_velocity < 0.001, angular_velocity < 0.001)
+    return gain*jnp.linalg.norm(joint_angles - default_pose) *  mask.astype(jnp.float32)
+
+def check_done(joystick: Joystic, joint_angles: jax.Array, position_error, orientation_error):
+    
+    # se tiver alcançado os objetivos de posição e orientação
+    done = (position_error < 0.0001) & (orientation_error < 0.0001)
+
+    # termina se os limites de junta forem ultrapassados
+    done |= jnp.any(joint_angles < joystick.lowers)
+    done |= jnp.any(joint_angles > joystick.uppers)
+    
 ###################################################################################################################
 
 def goal_pipeline(env: EnvState, range_config):
@@ -783,16 +520,165 @@ def tool_pipeline(env: EnvState, model, data: mjx.Data):
         .map(lambda data: {**data, "orientation_error":orientation_error(model, data, data["orientation"])})
     )
 
-def other_pipeline(joystick: Joystic, env: EnvState, model: mujoco.MjModel, data: mjx.Data):
-    x = data.qfrc_actuator,     #torques
-    y = data.qpos[joystick.joint_qposadr] - joystick.default_pose,
-    return env.map(lambda data: {**data, "x":x, "y":y})
 
-def get_obs(joystick: Joystic, env, model, data, state: State):
-    env = goal_pipeline(env, joystick.range_config)
-    env = tool_pipeline(env, model, data)
-    env = other_pipeline(joystick, env, model, data)
+def other_pipeline(joystick: Joystic, env: EnvState, data: mjx.Data):
+    # obtem as posições de junta e velocidades atuais
+    joint_angles = data.qpos[joystick.joint_qposadr]
+    joint_vel = data.qvel[joystick.joint_qveladr]
 
-    obs = env.run(state)
-    return obs
+    torques = data.qfrc_actuator,     #torques
+    pose_dist = joint_angles - joystick.default_pose, #distancias de pose em relação à padrão
+
+    return (
+        env.map(lambda data: {
+        **data, "torques":torques, "pose_dist":pose_dist, "joint_angles": joint_angles, "joint_vel": joint_vel
+        })
+    )
+
+
+def reward_pipeline(joystick: Joystic, env: EnvState):
+    reward_config = joystick.reward_config
+    return (
+
+        #recompensa para quanto menor o erro de posição
+        env.map(lambda data: {**data, "reward": exp_scale_reward(1, reward_config.tracking_sigma, data["position_error"])})
+
+        #recompensa para quanto menor o erro de orientação
+        .map(lambda data: {**data, "reward": data["reward"] + exp_scale_reward(1, reward_config.tracking_sigma, data["orientation_error"])})
+        
+        #penalidade pelos torques
+        .map(lambda data: {**data, "reward": data["reward"] + l1_l2_reward(reward_config.torques, 0, data["torques"])})
+
+        #penalidade por terminação
+        .map(lambda data: {**data, "done": check_done(joystick, data["joint_angles"], data["position_error"], data["orientation_error"])})
+        .map(lambda data: {**data, "reward": data["reward"] +  reward_config.termination * (data["done"] & (data["step"] < 500))})
+
+        # penalidade por ficar parado
+        .map(lambda data: 
+            {**data, 
+            "reward": data["reward"] + 
+                stand_still_reward(
+                    reward_config.stand_still,
+                    data["position_velocities"],
+                    data["orientation_velocities"],
+                    joystick.default_pose,
+                    data["joint_angles"]
+                )
+            }
+        )
+        .map(lambda data: {**data, "reward": jnp.clip(data["reward"] * joystick.enviroment_config.dt, 0.0, 10000.0)})
+
+    )
+
+def create_step(
+    joystick: Joystic,
+    process_pipeline: EnvState,
+    
+    action: Action
+) -> EnvState:
+    
+    def func(state):
+
+        rng, cmd_rng, noise_rng, pert_rng = jax.random.split(state.rng, 4)
+        last_obs = state.data["obs"]
+
+        # configura novos alvos para os motores, de acordo com a ação  selecionada a partir da posição padrão
+        motor_targets = joystick.default_pose + action.value * joystick.enviroment_config.action_scale
+
+        # para evitar que os limites de junta do robô sejam desrespeitados
+        motor_targets = jnp.clip(motor_targets, joystick.lowers, joystick.uppers)
+
+        data = mjx_base.mjx_step(
+            joystick.mjx_model, state.data["mjx_data"], motor_targets, joystick.enviroment_config.n_substeps
+        )
+
+        #obtem as observações a partir do pipeline
+        op = goal_pipeline(EnvState.pure(""), joystick.range_config)
+        op = tool_pipeline(op, joystick.mj_model, data)
+        op = other_pipeline(joystick, op, data)
+        state, obs = op.run(state)
+
+        #obtem as recompensas
+        rp = reward_pipeline(joystick, EnvState.pure(obs))
+        state, rewards = rp.run(state)
+
+        new_state = State(rng, {"obs": obs})
+        return new_state, Data(obs, rewards, None)
+
+    return EnvState(func)
+
+
+def step2(self, state: State, action: Action):
+        rng, cmd_rng, noise_rng, pert_rng = jax.random.split(state.rng, 4)
+
+
+        # configura novos alvos para os motores, de acordo com a ação  selecionada a partir da posição padrão
+        motor_targets = self.default_pose + action.value * self.enviroment_config.action_scale
+
+        # para evitar que os limites de junta do robô sejam desrespeitados
+        motor_targets = jnp.clip(motor_targets, self.lowers, self.uppers)
+
+        data = mjx_base.mjx_step(
+            self.mjx_model, state.data["mjx_data"], motor_targets, self.enviroment_config.n_substeps
+        )
+
+        obs = self._get_obs(data, state.info, state.obs, noise_rng)
+
+        # obtem as posições de junta e velocidades atuais
+        joint_angles = data.qpos[self.joint_qposadr]
+
+        joint_vel = data.qvel[self.joint_qveladr]
+    
+        # se tiver alcançado os objetivos de posição e orientação
+        done = (self._position_error(data, state.info) < 0.0001) & (self._orientation_error(data, state.info) < 0.0001)
+
+        # termina se os limites de junta forem ultrapassados
+        done |= jnp.any(joint_angles < self.lowers)
+        done |= jnp.any(joint_angles > self.uppers)
+
+        rewards = self._get_reward(
+            data, action, state.info, state.metrics, done
+        )
+
+        # para aplicar as escalas nas recompensas utilizadas
+        rewards = {
+            k: v * getattr(self.reward_config, k) for k, v in rewards.items()
+        }
+        reward = jnp.clip(sum(rewards.values()) * self.enviroment_config.dt, 0.0, 10000.0)
+
+        # regostrando
+        state.info["last_act"] = action
+        state.info["last_vel"] = joint_vel
+        state.info["step"] += 1
+        state.info["rng"] = rng
+
+        # caso o numero de passos seja maior que 500, substitui por um comando novo
+        new_command = self.sample_command(cmd_rng)
+        state = state.replace(
+            info={
+                **state.info,
+                **jax.tree.map(
+                    lambda new_val, old_val: jnp.where(state.info["step"] > 500, new_val, old_val),
+                    new_command,
+                    {k: state.info[k] for k in new_command},
+                ),
+            }
+        )
+
+        # marcado como done ou caso tenha passado de 500 passos, reseta o contador de passos
+        state.info["step"] = jnp.where(
+            done | (state.info["step"] > 500),
+            0,
+            state.info["step"],
+        )
+
+        # salva as metricas de cada recompensa
+        for k, v in rewards.items():
+            state.metrics[f"reward/{k}"] = v
+
+
+        # converte done para float32 e atualiza o estado do ambiente
+        done = jnp.float32(done)
+        state = state.replace(data=data, obs=obs, reward=reward, done=done)
+        return state
 
