@@ -155,174 +155,6 @@ class Joystic:
     range_config: RangeConfig
     reset_config: ResetConfig
     
-
-    def reset(self, state: State):
-        """
-        Reseta o ambiente.
-
-        Parameters
-        ----------
-        rng: jax.Array
-            Chave para gerar valores randômicos consistentes.
-
-        Returns
-        -------
-        ret: mjx_env.State
-            Estado atual do ambiente
-        """
-        rng, rng_q, rng_sample, rng_obs= jax.random.split(state.rng, 4)
-
-        # inicializa as posições de junta e as velocidades e randomiza a posição inicial
-        random_q = self.init_q.copy()
-
-        # incrementa de acordo com uma distribuição uniforme, em conformidade com os limites,
-        # e depois clampea o resultado
-        random_q += jax.random.uniform(rng_q, random_q.shape, minval=self.min_qpos_rnd, maxval=self.max_qpos_rnd)
-        random_q= jnp.clip(random_q, min=self.min_qpos_clp, max=self.max_qpos_clp)
-
-        init_qvel = jnp.zeros(self.mjx_model.nv, dtype=float)
-        ctrl = self.init_ctrl
-
-        # Cria os dados de simulação
-        mjx_data = mjx_base.init(
-            self.mjx_model,
-            qpos=random_q,
-            qvel=init_qvel,
-            ctrl=ctrl,
-        )
-
-        # informações
-        info = {
-            "step": 0,
-            "last_act": jnp.zeros(self.mjx_model.nu),
-            "last_vel": init_qvel[self.joint_qveladr],
-            "tool/position": self._get_tool_position(mjx_data),
-            "tool/orientation": self._get_tool_quaternion(mjx_data),
-        }
-        info.update(self.sample_command(rng_sample))
-
-        # Observação inicial
-        obs_history = jnp.zeros(15 * 39)  # store 15 steps of history
-        obs = self._get_obs(data=mjx_data, info=info, obs_history=obs_history, rng=rng_obs)
-
-        # flags de recompensas e dones
-        reward, done = jnp.zeros(2)
-
-        # salva as metricas
-        metrics = {}
-        for k in fields(self.reward_config):
-            metrics[f"reward/{k}"] = jnp.zeros(())
-
-        new_state = State(rng, {"obs": obs , "mjx_data": mjx_data})
-        return new_state, Data(obs, reward, done, info)
-
-
-    def step(self, state: State, action: Action):
-        rng, cmd_rng, noise_rng, pert_rng = jax.random.split(state.rng, 4)
-
-
-        # configura novos alvos para os motores, de acordo com a ação  selecionada a partir da posição padrão
-        motor_targets = self.default_pose + action.value * self.enviroment_config.action_scale
-
-        # para evitar que os limites de junta do robô sejam desrespeitados
-        motor_targets = jnp.clip(motor_targets, self.lowers, self.uppers)
-
-        data = mjx_base.mjx_step(
-            self.mjx_model, state.data["mjx_data"], motor_targets, self.enviroment_config.n_substeps
-        )
-
-        obs = self._get_obs(data, state.info, state.obs, noise_rng)
-
-        # obtem as posições de junta e velocidades atuais
-        joint_angles = data.qpos[self.joint_qposadr]
-
-        joint_vel = data.qvel[self.joint_qveladr]
-    
-        # se tiver alcançado os objetivos de posição e orientação
-        done = (self._position_error(data, state.info) < 0.0001) & (self._orientation_error(data, state.info) < 0.0001)
-
-        # termina se os limites de junta forem ultrapassados
-        done |= jnp.any(joint_angles < self.lowers)
-        done |= jnp.any(joint_angles > self.uppers)
-
-        rewards = self._get_reward(
-            data, action, state.info, state.metrics, done
-        )
-
-        # para aplicar as escalas nas recompensas utilizadas
-        rewards = {
-            k: v * getattr(self.reward_config, k) for k, v in rewards.items()
-        }
-        reward = jnp.clip(sum(rewards.values()) * self.enviroment_config.dt, 0.0, 10000.0)
-
-        # regostrando
-        state.info["last_act"] = action
-        state.info["last_vel"] = joint_vel
-        state.info["step"] += 1
-        state.info["rng"] = rng
-
-        # caso o numero de passos seja maior que 500, substitui por um comando novo
-        new_command = self.sample_command(cmd_rng)
-        state = state.replace(
-            info={
-                **state.info,
-                **jax.tree.map(
-                    lambda new_val, old_val: jnp.where(state.info["step"] > 500, new_val, old_val),
-                    new_command,
-                    {k: state.info[k] for k in new_command},
-                ),
-            }
-        )
-
-        # marcado como done ou caso tenha passado de 500 passos, reseta o contador de passos
-        state.info["step"] = jnp.where(
-            done | (state.info["step"] > 500),
-            0,
-            state.info["step"],
-        )
-
-        # salva as metricas de cada recompensa
-        for k, v in rewards.items():
-            state.metrics[f"reward/{k}"] = v
-
-
-        # converte done para float32 e atualiza o estado do ambiente
-        done = jnp.float32(done)
-        state = state.replace(data=data, obs=obs, reward=reward, done=done)
-        return state
-
-
-
-    def _get_obs(
-        self,
-        state: State,
-        data: Data,
-        obs_history: jax.Array,
-    ) -> jax.Array:
-        obs = jnp.concatenate([
-            data.info["goal/position"],
-            data.info["goal/orientation"],
-            data.info["goal/lin_velocity"],
-            data.info["goal/ang_velocity"],
-            data.info["tool/position"],
-            data.info["tool/orientation"],
-            self._position_error(data.info["goal/position"], state.data["mjx_data"]).reshape(1,),
-            self._orientation_error(data.info["goal/orientation"], state.data["mjx_data"]).reshape(1,),
-            state.data["mjx_data"].data.qfrc_actuator,     #torques
-            state.data["mjx_data"].qpos[self.joint_qposadr] - self.default_pose,
-            data.info["last_act"],
-        ])
-
-        rng, rng1 = jax.random.split(state.rng)
-        obs = jnp.clip(obs, -100.0, 100.0)
-        if self.enviroment_config.obs_noise >= 0.0:
-            noise = self.enviroment_config.obs_noise * jax.random.uniform(
-                rng, obs.shape, minval=-1.0, maxval=1.0
-            )
-            obs += noise
-        obs = jnp.roll(obs_history, obs.size).at[: obs.size].set(obs)
-        return obs
-
 ##############################################################################################################
 def conv2jax_quat(mujoco_quat: jnp.ndarray) -> jnp.ndarray:
         """Converte quaternion no formato (w, x, y, z) -> (x, y, z, w)"""
@@ -537,7 +369,6 @@ def concat_obs_as_array(d: Dict[str, Any]) -> EnvState:
     
     return EnvState(func)
 
-
 ###################################################################################################################
 
 def goal_pipeline(env: EnvState, range_config):
@@ -556,7 +387,6 @@ def tool_pipeline(env: EnvState, model, data: mjx.Data):
         .map(lambda data: {**data, "orientation_error":orientation_error(model, data, data["orientation"])})
     )
 
-
 def other_pipeline(joystick: Joystic, env: EnvState, data: mjx.Data):
     # obtem as posições de junta e velocidades atuais
     joint_angles = data.qpos[joystick.joint_qposadr]
@@ -572,7 +402,6 @@ def other_pipeline(joystick: Joystic, env: EnvState, data: mjx.Data):
         .bind(lambda data: concat_obs_as_array(data))
         .bind(lambda data: update_obs_history(data, joystick.enviroment_config.obs_noise))
     )
-
 
 def reward_pipeline(joystick: Joystic, env: EnvState):
     reward_config = joystick.reward_config
@@ -608,6 +437,52 @@ def reward_pipeline(joystick: Joystic, env: EnvState):
 
     )
 
+####################################################################################################################
+def create_reset(
+    joystick: Joystic
+) -> EnvState:
+    
+    def func(state):
+        rng, rng2 = jax.random.split(state["rng"], 2)
+
+        # inicializa as posições de junta e as velocidades e randomiza a posição inicial
+        random_q = joystick.init_q.copy()
+
+        # incrementa de acordo com uma distribuição uniforme, em conformidade com os limites,
+        # e depois clampea o resultado
+        random_q += jax.random.uniform(rng, random_q.shape, minval=joystick.min_qpos_rnd, maxval=joystick.max_qpos_rnd)
+        random_q= jnp.clip(random_q, min=joystick.min_qpos_clp, max=joystick.max_qpos_clp)
+
+        init_qvel = jnp.zeros(joystick.mjx_model.nv, dtype=float)
+        ctrl = joystick.init_ctrl
+
+        # Cria os dados de simulação
+        mjx_data = mjx_base.init(
+            joystick.mjx_model,
+            qpos=random_q,
+            qvel=init_qvel,
+            ctrl=ctrl,
+        )
+
+        # Observação inicial
+        obs_history = jnp.zeros(15 * 39)  # store 15 steps of history
+        obs = self._get_obs(data=mjx_data, info=info, obs_history=obs_history, rng=rng_obs)
+
+        # flags de recompensas e dones
+        reward, done = jnp.zeros(2)
+
+        # salva as metricas
+        metrics = {}
+        for k in fields(self.reward_config):
+            metrics[f"reward/{k}"] = jnp.zeros(())
+
+        new_state = State(rng, {"obs": obs , "mjx_data": mjx_data})
+   
+
+        return None, None
+    
+    return EnvState(func)
+
 def create_step(
     joystick: Joystic,
     process_pipeline: EnvState,
@@ -618,8 +493,8 @@ def create_step(
     state.keys() = ["rng", "step", "goal", "obs_history", ]
     """
     def func(state):
-        rng = state["rng"]
-        rng, rng2 = jax.random.split(rng, 2)
+
+        rng, rng2 = jax.random.split(state["rng"], 2)
 
         # configura novos alvos para os motores, de acordo com a ação  selecionada a partir da posição padrão
         motor_targets = joystick.default_pose + action.value * joystick.enviroment_config.action_scale
