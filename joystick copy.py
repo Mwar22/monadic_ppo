@@ -503,15 +503,49 @@ def check_done(joystick: Joystic, joint_angles: jax.Array, position_error, orien
     done |= jnp.any(joint_angles < joystick.lowers)
     done |= jnp.any(joint_angles > joystick.uppers)
     
+def update_obs_history(data, obs_noise):
+    def func(state):
+        rng, rng1 = jax.random.split(state["rng"])
+        
+        #clipa a observação
+        obs_processed = jnp.clip(data["obs_array"], -100.0, 100.0)
+
+        # 2. Add optional noise
+        # This standard 'if' works fine with JIT as long as obs_noise
+        # is a static value (e.g., from a config file).
+        if obs_noise >= 0.0:
+            noise = obs_noise * jax.random.uniform(
+                rng, obs_processed.shape, minval=-1.0, maxval=1.0
+            )
+            obs_processed += noise
+
+        # Adiciona a nova observação no buffer, deslocando as outras observações e descartando a mais antiga
+        new_obs_history = jnp.roll(state["obs_history"], obs_processed.size).at[: obs_processed.size].set(obs_processed)
+        new_state = {**state, "rng": rng1, "obs_history": new_obs_history}
+
+        return new_state, data
+    
+    return EnvState(func)
+
+def concat_obs_as_array(d: Dict[str, Any]) -> EnvState:
+    """
+    :: d -> EnvState s c
+    """
+    def func(state):
+        obs_array = jnp.concatenate([d[key] for key in d.keys()])
+        return state, {**d, "obs_array": obs_array}
+    
+    return EnvState(func)
+
+
 ###################################################################################################################
 
 def goal_pipeline(env: EnvState, range_config):
     return (
-        env.bind(lambda goal_data: sample_config_coordinates(range_config, "position", goal_data))
-        .bind(lambda goal_data: sample_config_velocities(range_config, "position", goal_data))
-        .bind(lambda goal_data: sample_config_coordinates(range_config, "orientation", goal_data))
-        .bind(lambda goal_data: sample_config_velocities(range_config, "orientation", goal_data))
-        .map(lambda goal_data: {"goal": goal_data})
+        env.bind(lambda goal_data: sample_config_coordinates(range_config, "goal_position", goal_data))
+        .bind(lambda goal_data: sample_config_velocities(range_config, "goal_position", goal_data))
+        .bind(lambda goal_data: sample_config_coordinates(range_config, "goal_orientation", goal_data))
+        .bind(lambda goal_data: sample_config_velocities(range_config, "goal_orientation", goal_data))
     )
 
 def tool_pipeline(env: EnvState, model, data: mjx.Data):
@@ -535,6 +569,8 @@ def other_pipeline(joystick: Joystic, env: EnvState, data: mjx.Data):
         env.map(lambda data: {
         **data, "torques":torques, "pose_dist":pose_dist, "joint_angles": joint_angles, "joint_vel": joint_vel
         })
+        .bind(lambda data: concat_obs_as_array(data))
+        .bind(lambda data: update_obs_history(data, joystick.enviroment_config.obs_noise))
     )
 
 
@@ -561,8 +597,8 @@ def reward_pipeline(joystick: Joystic, env: EnvState):
             "reward": data["reward"] + 
                 stand_still_reward(
                     reward_config.stand_still,
-                    data["goal"]["position_velocities"],
-                    data["goal"]["orientation_velocities"],
+                    data["goal_position_velocities"],
+                    data["goal_orientation_velocities"],
                     joystick.default_pose,
                     data["joint_angles"]
                 )
@@ -578,7 +614,9 @@ def create_step(
     
     action: Action
 ) -> EnvState:
-    
+    """
+    state.keys() = ["rng", "step", "goal", "obs_history", ]
+    """
     def func(state):
         rng = state["rng"]
         rng, rng2 = jax.random.split(rng, 2)
@@ -596,7 +634,7 @@ def create_step(
         op = goal_pipeline(EnvState.pure({}), joystick.range_config)
 
         #obtem um novo alvo a partir do pipeline
-        goal_data = {"goal": state["goal"]}
+        goal_data = state["goal"]
         if state["step"] > 500 or state["step"] == 0:
             state, goal_data = op.run(state)
             state["step"] = 0
@@ -609,83 +647,7 @@ def create_step(
         rp = reward_pipeline(joystick, EnvState.pure(obs))
         state, rewards = rp.run(state)
 
-        new_state ={**state, "rng": rng2, "step": state["step"] + 1, "goal": goal_data["goal"]}
+        new_state ={**state, "rng": rng2, "step": state["step"] + 1, "goal": goal_data}
         return new_state, Data(obs, rewards, None)
 
     return EnvState(func)
-
-
-def step2(self, state: State, action: Action):
-        rng, cmd_rng, noise_rng, pert_rng = jax.random.split(state.rng, 4)
-
-
-        # configura novos alvos para os motores, de acordo com a ação  selecionada a partir da posição padrão
-        motor_targets = self.default_pose + action.value * self.enviroment_config.action_scale
-
-        # para evitar que os limites de junta do robô sejam desrespeitados
-        motor_targets = jnp.clip(motor_targets, self.lowers, self.uppers)
-
-        data = mjx_base.mjx_step(
-            self.mjx_model, state.data["mjx_data"], motor_targets, self.enviroment_config.n_substeps
-        )
-
-        obs = self._get_obs(data, state.info, state.obs, noise_rng)
-
-        # obtem as posições de junta e velocidades atuais
-        joint_angles = data.qpos[self.joint_qposadr]
-
-        joint_vel = data.qvel[self.joint_qveladr]
-    
-        # se tiver alcançado os objetivos de posição e orientação
-        done = (self._position_error(data, state.info) < 0.0001) & (self._orientation_error(data, state.info) < 0.0001)
-
-        # termina se os limites de junta forem ultrapassados
-        done |= jnp.any(joint_angles < self.lowers)
-        done |= jnp.any(joint_angles > self.uppers)
-
-        rewards = self._get_reward(
-            data, action, state.info, state.metrics, done
-        )
-
-        # para aplicar as escalas nas recompensas utilizadas
-        rewards = {
-            k: v * getattr(self.reward_config, k) for k, v in rewards.items()
-        }
-        reward = jnp.clip(sum(rewards.values()) * self.enviroment_config.dt, 0.0, 10000.0)
-
-        # regostrando
-        state.info["last_act"] = action
-        state.info["last_vel"] = joint_vel
-        state.info["step"] += 1
-        state.info["rng"] = rng
-
-        # caso o numero de passos seja maior que 500, substitui por um comando novo
-        new_command = self.sample_command(cmd_rng)
-        state = state.replace(
-            info={
-                **state.info,
-                **jax.tree.map(
-                    lambda new_val, old_val: jnp.where(state.info["step"] > 500, new_val, old_val),
-                    new_command,
-                    {k: state.info[k] for k in new_command},
-                ),
-            }
-        )
-
-        # marcado como done ou caso tenha passado de 500 passos, reseta o contador de passos
-        state.info["step"] = jnp.where(
-            done | (state.info["step"] > 500),
-            0,
-            state.info["step"],
-        )
-
-        # salva as metricas de cada recompensa
-        for k, v in rewards.items():
-            state.metrics[f"reward/{k}"] = v
-
-
-        # converte done para float32 e atualiza o estado do ambiente
-        done = jnp.float32(done)
-        state = state.replace(data=data, obs=obs, reward=reward, done=done)
-        return state
-
