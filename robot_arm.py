@@ -6,6 +6,9 @@ import matplotlib.pyplot as plt
 from enviroment import EnvState, Data, State, Action
 from ppo import ppo_train
 from typing import Tuple
+from etils import epath
+from joystick import create_joystick, create_reset, create_step
+from mjx_base import EnviromentConfig, RangeConfig, ResetConfig, RewardConfig
 
 #######################################################################################
 # Modelos
@@ -204,11 +207,38 @@ params = {
 optimizer = optax.adam(LEARNING_RATE)
 opt_state = optimizer.init(params)
 
+
+#inicializa o ambiente
+ARM_JOINTS = [
+    "junta1",
+    "junta2",
+    "junta3",
+    "junta4",
+    "junta5",
+    "junta6"
+]
+
+joysticks = [create_joystick(
+    epath.Path("model/joystick_env.xml"),
+    epath.Path("model"),
+    epath.Path("model/meshes"),
+    EnviromentConfig(),
+    RewardConfig(),
+    RangeConfig(),
+    ResetConfig(),
+    ARM_JOINTS
+) for j in range(NUM_ENVS)
+]
+
+
 # Inicializa os estados para os ambientes em paralelo
 # (num_envs, features_dim)
 init_obs = jnp.zeros((NUM_ENVS, 1))
 env_rngs = jax.random.split(env_rng, NUM_ENVS)
 env_states = State(rng=env_rngs, data={"obs": init_obs})
+
+
+env_states = {"rng", "step", "goal", "obs_history"}
 
 #compõe o pipeline com as transformações
 pipeline = compose_pipeline(policy, params["policy"])

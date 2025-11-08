@@ -41,13 +41,18 @@ def create_joystick(
     
     #Obtem os assets com base nos caminhos
     assets = {}
-    mjx_base.update_assets(assets, model_path "*.xml")
+    mjx_base.update_assets(assets, model_path, "*.xml")
     mjx_base.update_assets(assets, meshes_path)
 
+    print(assets)
     # configura modelos do mujoco e do mujoco mjx_env
-    mj_model = MjModel.from_xml_string( # type: ignore
-        xml_path.read_text(), assets=assets
+    xml_text = xml_path.read_text(encoding="utf-8").encode("utf-8")
+    mj_model = mujoco.MjModel.from_xml_string( # type: ignore
+        xml_text, assets=assets
     )
+
+    print("ok")
+    exit()
 
      # configura o timestep
     mj_model.opt.timestep = enviroment_config.sim_dt
@@ -482,19 +487,16 @@ def create_reset(
 
 def create_step(
     joystick: Joystick,
-    process_pipeline: EnvState,
-    
-    action: Action
 ) -> EnvState:
     """
-    state.keys() = ["rng", "step", "goal", "obs_history", ]
+    state.keys() = ["rng", "step", "goal", "obs_history", "action"]
     """
     def func(state):
 
         rng, rng2 = jax.random.split(state["rng"], 2)
 
         # configura novos alvos para os motores, de acordo com a ação  selecionada a partir da posição padrão
-        motor_targets = joystick.default_pose + action.value * joystick.enviroment_config.action_scale
+        motor_targets = joystick.default_pose + state["action"] * joystick.enviroment_config.action_scale
 
         # para evitar que os limites de junta do robô sejam desrespeitados
         motor_targets = jnp.clip(motor_targets, joystick.lowers, joystick.uppers)

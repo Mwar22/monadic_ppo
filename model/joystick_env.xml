@@ -1,0 +1,38 @@
+<mujoco model="goto_target">
+  <include file="thor_robot_collision_only.xml"/>
+
+  <option iterations="10" ls_iterations="10" timestep="0.005" integrator="implicitfast" impratio="5"/>
+
+  <default>
+    <default class="stiff">
+      <geom solref="0.01 1"/>
+    </default>
+  </default>
+
+  <worldbody>
+    <geom name="ground" type="plane" pos="0 0 0" size="100 100 0.001" quat="1 0 0 0" material="matplane" condim="3" conaffinity="15" />
+
+    <!--
+    <body mocap="true" name="mocap_target1">
+      <geom type="box" size="0.02 0.015 0.03" rgba="1 0 0 0.2" contype="0" conaffinity="0"/>
+    </body>
+    -->
+  </worldbody>
+
+  <keyframe>
+    <key name="home"
+      qpos="0 0 0 0 0 0"
+      ctrl="0 0 0 0 0 0"
+    />
+
+    <!--
+    <key name="picked" qpos='0.083383 -0.50673 1.31927 0.108972 -0.622276 -0.0728423 0.0233136 0.0239463 0.083383 -0.548235 1.25553 0.108963 -0.624864 -0.0726727 0.0305 0.0304974 -0.142 -0.00517577 0.155939 0.984089 0.00358185 -0.17744 0.00838328'
+    ctrl='0.083383 -0.50673 1.31927 0.108972 -0.622276 -0.0728423 0.00 0.083383 -0.548235 1.25553 0.108963 -0.624864 -0.0726727 0.04'/>
+
+    <key name="transferred" qpos='0.0833837 -0.0921995 0.782307 0.109334 -0.59576 -0.0725939 0.0366926 0.0366699 -0.03142 -0.0590293 0.83235 0.109343 -0.595945 -0.0725633 0.0233137 0.0239462 0.0130744 0.00761309 0.218353 0.983081 0.00461715 0.176885 -0.0473438'
+    ctrl='0.0833837 -0.0921995 0.782307 0.109334 -0.59576 -0.0725939 0.0366926 -0.03142 -0.0590293 0.83235 0.109343 -0.595945 -0.0725633 0 '/>
+    -->
+  </keyframe>
+
+
+</mujoco>

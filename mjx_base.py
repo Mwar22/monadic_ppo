@@ -16,9 +16,8 @@ from ml_collections import config_dict
 from mujoco import mjx
 from mujoco_playground._src import mjx_env
 from flax import struct
-import thor_robot.thor_constants as consts
-from typing import Any, Dict, Optional, Union
-
+from typing import Any, Dict, Optional, Union, Sequence
+from dataclasses import field
 
 @struct.dataclass
 class EnviromentConfig:
@@ -72,17 +71,19 @@ class RewardConfig:
 
 @struct.dataclass
 class RangeConfig:
-    position: jax.Array = jnp.array([
+    position: jax.Array = field(default_factory= lambda: jnp.array([
         [-0.6, 0.6, 0.1],
         [-0.6, 0.6, 0.1],
         [0, 0.6, 0.1]
     ])
+    )
     
-    orientation: jax.Array = jnp.array([
+    orientation: jax.Array = field(default_factory= lambda: jnp.array([
         [-2, 2, 0.1],
         [-2, 2, 0.1],
         [-2, 2, 0.1]
     ])
+    )
 
     @property
     def x(self):
@@ -194,6 +195,8 @@ def mjx_step(
 
   return jax.lax.scan(single_step, data, (), n_substeps)[0]
 
+
+
 def get_sensor_data(model: mujoco.MjModel, data: mjx.Data, sensor_name: str) -> jax.Array:
     """
     Obtem os dados de um determinado sensor, de acordo com seu nome
@@ -218,6 +221,52 @@ def get_sensor_data(model: mujoco.MjModel, data: mjx.Data, sensor_name: str) -> 
     sensor_adr = model.sensor_adr[sensor_id]
     sensor_dim = model.sensor_dim[sensor_id]
     return data.sensordata[sensor_adr : sensor_adr + sensor_dim]
+
+
+
+###############
+
+def dof_width(joint_type: Union[int, mujoco.mjtJoint]) -> int:
+    """
+    Obtem a dimensionalidade de cada junta em qvel.
+
+    Parameters
+    ----------
+    joint_type: Union[int, mujoco.mjtJoint]
+        Tipo da Junta. Ou é um inteiro ou é um enum do tipo mujoco.mjtJoint
+
+    Returns
+    -------
+    ret: int
+        Numero de graus de liberdade para qvel para dado tipo de junta.
+
+    """
+
+    # para obter o valor, caso seja um enum
+    if isinstance(joint_type, mujoco.mjtJoint):
+        joint_type = joint_type.value
+
+    return {0: 6, 1: 3, 2: 1, 3: 1}[joint_type]
+
+def qpos_width(joint_type: Union[int, mujoco.mjtJoint]) -> int:
+    """
+    Obtem a dimensionalidade de cada junta em qpos.
+
+    Parameters
+    ----------
+    joint_type: Union[int, mujoco.mjtJoint]
+        Tipo da Junta. Ou é um inteiro ou é um enum do tipo mujoco.mjtJoint
+
+    Returns
+    -------
+    ret: int
+        Numero de graus de liberdade para qpos para dado tipo de junta.
+    """
+
+    # para obter o valor, caso seja um enum
+    if isinstance(joint_type, mujoco.mjtJoint):
+        joint_type = joint_type.value
+    return {0: 7, 1: 4, 2: 1, 3: 1}[joint_type]
 
 def get_qpos_ids(model: mujoco.MjModel, joint_names: Sequence[str]) -> np.ndarray:
     """
