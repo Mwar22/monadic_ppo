@@ -133,7 +133,7 @@ def create_joystick(
     )
 
 @struct.dataclass
-class Joystic:
+class Joystick:
     mjx_model: mjx.Model
     mj_model: MjModel
     init_q: jax.Array
@@ -326,7 +326,7 @@ def stand_still_reward(
     mask = jnp.logical_and(linear_velocity < 0.001, angular_velocity < 0.001)
     return gain*jnp.linalg.norm(joint_angles - default_pose) *  mask.astype(jnp.float32)
 
-def check_done(joystick: Joystic, joint_angles: jax.Array, position_error, orientation_error):
+def check_done(joystick: Joystick, joint_angles: jax.Array, position_error, orientation_error):
     
     # se tiver alcançado os objetivos de posição e orientação
     done = (position_error < 0.0001) & (orientation_error < 0.0001)
@@ -387,7 +387,7 @@ def tool_pipeline(env: EnvState, model, data: mjx.Data):
         .map(lambda data: {**data, "orientation_error":orientation_error(model, data, data["orientation"])})
     )
 
-def other_pipeline(joystick: Joystic, env: EnvState, data: mjx.Data):
+def other_pipeline(joystick: Joystick, env: EnvState, data: mjx.Data):
     # obtem as posições de junta e velocidades atuais
     joint_angles = data.qpos[joystick.joint_qposadr]
     joint_vel = data.qvel[joystick.joint_qveladr]
@@ -403,7 +403,7 @@ def other_pipeline(joystick: Joystic, env: EnvState, data: mjx.Data):
         .bind(lambda data: update_obs_history(data, joystick.enviroment_config.obs_noise))
     )
 
-def reward_pipeline(joystick: Joystic, env: EnvState):
+def reward_pipeline(joystick: Joystick, env: EnvState):
     reward_config = joystick.reward_config
     return (
 
@@ -439,7 +439,7 @@ def reward_pipeline(joystick: Joystic, env: EnvState):
 
 ####################################################################################################################
 def create_reset(
-    joystick: Joystic
+    joystick: Joystick
 ) -> EnvState:
     
     def func(state):
@@ -464,27 +464,26 @@ def create_reset(
             ctrl=ctrl,
         )
 
-        # Observação inicial
-        obs_history = jnp.zeros(15 * 39)  # store 15 steps of history
-        obs = self._get_obs(data=mjx_data, info=info, obs_history=obs_history, rng=rng_obs)
+        # reseta o estado
+        state["step"] = 0
+        state["obs_history"] = jnp.zeros(15 * 39)  # store 15 steps of history
 
-        # flags de recompensas e dones
-        reward, done = jnp.zeros(2)
+        #obtem um novo alvo a partir do pipeline
+        gp = goal_pipeline(EnvState.pure({}), joystick.range_config)
+        op = tool_pipeline(gp, joystick.mj_model, mjx_data)
+        op = other_pipeline(joystick, op, mjx_data)
+        state, obs = op.run(state)
 
-        # salva as metricas
-        metrics = {}
-        for k in fields(self.reward_config):
-            metrics[f"reward/{k}"] = jnp.zeros(())
+        #obtem as recompensas
+        rp = reward_pipeline(joystick, EnvState.pure(obs))
+        state, rewards = rp.run(state)
 
-        new_state = State(rng, {"obs": obs , "mjx_data": mjx_data})
-   
-
-        return None, None
+        return state, {"obs": obs, "rewards": rewards}
     
     return EnvState(func)
 
 def create_step(
-    joystick: Joystic,
+    joystick: Joystick,
     process_pipeline: EnvState,
     
     action: Action
@@ -506,12 +505,12 @@ def create_step(
             joystick.mjx_model, state.data["mjx_data"], motor_targets, joystick.enviroment_config.n_substeps
         )
 
-        op = goal_pipeline(EnvState.pure({}), joystick.range_config)
+        gp = goal_pipeline(EnvState.pure({}), joystick.range_config)
 
         #obtem um novo alvo a partir do pipeline
         goal_data = state["goal"]
         if state["step"] > 500 or state["step"] == 0:
-            state, goal_data = op.run(state)
+            state, goal_data = gp.run(state)
             state["step"] = 0
 
         op = tool_pipeline(EnvState.pure(goal_data), joystick.mj_model, data)
@@ -523,6 +522,6 @@ def create_step(
         state, rewards = rp.run(state)
 
         new_state ={**state, "rng": rng2, "step": state["step"] + 1, "goal": goal_data}
-        return new_state, Data(obs, rewards, None)
+        return new_state, {"obs": obs, "rewards": rewards}
 
     return EnvState(func)
