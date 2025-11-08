@@ -12,6 +12,7 @@ import mujoco
 import jax
 import mjx_base
 import flax.linen as nn
+from mujoco import MjModel # type: ignore
 from jax import jit
 from jax import numpy as jnp
 from jax.scipy.spatial.transform import Rotation
@@ -22,9 +23,6 @@ from dataclasses import fields
 from typing import Any, Dict, Optional, Union, Tuple, List , NewType
 from mjx_base import ResetConfig, RangeConfig, RewardConfig, EnviromentConfig
 from enviroment import EnvState, Data, State, Action
-
-
-MjModel = NewType('MjModel', str)
 
 
 def create_joystick(
@@ -47,7 +45,7 @@ def create_joystick(
     mjx_base.update_assets(assets, meshes_path)
 
     # configura modelos do mujoco e do mujoco mjx_env
-    mj_model = MjModel.from_xml_string(
+    mj_model = MjModel.from_xml_string( # type: ignore
         xml_path.read_text(), assets=assets
     )
 
@@ -109,7 +107,7 @@ def create_joystick(
     min_qpos_clp, max_qpos_clp = calculate_joint_span(reset_config.clip_range)
 
 
-    return Joystic(
+    return Joystick(
         mjx_model,
         mj_model,
         init_q,
