@@ -234,7 +234,7 @@ def position_error(goal_position: jax.Array, tool_position: jax.Array) -> jax.Ar
     info: dict[str, Any]
         Dicionario de informações
     """
-    return jnp.linalg.norm(goal_position - tool_position, ord=2).reshape(1,)
+    return jnp.linalg.norm(goal_position - tool_position, ord=2)
 
 def orientation_error(goal_orientation: jax.Array, tool_orientation: jax.Array) -> jax.Array:
     """
@@ -257,7 +257,7 @@ def orientation_error(goal_orientation: jax.Array, tool_orientation: jax.Array) 
     r_error = r_measured * r_target.inv()
 
     r_error = r_measured * r_target.inv()
-    return jnp.linalg.norm(r_error.as_rotvec()).reshape(1,)
+    return jnp.linalg.norm(r_error.as_rotvec())
 ##################################################################################################################
 
 def exp_scale_reward(
@@ -354,14 +354,25 @@ def concat_obs_as_array(d: Dict[str, Any]) -> EnvState:
     """
     :: d -> EnvState s c
     """
-
-    """
-    for k, v in d.items():
-        print(k, type(v), getattr(v, 'shape', None))
-
-    """
     def func(state):
-        obs_array = jnp.concatenate([d[key] for key in d.keys()])
+        # Manually list keys to ensure order and handle scalars
+        obs_list = [
+            d["goal_position_coordinates"],       # (3,)
+            d["goal_position_velocities"],      # (3,)
+            d["goal_orientation_coordinates"],    # (3,)
+            d["goal_orientation_velocities"],   # (3,)
+            d["position"],                        # (3,)
+            jnp.expand_dims(d["position_error"], axis=0),  # () -> (1,)
+            d["orientation"],                     # (4,)
+            jnp.expand_dims(d["orientation_error"], axis=0), # () -> (1,)
+            d["torques"],                         # (6,)
+            d["joint_angles"],                    # (6,)
+            d["joint_vel"],                       # (6,)
+            d["pose_dist"]                        # (6,)
+        ]
+        obs_array = jnp.concatenate(obs_list)
+        # (3+3+3+3 + 3 + 1 + 4 + 1 + 6+6+6+6 = 45)
+        
         return state, {**d, "obs_array": obs_array}
     
     return EnvState(func)
@@ -419,35 +430,60 @@ def reward_pipeline(joystick: Joystick, env: EnvState):
     reward_config = joystick.reward_config
     return (
 
-        #recompensa para quanto menor o erro de posição
-        env.map(lambda pdata: {**pdata, "reward": exp_scale_reward(1, reward_config.tracking_sigma, pdata["position_error"])})
+        #Penalidade (custo) por erro de posição
+        env.map(lambda pdata: {**pdata, "reward":
+            reward_config.position_error_penalty * pdata["position_error"]
+        })
 
-        #recompensa para quanto menor o erro de orientação
-        .map(lambda pdata: {**pdata, "reward": pdata["reward"] + exp_scale_reward(1, reward_config.tracking_sigma, pdata["orientation_error"])})
+        #penalidade (custo) por erro de orientação
+        .map(lambda pdata: {**pdata, "reward":
+            pdata["reward"] + reward_config.orientation_error_penalty * pdata["orientation_error"]
+        })
         
-        #penalidade pelos torques
-        .map(lambda pdata: {**pdata, "reward": pdata["reward"] + l1_l2_reward(reward_config.torques, 0, pdata["torques"])})
+        #penalidade para coibir torques muito elevados
+        .map(lambda pdata: {**pdata, "reward":
+            pdata["reward"] + l1_l2_reward(reward_config.torques_penalty, 0, pdata["torques"])
+        })
+
+        #incentivo para sair do lugar (posição)
+        .map(lambda pdata: {**pdata, "reward": pdata["reward"] + 
+            exp_scale_reward(
+                reward_config.tracking_incentive_gain,
+                reward_config.tracking_sigma,
+                pdata["position_error"]
+            )
+        })
+        # incentivo para a orientação
+        .map(lambda pdata: {**pdata, "reward": pdata["reward"] + 
+            exp_scale_reward(
+                reward_config.tracking_incentive_gain, # You can use a different gain
+                reward_config.tracking_sigma,
+                pdata["orientation_error"]
+            )
+        })
 
         #penalidade por terminação
-        .map(lambda pdata: {**pdata, "done": check_done(joystick, pdata["joint_angles"], pdata["position_error"], pdata["orientation_error"])})
-        .bind(lambda pdata: 
+        .map(lambda pdata: {
+            **pdata,
+            # checa se houve sucesso (atingiu o alvo)
+            "success": (pdata["position_error"] < 0.0001) & (pdata["orientation_error"] < 0.0001),
+            
+            # checa se atingiu o limite das juntas
+            "failure": jnp.any(pdata["joint_angles"] < joystick.lowers) | jnp.any(pdata["joint_angles"] > joystick.uppers)
+        })
+        .bind(lambda pdata:
             EnvState(lambda state:
-                (state, {**pdata, "reward": pdata["reward"] +  reward_config.termination * (pdata["done"] & (state["step"] < 500))})
+                (state, {
+                    **pdata,
+                    #aplica a correção baseado nas recompensas e penalidades combinados
+                    "reward": pdata["reward"] + 
+                              pdata["success"] * reward_config.success_reward * (state["step"] < 500) +
+                              pdata["failure"] * reward_config.failure_penalty,
+                
+                    #se atingiu o sucesso ou houve uma falha, termina o episódio
+                    "done": pdata["success"] | pdata["failure"]
+                })
             )
-        )
-
-        # penalidade por ficar parado
-        .map(lambda pdata: 
-            {**pdata, 
-            "reward": pdata["reward"] + 
-                stand_still_reward(
-                    reward_config.stand_still,
-                    pdata["goal_position_velocities"],
-                    pdata["goal_orientation_velocities"],
-                    joystick.default_pose,
-                    pdata["joint_angles"]
-                )
-            }
         )
         .map(lambda pdata: {**pdata, "reward": jnp.clip(pdata["reward"], -10000.0, 10000.0)})
 

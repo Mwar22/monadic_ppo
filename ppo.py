@@ -200,6 +200,11 @@ def ppo_train(
         # calcula as vantagens (usando a função vetorizada)
         advantages, returns = vmapped_gae(trajectory)
 
+        #normaliza as vantagens, para prevenir problemas com os gradientes, com as recompensas ruidosas
+        advantages_mean = jnp.mean(advantages)
+        advantages_std = jnp.std(advantages)
+        advantages = (advantages - advantages_mean) / (advantages_std + 1e-8)
+
         # Prepara o batch para update
         # Aplica um flatten nas dimensões (num_envs, num_steps) em um único batch
         def flatten(x):

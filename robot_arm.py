@@ -24,9 +24,11 @@ class Policy(nn.Module):
     @nn.compact
     def __call__(self, obs):
         x = nn.Dense(256)(obs)
-        x = CauchyActivationModule()(x)
+        #x = CauchyActivationModule()(x)
+        x = nn.relu(x)
         x = nn.Dense(256)(x)
-        x = CauchyActivationModule()(x)
+        #x = CauchyActivationModule()(x)
+        x = nn.relu(x)
         logits = nn.Dense(self.action_dim)(x)  # discrete actions
         return logits
 
@@ -35,9 +37,11 @@ class Critic(nn.Module):
     @nn.compact
     def __call__(self, obs):
         x = nn.Dense(256)(obs)
-        x = CauchyActivationModule()(x)
+        #x = CauchyActivationModule()(x)
+        x = nn.relu(x)
         x = nn.Dense(256)(x)
-        x = CauchyActivationModule()(x)
+        #x = CauchyActivationModule()(x)
+        x = nn.relu(x)
         value = nn.Dense(1)(x)
         return value.squeeze(-1)
 
@@ -153,8 +157,8 @@ print(f"jax_enable_x64: {jax.config.read('jax_enable_x64')}")
 #######################################################################################
 # --- Hyperparameters ---
 NUM_UPDATES = 100#1000
-NUM_ENVS = 5 #512
-NUM_STEPS_PER_UPDATE = 500
+NUM_ENVS = 512 #512
+NUM_STEPS_PER_UPDATE = 250
 LEARNING_RATE = 3e-4
 GAMMA = 0.99
 GAE_LAMBDA = 0.95
