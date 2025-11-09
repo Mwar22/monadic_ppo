@@ -44,15 +44,11 @@ def create_joystick(
     mjx_base.update_assets(assets, model_path, "*.xml")
     mjx_base.update_assets(assets, meshes_path)
 
-    print(assets)
     # configura modelos do mujoco e do mujoco mjx_env
     xml_text = xml_path.read_text(encoding="utf-8").encode("utf-8")
     mj_model = mujoco.MjModel.from_xml_string( # type: ignore
         xml_text, assets=assets
     )
-
-    print("ok")
-    exit()
 
      # configura o timestep
     mj_model.opt.timestep = enviroment_config.sim_dt
@@ -182,12 +178,7 @@ def sample_config_coordinates(range_config: RangeConfig, config_name: str, goal_
         samples = jax.random.uniform(rng, shape=(3,))
 
         # ajusta a escala para que fique dentro da faixa [min, max]
-        def scale(_, input):
-            c, sample = input
-            return c[0] + (c[1] - c[0]) * sample
-
-        inputs = (config_value, samples)
-        _, scaled_coord = jax.lax.scan(scale, None, inputs)
+        scaled_coord = config_value[:, 0] + (config_value[:, 1] - config_value[:, 0]) * samples
 
         str_id = config_name + "_coordinates"
         new_state = {**state, "rng": rng1}
@@ -212,12 +203,7 @@ def sample_config_velocities(range_config: RangeConfig, config_name: str, goal_d
         samples = jax.random.uniform(rng, shape=(3,))
 
         # ajusta a escala para que fique dentro da faixa [0, max]
-        def scale(_, input):
-            c, sample = input
-            return c[1]* sample
-
-        inputs = (config_value, samples)
-        _, scaled_coord = jax.lax.scan(scale, None, inputs)
+        scaled_coord = config_value[:, 1] * samples
 
         str_id = config_name + "_velocities"
         new_state = {**state, "rng": rng1}
@@ -236,7 +222,7 @@ def tool_quaternion(model: MjModel, data: mjx.Data) -> jax.Array:
     mj_quat = mjx_base.get_sensor_data(model, data, "tool_orientation")
     return conv2jax_quat(mj_quat)
 
-def position_error(model: MjModel, data: mjx.Data, position: jax.Array) -> jax.Array:
+def position_error(goal_position: jax.Array, tool_position: jax.Array) -> jax.Array:
     """
     Calcula o erro de posição.
 
@@ -248,9 +234,9 @@ def position_error(model: MjModel, data: mjx.Data, position: jax.Array) -> jax.A
     info: dict[str, Any]
         Dicionario de informações
     """
-    return jnp.linalg.norm(position - tool_position(model, data), ord=2)
+    return jnp.linalg.norm(goal_position - tool_position, ord=2).reshape(1,)
 
-def orientation_error(model: MjModel, data: mjx.Data, orientation: jax.Array) -> jax.Array:
+def orientation_error(goal_orientation: jax.Array, tool_orientation: jax.Array) -> jax.Array:
     """
     Calcula o erro de orientação
 
@@ -264,14 +250,14 @@ def orientation_error(model: MjModel, data: mjx.Data, orientation: jax.Array) ->
     """
 
     # comando medido em rpy
-    r_target = Rotation.from_euler('zyx', orientation)
-    r_measured = Rotation.from_quat(tool_quaternion(model, data))
+    r_target = Rotation.from_euler('zyx', goal_orientation)
+    r_measured = Rotation.from_quat(tool_orientation)
 
     # calcula a transformação  "erro", com base em: r_measured = r_error * r_target
     r_error = r_measured * r_target.inv()
 
     r_error = r_measured * r_target.inv()
-    return jnp.linalg.norm(r_error.as_rotvec())
+    return jnp.linalg.norm(r_error.as_rotvec()).reshape(1,)
 ##################################################################################################################
 
 def exp_scale_reward(
@@ -366,6 +352,10 @@ def concat_obs_as_array(d: Dict[str, Any]) -> EnvState:
     """
     :: d -> EnvState s c
     """
+    for k, v in d.items():
+        print(k, type(v), getattr(v, 'shape', None))
+
+    print(f"torques: {d["torques"]}")
     def func(state):
         obs_array = jnp.concatenate([d[key] for key in d.keys()])
         return state, {**d, "obs_array": obs_array}
@@ -376,18 +366,18 @@ def concat_obs_as_array(d: Dict[str, Any]) -> EnvState:
 
 def goal_pipeline(env: EnvState, range_config):
     return (
-        env.bind(lambda goal_data: sample_config_coordinates(range_config, "goal_position", goal_data))
-        .bind(lambda goal_data: sample_config_velocities(range_config, "goal_position", goal_data))
-        .bind(lambda goal_data: sample_config_coordinates(range_config, "goal_orientation", goal_data))
-        .bind(lambda goal_data: sample_config_velocities(range_config, "goal_orientation", goal_data))
+        env.bind(lambda pdata: sample_config_coordinates(range_config, "goal_position", pdata))
+        .bind(lambda pdata: sample_config_velocities(range_config, "goal_position", pdata))
+        .bind(lambda pdata: sample_config_coordinates(range_config, "goal_orientation", pdata))
+        .bind(lambda pdata: sample_config_velocities(range_config, "goal_orientation", pdata))
     )
 
 def tool_pipeline(env: EnvState, model, data: mjx.Data):
     return (
-        env.map(lambda goal_data: {**goal_data, "position" : tool_position(model, data)})
-        .map(lambda data: {**data, "position_error":position_error(model, data, data["position"])})
-        .map(lambda data: {**data, "orientation": tool_quaternion(model, data)})
-        .map(lambda data: {**data, "orientation_error":orientation_error(model, data, data["orientation"])})
+        env.map(lambda pdata: {**pdata, "position" : tool_position(model, data)})
+        .map(lambda pdata: {**pdata, "position_error": position_error(pdata["goal_position_coordinates"], pdata["position"])})
+        .map(lambda pdata: {**pdata, "orientation": tool_quaternion(model, data)})
+        .map(lambda pdata: {**pdata, "orientation_error":orientation_error(pdata["goal_orientation_coordinates"], pdata["orientation"])})
     )
 
 def other_pipeline(joystick: Joystick, env: EnvState, data: mjx.Data):
@@ -399,11 +389,11 @@ def other_pipeline(joystick: Joystick, env: EnvState, data: mjx.Data):
     pose_dist = joint_angles - joystick.default_pose, #distancias de pose em relação à padrão
 
     return (
-        env.map(lambda data: {
-        **data, "torques":torques, "pose_dist":pose_dist, "joint_angles": joint_angles, "joint_vel": joint_vel
+        env.map(lambda pdata: {
+        **pdata, "torques":torques, "pose_dist":pose_dist, "joint_angles": joint_angles, "joint_vel": joint_vel
         })
-        .bind(lambda data: concat_obs_as_array(data))
-        .bind(lambda data: update_obs_history(data, joystick.enviroment_config.obs_noise))
+        .bind(lambda pdata: concat_obs_as_array(pdata))
+        .bind(lambda pdata: update_obs_history(pdata, joystick.enviroment_config.obs_noise))
     )
 
 def reward_pipeline(joystick: Joystick, env: EnvState):
@@ -411,32 +401,32 @@ def reward_pipeline(joystick: Joystick, env: EnvState):
     return (
 
         #recompensa para quanto menor o erro de posição
-        env.map(lambda data: {**data, "reward": exp_scale_reward(1, reward_config.tracking_sigma, data["position_error"])})
+        env.map(lambda pdata: {**pdata, "reward": exp_scale_reward(1, reward_config.tracking_sigma, pdata["position_error"])})
 
         #recompensa para quanto menor o erro de orientação
-        .map(lambda data: {**data, "reward": data["reward"] + exp_scale_reward(1, reward_config.tracking_sigma, data["orientation_error"])})
+        .map(lambda pdata: {**pdata, "reward": pdata["reward"] + exp_scale_reward(1, reward_config.tracking_sigma, pdata["orientation_error"])})
         
         #penalidade pelos torques
-        .map(lambda data: {**data, "reward": data["reward"] + l1_l2_reward(reward_config.torques, 0, data["torques"])})
+        .map(lambda pdata: {**pdata, "reward": pdata["reward"] + l1_l2_reward(reward_config.torques, 0, pdata["torques"])})
 
         #penalidade por terminação
-        .map(lambda data: {**data, "done": check_done(joystick, data["joint_angles"], data["position_error"], data["orientation_error"])})
-        .map(lambda data: {**data, "reward": data["reward"] +  reward_config.termination * (data["done"] & (data["step"] < 500))})
+        .map(lambda pdata: {**pdata, "done": check_done(joystick, pdata["joint_angles"], pdata["position_error"], pdata["orientation_error"])})
+        .map(lambda pdata: {**pdata, "reward": pdata["reward"] +  reward_config.termination * (pdata["done"] & (pdata["step"] < 500))})
 
         # penalidade por ficar parado
-        .map(lambda data: 
-            {**data, 
-            "reward": data["reward"] + 
+        .map(lambda pdata: 
+            {**pdata, 
+            "reward": pdata["reward"] + 
                 stand_still_reward(
                     reward_config.stand_still,
-                    data["goal_position_velocities"],
-                    data["goal_orientation_velocities"],
+                    pdata["goal_position_velocities"],
+                    pdata["goal_orientation_velocities"],
                     joystick.default_pose,
-                    data["joint_angles"]
+                    pdata["joint_angles"]
                 )
             }
         )
-        .map(lambda data: {**data, "reward": jnp.clip(data["reward"] * joystick.enviroment_config.dt, 0.0, 10000.0)})
+        .map(lambda pdata: {**pdata, "reward": jnp.clip(pdata["reward"] * joystick.enviroment_config.dt, 0.0, 10000.0)})
 
     )
 

@@ -71,14 +71,14 @@ class RewardConfig:
 
 @struct.dataclass
 class RangeConfig:
-    position: jax.Array = field(default_factory= lambda: jnp.array([
+    goal_position: jax.Array = field(default_factory= lambda: jnp.array([
         [-0.6, 0.6, 0.1],
         [-0.6, 0.6, 0.1],
         [0, 0.6, 0.1]
     ])
     )
     
-    orientation: jax.Array = field(default_factory= lambda: jnp.array([
+    goal_orientation: jax.Array = field(default_factory= lambda: jnp.array([
         [-2, 2, 0.1],
         [-2, 2, 0.1],
         [-2, 2, 0.1]
@@ -87,27 +87,27 @@ class RangeConfig:
 
     @property
     def x(self):
-        return self.position[0,:]
+        return self.goal_position[0,:]
     
     @property
     def y(self):
-        return self.position[1,:]
+        return self.goal_position[1,:]
     
     @property
     def z(self):
-        return self.position[2,:]
+        return self.goal_position[2,:]
     
     @property
     def row(self):
-        return self.orientation[0,:]
+        return self.goal_orientation[0,:]
     
     @property
     def pitch(self):
-        return self.orientation[1,:]
+        return self.goal_orientation[1,:]
     
     @property
     def yaw(self):
-        return self.orientation[2,:]
+        return self.goal_orientation[2,:]
     
 @struct.dataclass
 class Target:
