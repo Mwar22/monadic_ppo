@@ -4,29 +4,35 @@ import jax.numpy as jnp
 import flax.linen as nn
 from enviroment import Data, State, EnvState
 from functools import partial
+from typing import Dict, Any
 
 
-def rollout(
-    pipeline: EnvState,
-    init_state: State,
-    num_steps: int,
-):
-    rng, _ = jax.random.split(init_state.rng)
+def rollout(pipeline: EnvState, init_state: Dict[str, Any], num_steps: int):
+    def scan_fn(state, _):
+        rng, step_rng = jax.random.split(state["rng"])
 
-    def scan_fn(state: State, _):
-        new_state, data = pipeline.run(state)
+        # executa o ambiente
+        new_state, data = pipeline.run({**state, "rng": step_rng})
+
+        #mantem o shape da ação constante
+        jax.debug.print("action shape: {}", new_state["action"].shape)
+        new_state["action"] = jnp.reshape(new_state["action"], (6,))
+
+        # faz o update do rng
+        new_state["rng"] = rng
         return new_state, data
 
     final_state, trajectory = jax.lax.scan(
-        scan_fn, State(rng, init_state.data), None, length=num_steps
+        scan_fn, init_state, None, length=num_steps
     )
     return final_state, trajectory
 
-
 def general_advantage_estimator(
-    critic: nn.Module, critic_params, data: Data, lam, gamma
+    critic: nn.Module, critic_params, data, lam, gamma
 ):
-    obs, rewards, dones = data.obs, data.reward, data.done
+    obs = data["obs"]["obs_history"]
+    dones = data["obs"]["done"]
+    rewards = data["reward"]
 
     values = critic.apply(critic_params, obs)
     values_t = values[:-1]
@@ -117,7 +123,7 @@ def ppo_train(
     pipeline,
     params,
     opt_state,
-    init_env_states,
+    init_envs_states,
     rng,
     policy,
     critic,
@@ -161,9 +167,9 @@ def ppo_train(
             return x.reshape(-1, *x.shape[2:])
 
         # MODIFIED: Correctly slice actions and log_probs to match advantages
-        batch_obs = flatten(trajectory.obs[:, :-1])
-        batch_actions = flatten(trajectory.info["action"].value[:, :-1])
-        batch_old_log_probs = flatten(trajectory.info["action"].logprob[:, :-1])
+        batch_obs = flatten(trajectory["obs"]["obs_history"][:, :-1])
+        batch_actions = flatten(trajectory["action"][:, :-1])
+        batch_old_log_probs = flatten(trajectory["logprob"][:, :-1])
         batch_advantages = flatten(advantages)
         batch_returns = flatten(returns)
 
@@ -190,7 +196,7 @@ def ppo_train(
     # loop principal de trainamento, executado por lax.scan
     final_carry, metrics = jax.lax.scan(
         _update_step,
-        (params, opt_state, init_env_states, rng),
+        (params, opt_state, init_envs_states, rng),
         None,
         length=int(num_updates),
     )

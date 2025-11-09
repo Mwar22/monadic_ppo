@@ -5,7 +5,7 @@ import flax.linen as nn
 import matplotlib.pyplot as plt
 from enviroment import EnvState, Data, State, Action
 from ppo import ppo_train
-from typing import Tuple
+from typing import Tuple, Any
 from etils import epath
 from joystick import create_joystick, create_reset, create_step
 from mjx_base import EnviromentConfig, RangeConfig, ResetConfig, RewardConfig
@@ -99,7 +99,7 @@ class CauchyActivationModule(nn.Module):
 
 def get_action(policy: nn.Module, params) -> EnvState:
     """
-    :: p -> s -> (s', d)
+    :: p -> s -> EnvState s a
     """
 
     def disc_sample(logits: jax.Array, rng: jax.Array):
@@ -107,108 +107,55 @@ def get_action(policy: nn.Module, params) -> EnvState:
         action = jax.random.categorical(rng, logits)
         return action.astype(jnp.float32), jax.nn.log_softmax(logits)[action]
 
-    def func(state: State) -> Tuple[State, Action]:
-        last_obs = state.data["obs"]
-        rng1, rng2 = jax.random.split(state.rng)
+    def func(state) -> Tuple[Any, Any]:
+        last_obs = state["obs_history"]
+        rng1, rng2 = jax.random.split(state["rng"])
 
         # forward
+        jax.debug.print(f"last_obs: {last_obs}")
+
         output = policy.apply(params, last_obs)
         action_value, logprob = disc_sample(output, rng1)
 
-        return State(rng2, state.data), Action(action_value, logprob)
+        new_state = {**state, "rng": rng2, "action": action_value}
+        return new_state, {"action": action_value, "logprob": logprob}
 
     return EnvState(func)
 
 
-def update_reward(data: Data) -> Data:
-    GOAL = 200
-    last_obs = data.info["last_obs"]
-    current_obs = data.obs
+def compose_pipeline(policy: nn.Module, policy_params, step_fn) -> EnvState:
+    env = EnvState.pure({})
 
-    # mudança da distancia para o alvo
-    dist_old = jnp.abs(last_obs - GOAL)
-    dist_new = jnp.abs(current_obs - GOAL)
-
-    progress_reward = (dist_old - dist_new).squeeze(-1)
-    goal_reward = jnp.where(data.done, 20, -0.01)
-
-    reward = progress_reward + goal_reward
-    return Data(data.obs, reward, data.done, data.info)
-
-
-def update_done(data: Data) -> Data:
-    done = (data.obs == 200).squeeze(-1)
-    return Data(data.obs, data.reward, done, data.info)
-
-
-def step(action: Action) -> EnvState:
-    def func(state: State):
-        rng = state.rng
-        last_obs = state.data["obs"]
-
-        action_remap = action.value - 1.0
-        new_obs = jnp.clip(last_obs + action_remap, 0, 200)
-
-        new_state = State(rng, {"obs": new_obs})
-        return new_state, Data(
-            new_obs,
-            jnp.array([0]),
-            jnp.array([0]),
-            info={"action": action, "last_obs": last_obs},
-        )
-
-    return EnvState(func)
-
-
-def reset(state: State):
-    return State(state.rng, {"obs": jnp.array([0])}), Data(
-        jnp.array([0]), jnp.array([0]), jnp.array([0]), None
-    )
-
-
-def compose_pipeline(policy: nn.Module, policy_params) -> EnvState:
-    env = EnvState(reset)
+    def action_data_into_step(adata):
+        """Combina dados da ação na saída """
+        def fn(state):
+            new_state, step_data = step_fn(state)
+            return new_state, {**adata, **step_data}
+        return EnvState(fn)
 
     return (
         env.bind(lambda _: get_action(policy, policy_params))
-        .bind(lambda action: step(action))
-        .map(update_done)
-        .map(update_reward)
+        .bind(lambda adata: action_data_into_step(adata))
     )
 
 
 #######################################################################################
 
+#env_states = {"rng":rng, "step":0, "goal":None, "obs_history":}
 #######################################################################################
-
 # --- Hyperparameters ---
 NUM_UPDATES = 1000
-NUM_ENVS = 128
+NUM_ENVS = 5
 NUM_STEPS_PER_UPDATE = 500
 LEARNING_RATE = 3e-4
 GAMMA = 0.99
 GAE_LAMBDA = 0.95
-ACTION_DIM = 3
+ACTION_DIM = 6
 
 # --- Inicialização ---
 rng = jax.random.PRNGKey(42)
 rng, policy_rng, critic_rng, env_rng = jax.random.split(rng, 4)
 
-# Inicializa os modelos
-policy = Policy(action_dim=ACTION_DIM, discrete=True)
-critic = Critic()
-dummy_obs_single = jnp.zeros((1, 1))
-params = {
-    "policy": policy.init(policy_rng, dummy_obs_single),
-    "critic": critic.init(critic_rng, dummy_obs_single),
-}
-
-# Inicializa o otimizador
-optimizer = optax.adam(LEARNING_RATE)
-opt_state = optimizer.init(params)
-
-
-#inicializa o ambiente
 ARM_JOINTS = [
     "junta1",
     "junta2",
@@ -218,7 +165,7 @@ ARM_JOINTS = [
     "junta6"
 ]
 
-joysticks = [create_joystick(
+joystick = create_joystick(
     epath.Path("model/joystick_env.xml"),
     epath.Path("model"),
     epath.Path("model/meshes"),
@@ -227,29 +174,50 @@ joysticks = [create_joystick(
     RangeConfig(),
     ResetConfig(),
     ARM_JOINTS
-) for j in range(NUM_ENVS)
-]
+)
 
+#controi-se as funções de step e reset para o ambiente
+reset_jit = jax.jit(create_reset(joystick).run)
+step_jit = jax.jit(create_step(joystick).run)
+
+
+# Inicializa os modelos
+policy = Policy(action_dim=ACTION_DIM, discrete=True)
+critic = Critic()
+dummy_obs_single = jnp.zeros((1, 15 * 45))
+params = {
+    "policy": policy.init(policy_rng, dummy_obs_single),
+    "critic": critic.init(critic_rng, dummy_obs_single),
+}
+
+# Inicializa o otimizador
+optimizer = optax.adam(LEARNING_RATE)
+opt_state = optimizer.init(params)
 
 # Inicializa os estados para os ambientes em paralelo
 # (num_envs, features_dim)
-init_obs = jnp.zeros((NUM_ENVS, 1))
-env_rngs = jax.random.split(env_rng, NUM_ENVS)
-env_states = State(rng=env_rngs, data={"obs": init_obs})
+envs_obs = jnp.zeros((NUM_ENVS, 1)) #dimensão extra do batch
+envs_step = jnp.zeros((NUM_ENVS,))
+envs_rng = jax.random.split(env_rng, NUM_ENVS)
+envs_action = jnp.zeros((NUM_ENVS, ACTION_DIM))
+envs_obs_history = jnp.zeros((NUM_ENVS, 15 * 45))
 
-
-env_states = {"rng", "step", "goal", "obs_history"}
+#estado inicial 
+init_envs_states = {"rng":envs_rng, "step":envs_step, "goal":None, "obs_history":envs_obs_history, "action": envs_action, "mjx_data": None}
+init_envs_states, _ = jax.vmap(reset_jit)(init_envs_states)
 
 #compõe o pipeline com as transformações
-pipeline = compose_pipeline(policy, params["policy"])
+pipeline = compose_pipeline(policy, params["policy"], step_jit)
 
 # --- Executa o treinamento ---
+#jax.config.update("jax_disable_jit", True)
+
 print("JIT compiling and starting training...")
 (final_params, _, _, _), metrics = ppo_train(
     pipeline,
     params,
     opt_state,
-    env_states,
+    init_envs_states,
     rng,
     policy=policy,
     critic=critic,
