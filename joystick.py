@@ -346,7 +346,7 @@ def update_obs_history(data, obs_noise):
         new_obs_history = jnp.roll(state["obs_history"], obs_processed.size).at[: obs_processed.size].set(obs_processed)
         new_state = {**state, "rng": rng1, "obs_history": new_obs_history}
 
-        return new_state, data
+        return new_state, {**data, "obs_history": new_obs_history}
     
     return EnvState(func)
 
@@ -489,7 +489,7 @@ def create_reset(
         gp = goal_pipeline(EnvState.pure({}), joystick.range_config)
         state, goal_data = gp.run(state)
         state["goal"] = goal_data
-        
+
         op = tool_pipeline(EnvState.pure(goal_data), joystick.mj_model, mjx_data)
         op = other_pipeline(joystick, op, mjx_data)
         state, obs = op.run(state)
@@ -499,9 +499,9 @@ def create_reset(
 
         #obtem as recompensas
         rp = reward_pipeline(joystick, EnvState.pure(obs))
-        state, rewards = rp.run(state)
+        state, final_data = rp.run(state)
 
-        return state, {"obs": obs, "rewards": rewards}
+        return state, {"obs": obs, "final_data": final_data}
     
     return EnvState(func)
 
@@ -551,9 +551,9 @@ def create_step(
 
         #obtem as recompensas
         rp = reward_pipeline(joystick, EnvState.pure(obs))
-        state, rewards = rp.run(state)
+        state, final_data = rp.run(state)
 
         new_state ={**state, "rng": rng2, "step": state["step"] + 1, "goal": goal_data}
-        return new_state, {"obs": obs, "rewards": rewards}
+        return new_state, {"obs": obs, "final_data": final_data}
 
     return EnvState(func)

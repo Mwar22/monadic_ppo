@@ -4,11 +4,12 @@ import jax.numpy as jnp
 import flax.linen as nn
 import matplotlib.pyplot as plt
 from enviroment import EnvState, Data, State, Action
-from ppo import ppo_train
+from ppo import ppo_train, cont_sample_beta
 from typing import Tuple, Any
 from etils import epath
 from joystick import create_joystick, create_reset, create_step
 from mjx_base import EnviromentConfig, RangeConfig, ResetConfig, RewardConfig
+from jax.scipy.stats import beta
 
 #######################################################################################
 # Modelos
@@ -101,22 +102,17 @@ def get_action(policy: nn.Module, params) -> EnvState:
     """
     :: p -> s -> EnvState s a
     """
-
-    def disc_sample(logits: jax.Array, rng: jax.Array):
-        """amostra a saida da politica para o caso discreto"""
-        action = jax.random.categorical(rng, logits)
-        return action.astype(jnp.float32), jax.nn.log_softmax(logits)[action]
-
+    
     def func(state) -> Tuple[Any, Any]:
         last_obs = state["obs_history"]
         rng1, rng2 = jax.random.split(state["rng"])
 
         # forward
-        jax.debug.print(f"last_obs: {last_obs}")
+        print(f"last_obs: {last_obs.shape}")
 
         output = policy.apply(params, last_obs)
-        action_value, logprob = disc_sample(output, rng1)
-
+        action_value, logprob = cont_sample_beta(output, rng1)
+        
         new_state = {**state, "rng": rng2, "action": action_value}
         return new_state, {"action": action_value, "logprob": logprob}
 
