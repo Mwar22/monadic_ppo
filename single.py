@@ -37,9 +37,22 @@ joystick = create_joystick(
     ARM_JOINTS
 )
 
-env_states = {"rng":rng, "step":0, "goal":None, "obs_history":None}
+#teste reset
+state = {"rng":rng, "step":0, "goal":None, "obs_history":None, "action": jnp.zeros(6), "mjx_data": None}
 reset = create_reset(joystick)
 reset_jit = jax.jit(reset.run)
-reset_jit(env_states)
-reset_jit(env_states)
-reset_jit(env_states)
+state, r = reset_jit(state)
+
+print("---reset test---")
+#print(f"state: {state} r: {r}")
+print(f"state: {state}")
+
+#teste step
+step = create_step(joystick)
+step_jit = jax.jit(step.run)
+state, r = step_jit(state)
+
+print("---step test---")
+#print(f"state: {state} r: {r}")
+print(f"state: {state}")
+

@@ -355,6 +355,11 @@ def concat_obs_as_array(d: Dict[str, Any]) -> EnvState:
     :: d -> EnvState s c
     """
 
+    """
+    for k, v in d.items():
+        print(k, type(v), getattr(v, 'shape', None))
+
+    """
     def func(state):
         obs_array = jnp.concatenate([d[key] for key in d.keys()])
         return state, {**d, "obs_array": obs_array}
@@ -373,24 +378,39 @@ def goal_pipeline(env: EnvState, range_config):
 
 def tool_pipeline(env: EnvState, model, data: mjx.Data):
     return (
-        env.map(lambda pdata: {**pdata, "position" : tool_position(model, data)})
+        env.bind(lambda pdata:
+            EnvState(lambda state: 
+                (state, {**pdata, "position" : tool_position(model, state["mjx_data"])})
+            )
+        )
         .map(lambda pdata: {**pdata, "position_error": position_error(pdata["goal_position_coordinates"], pdata["position"])})
-        .map(lambda pdata: {**pdata, "orientation": tool_quaternion(model, data)})
+        .bind(lambda pdata:
+            EnvState(lambda state: 
+                (state, {**pdata, "orientation" : tool_quaternion(model, state["mjx_data"])})
+            )
+        )
         .map(lambda pdata: {**pdata, "orientation_error":orientation_error(pdata["goal_orientation_coordinates"], pdata["orientation"])})
     )
 
 def other_pipeline(joystick: Joystick, env: EnvState, data: mjx.Data):
-    # obtem as posições de junta e velocidades atuais
-    joint_angles = data.qpos[joystick.joint_qposadr]
-    joint_vel = data.qvel[joystick.joint_qveladr]
-
-    torques = data.qfrc_actuator,     #torques
-    pose_dist = joint_angles - joystick.default_pose, #distancias de pose em relação à padrão
-
+ 
     return (
-        env.map(lambda pdata: {
-        **pdata, "torques":torques[0], "pose_dist":pose_dist[0], "joint_angles": joint_angles, "joint_vel": joint_vel
-        })
+        env.bind(lambda pdata:
+            EnvState(lambda state: 
+                (state, {**pdata, "torques" : state["mjx_data"].qfrc_actuator})
+            )
+        )
+        .bind(lambda pdata:
+            EnvState(lambda state: 
+                (state, {**pdata, "joint_angles" : state["mjx_data"].qpos[joystick.joint_qposadr]})
+            )
+        )
+        .bind(lambda pdata:
+            EnvState(lambda state: 
+                (state, {**pdata, "joint_vel" : state["mjx_data"].qvel[joystick.joint_qveladr]})
+            )
+        )
+        .map(lambda pdata: {**pdata,  "pose_dist": pdata["joint_angles"] - joystick.default_pose})
         .bind(lambda pdata: concat_obs_as_array(pdata))
         .bind(lambda pdata: update_obs_history(pdata, joystick.enviroment_config.obs_noise))
     )
@@ -462,13 +482,20 @@ def create_reset(
 
         # reseta o estado
         state["step"] = 0
-        state["obs_history"] = jnp.zeros(15 * 39)  # store 15 steps of history
+        state["obs_history"] = jnp.zeros(15 * 45)  # store 15 steps of history
+        state["mjx_data"] = mjx_data
 
         #obtem um novo alvo a partir do pipeline
         gp = goal_pipeline(EnvState.pure({}), joystick.range_config)
-        op = tool_pipeline(gp, joystick.mj_model, mjx_data)
+        state, goal_data = gp.run(state)
+        state["goal"] = goal_data
+        
+        op = tool_pipeline(EnvState.pure(goal_data), joystick.mj_model, mjx_data)
         op = other_pipeline(joystick, op, mjx_data)
         state, obs = op.run(state)
+
+        #para descobrir o tamanho do vetor de observação
+        #print(f"obs_shape: {obs["obs_array"].shape}")
 
         #obtem as recompensas
         rp = reward_pipeline(joystick, EnvState.pure(obs))
@@ -482,7 +509,7 @@ def create_step(
     joystick: Joystick,
 ) -> EnvState:
     """
-    state.keys() = ["rng", "step", "goal", "obs_history", "action"]
+    state.keys() = ["rng", "step", "goal", "obs_history", "action", "mjx_data"]
     """
     def func(state):
 
@@ -494,20 +521,32 @@ def create_step(
         # para evitar que os limites de junta do robô sejam desrespeitados
         motor_targets = jnp.clip(motor_targets, joystick.lowers, joystick.uppers)
 
-        data = mjx_base.mjx_step(
-            joystick.mjx_model, state.data["mjx_data"], motor_targets, joystick.enviroment_config.n_substeps
+        mjx_data = mjx_base.mjx_step(
+            joystick.mjx_model, state["mjx_data"], motor_targets, joystick.enviroment_config.n_substeps
         )
 
+        state["mjx_data"] = mjx_data
         gp = goal_pipeline(EnvState.pure({}), joystick.range_config)
 
         #obtem um novo alvo a partir do pipeline
-        goal_data = state["goal"]
-        if state["step"] > 500 or state["step"] == 0:
-            state, goal_data = gp.run(state)
-            state["step"] = 0
+        def reset_branch(state):
+            state, new_goal_data = gp.run(state)
+            state = {**state, "step": jnp.array(0, dtype=jnp.int32)}
+            return state, new_goal_data
 
-        op = tool_pipeline(EnvState.pure(goal_data), joystick.mj_model, data)
-        op = other_pipeline(joystick, op, data)
+        def continue_branch(state):
+            return state, state["goal"]
+
+        cond = (state["step"] > 500) | (state["step"] == 0)
+        state, goal_data = jax.lax.cond(
+            cond,
+            reset_branch,
+            continue_branch,
+            operand= state
+        )
+
+        op = tool_pipeline(EnvState.pure(goal_data), joystick.mj_model, mjx_data)
+        op = other_pipeline(joystick, op, mjx_data)
         state, obs = op.run(state)
 
         #obtem as recompensas
