@@ -16,7 +16,7 @@ def rollout(pipeline: EnvState, init_state: Dict[str, Any], num_steps: int):
         new_state, data = pipeline.run({**state, "rng": step_rng})
 
         #mantem o shape da ação constante
-        jax.debug.print("action shape: {}", new_state["action"].shape)
+        #jax.debug.print("action shape: {}", new_state["action"].shape)
         new_state["action"] = jnp.reshape(new_state["action"], (6,))
 
         # faz o update do rng
@@ -31,7 +31,6 @@ def rollout(pipeline: EnvState, init_state: Dict[str, Any], num_steps: int):
 def general_advantage_estimator(
     critic: nn.Module, critic_params, data, lam, gamma
 ):
-    print(data)
     obs = data["obs"]["obs_history"]
     dones = data["final_data"]["done"]
     rewards = data["final_data"]["reward"]
@@ -80,9 +79,11 @@ def cont_sample_beta(logits: jax.Array, rng: jax.Array, min_alpha_beta=0.1):
     rng, subkey = jax.random.split(rng)
     actions = jax.random.beta(subkey, alpha, beta)
 
-    #logprob para cada dimensão
-    logprobs = jax.scipy.stats.beta.logpdf(actions, alpha, beta)
+    # Clip actions to be just inside (0, 1) to avoid -inf logpdf
+    clipped_actions = jnp.clip(actions, 1e-6, 1.0 - 1e-6)
 
+    #logprob para cada dimensão
+    logprobs = jax.scipy.stats.beta.logpdf(clipped_actions, alpha, beta)
     return actions, jnp.sum(logprobs, axis=-1)
 
 def beta_entropy(alpha, beta):
@@ -117,7 +118,8 @@ def ppo_loss(
     beta = jnp.clip(jax.nn.softplus(1.0 - logits), min_alpha_beta, 1000.0)
 
     # Compute log probability of the *stored* actions
-    logprobs = jax.scipy.stats.beta.logpdf(batch_actions, alpha, beta)
+    clipped_batch_actions = jnp.clip(batch_actions, 1e-6, 1.0 - 1e-6)
+    logprobs = jax.scipy.stats.beta.logpdf(clipped_batch_actions, alpha, beta)
     logprobs = jnp.sum(logprobs, axis=1)  # (batch,)
 
     ratio = jnp.exp(logprobs - batch_old_log_probs)

@@ -1,15 +1,16 @@
 import jax
+import os
 import optax
 import jax.numpy as jnp
 import flax.linen as nn
 import matplotlib.pyplot as plt
+from jax import config
 from enviroment import EnvState, Data, State, Action
 from ppo import ppo_train, cont_sample_beta
 from typing import Tuple, Any
 from etils import epath
 from joystick import create_joystick, create_reset, create_step
 from mjx_base import EnviromentConfig, RangeConfig, ResetConfig, RewardConfig
-from jax.scipy.stats import beta
 
 #######################################################################################
 # Modelos
@@ -22,7 +23,9 @@ class Policy(nn.Module):
 
     @nn.compact
     def __call__(self, obs):
-        x = nn.Dense(2)(obs)
+        x = nn.Dense(256)(obs)
+        x = CauchyActivationModule()(x)
+        x = nn.Dense(256)(x)
         x = CauchyActivationModule()(x)
         logits = nn.Dense(self.action_dim)(x)  # discrete actions
         return logits
@@ -31,7 +34,9 @@ class Policy(nn.Module):
 class Critic(nn.Module):
     @nn.compact
     def __call__(self, obs):
-        x = nn.Dense(3)(obs)
+        x = nn.Dense(256)(obs)
+        x = CauchyActivationModule()(x)
+        x = nn.Dense(256)(x)
         x = CauchyActivationModule()(x)
         value = nn.Dense(1)(x)
         return value.squeeze(-1)
@@ -107,9 +112,6 @@ def get_action(policy: nn.Module, params) -> EnvState:
         last_obs = state["obs_history"]
         rng1, rng2 = jax.random.split(state["rng"])
 
-        # forward
-        print(f"last_obs: {last_obs.shape}")
-
         output = policy.apply(params, last_obs)
         action_value, logprob = cont_sample_beta(output, rng1)
         
@@ -136,12 +138,22 @@ def compose_pipeline(policy: nn.Module, policy_params, step_fn) -> EnvState:
 
 
 #######################################################################################
+# deve ser configurado antes de importar o jax ou TensorFlow/XLA
+os.environ["TF_GPU_ALLOCATOR"] = "cuda_malloc_async"
+
+# Tell XLA to use Triton GEMM, this improves steps/sec by ~30% on some GPUs
+xla_flags = os.environ.get('XLA_FLAGS', '')
+#xla_flags += ' --xla_gpu_triton_gemm_any=True'
+os.environ['XLA_FLAGS'] = xla_flags
+
+config.update("jax_enable_x64", False)
+print(f"jax_enable_x64: {jax.config.read('jax_enable_x64')}")    
 
 #env_states = {"rng":rng, "step":0, "goal":None, "obs_history":}
 #######################################################################################
 # --- Hyperparameters ---
-NUM_UPDATES = 1000
-NUM_ENVS = 5
+NUM_UPDATES = 100#1000
+NUM_ENVS = 5 #512
 NUM_STEPS_PER_UPDATE = 500
 LEARNING_RATE = 3e-4
 GAMMA = 0.99

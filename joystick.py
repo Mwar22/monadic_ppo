@@ -449,7 +449,7 @@ def reward_pipeline(joystick: Joystick, env: EnvState):
                 )
             }
         )
-        .map(lambda pdata: {**pdata, "reward": jnp.clip(pdata["reward"] * joystick.enviroment_config.dt, 0.0, 10000.0)})
+        .map(lambda pdata: {**pdata, "reward": jnp.clip(pdata["reward"], -10000.0, 10000.0)})
 
     )
 
@@ -495,7 +495,7 @@ def create_reset(
         state, obs = op.run(state)
 
         #para descobrir o tamanho do vetor de observação
-        #print(f"obs_shape: {obs["obs_array"].shape}")
+        print(f"obs_shape: {obs["obs_array"].shape}")
 
         #obtem as recompensas
         rp = reward_pipeline(joystick, EnvState.pure(obs))
@@ -515,8 +515,11 @@ def create_step(
 
         rng, rng2 = jax.random.split(state["rng"], 2)
 
+        #escala para [-1, 1]
+        action = (state["action"] * 2.0) - 1.0
+
         # configura novos alvos para os motores, de acordo com a ação  selecionada a partir da posição padrão
-        motor_targets = joystick.default_pose + state["action"] * joystick.enviroment_config.action_scale
+        motor_targets = joystick.default_pose + action * joystick.enviroment_config.action_scale
 
         # para evitar que os limites de junta do robô sejam desrespeitados
         motor_targets = jnp.clip(motor_targets, joystick.lowers, joystick.uppers)
@@ -525,33 +528,45 @@ def create_step(
             joystick.mjx_model, state["mjx_data"], motor_targets, joystick.enviroment_config.n_substeps
         )
 
-        state["mjx_data"] = mjx_data
+        state = {**state, "mjx_data": mjx_data}
+        ########################################################
+
+        #obtem a observação com base no alvo atual
+        current_goal_data = state["goal"]
+        op = tool_pipeline(EnvState.pure(current_goal_data), joystick.mj_model, mjx_data)
+        op = other_pipeline(joystick, op, mjx_data)
+        state, obs = op.run(state)
+
+        #obtem as recompensas e a flag done
+        rp = reward_pipeline(joystick, EnvState.pure(obs))
+        state, final_data = rp.run(state)
+
+        #checa as condições para reset
         gp = goal_pipeline(EnvState.pure({}), joystick.range_config)
 
-        #obtem um novo alvo a partir do pipeline
         def reset_branch(state):
+            # obtem novo alvo
             state, new_goal_data = gp.run(state)
+            # reseta o contador
             state = {**state, "step": jnp.array(0, dtype=jnp.int32)}
             return state, new_goal_data
 
         def continue_branch(state):
+            # mantem o alvo antigo
             return state, state["goal"]
 
-        cond = (state["step"] > 500) | (state["step"] == 0)
+        # condicional
+        time_is_up = (state["step"] > 500) | (state["step"] == 0)
+        agent_is_done = final_data["done"]
+        cond = time_is_up | agent_is_done
+
+        # condicional decide se resetamos para um novo alvo para o proximo step
         state, goal_data = jax.lax.cond(
             cond,
             reset_branch,
             continue_branch,
             operand= state
         )
-
-        op = tool_pipeline(EnvState.pure(goal_data), joystick.mj_model, mjx_data)
-        op = other_pipeline(joystick, op, mjx_data)
-        state, obs = op.run(state)
-
-        #obtem as recompensas
-        rp = reward_pipeline(joystick, EnvState.pure(obs))
-        state, final_data = rp.run(state)
 
         new_state ={**state, "rng": rng2, "step": state["step"] + 1, "goal": goal_data}
         return new_state, {"obs": obs, "final_data": final_data}

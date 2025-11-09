@@ -47,10 +47,10 @@ class EnviromentConfig:
 @struct.dataclass
 class RewardConfig:
     # Recompensa por acompanhar a posição do efetuador final (distância Euclidiana)
-    position_error: float = 8.0 #20
+    position_error: float = 20 #20
 
     # Recompensa por acompanhar a orientação do efetuador final
-    orientation_error: float = 5.0 #15
+    orientation_error: float = 15 #15
 
     
     # Regularização L2 dos torques nas juntas, para evitar torques muito grandes (energia)
@@ -67,7 +67,7 @@ class RewardConfig:
     termination: float = -1.0
 
     # recompensa exponencialmente decrescente com o erro = exp(-error^2/sigma).
-    tracking_sigma: float = 0.25
+    tracking_sigma: float = 0.75
 
 @struct.dataclass
 class RangeConfig:
