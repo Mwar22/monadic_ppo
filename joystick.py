@@ -323,6 +323,8 @@ def check_done(joystick: Joystick, joint_angles: jax.Array, position_error, orie
     # termina se os limites de junta forem ultrapassados
     done |= jnp.any(joint_angles < joystick.lowers)
     done |= jnp.any(joint_angles > joystick.uppers)
+
+    return done
     
 def update_obs_history(data, obs_noise):
     def func(state):
@@ -352,10 +354,7 @@ def concat_obs_as_array(d: Dict[str, Any]) -> EnvState:
     """
     :: d -> EnvState s c
     """
-    for k, v in d.items():
-        print(k, type(v), getattr(v, 'shape', None))
 
-    print(f"torques: {d["torques"]}")
     def func(state):
         obs_array = jnp.concatenate([d[key] for key in d.keys()])
         return state, {**d, "obs_array": obs_array}
@@ -390,7 +389,7 @@ def other_pipeline(joystick: Joystick, env: EnvState, data: mjx.Data):
 
     return (
         env.map(lambda pdata: {
-        **pdata, "torques":torques, "pose_dist":pose_dist, "joint_angles": joint_angles, "joint_vel": joint_vel
+        **pdata, "torques":torques[0], "pose_dist":pose_dist[0], "joint_angles": joint_angles, "joint_vel": joint_vel
         })
         .bind(lambda pdata: concat_obs_as_array(pdata))
         .bind(lambda pdata: update_obs_history(pdata, joystick.enviroment_config.obs_noise))
@@ -411,7 +410,11 @@ def reward_pipeline(joystick: Joystick, env: EnvState):
 
         #penalidade por terminação
         .map(lambda pdata: {**pdata, "done": check_done(joystick, pdata["joint_angles"], pdata["position_error"], pdata["orientation_error"])})
-        .map(lambda pdata: {**pdata, "reward": pdata["reward"] +  reward_config.termination * (pdata["done"] & (pdata["step"] < 500))})
+        .bind(lambda pdata: 
+            EnvState(lambda state:
+                (state, {**pdata, "reward": pdata["reward"] +  reward_config.termination * (pdata["done"] & (state["step"] < 500))})
+            )
+        )
 
         # penalidade por ficar parado
         .map(lambda pdata: 

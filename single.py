@@ -39,4 +39,7 @@ joystick = create_joystick(
 
 env_states = {"rng":rng, "step":0, "goal":None, "obs_history":None}
 reset = create_reset(joystick)
-reset.run(env_states)
+reset_jit = jax.jit(reset.run)
+reset_jit(env_states)
+reset_jit(env_states)
+reset_jit(env_states)
