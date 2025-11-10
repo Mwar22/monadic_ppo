@@ -426,7 +426,7 @@ def other_pipeline(joystick: Joystick, env: EnvState, data: mjx.Data):
         .bind(lambda pdata: update_obs_history(pdata, joystick.enviroment_config.obs_noise))
     )
 
-def reward_pipeline(joystick: Joystick, env: EnvState):
+def reward_pipeline2(joystick: Joystick, env: EnvState):
     reward_config = joystick.reward_config
     return (
 
@@ -489,6 +489,43 @@ def reward_pipeline(joystick: Joystick, env: EnvState):
 
     )
 
+
+def reward_pipeline(joystick: Joystick, env: EnvState):
+    reward_config = joystick.reward_config
+    return (
+
+        # 1. The "Push" (Penalty for being far)
+        # (Assumes position_error_penalty is negative, e.g., -1.0)
+        env.map(lambda pdata: {**pdata, "reward":
+            reward_config.position_error_penalty * pdata["position_error"]
+        })
+
+        # 2. The "Pull" (Incentive for getting close)
+        # (Assumes tracking_incentive_gain is positive, e.g., 2.0)
+        .map(lambda pdata: {**pdata, "reward": pdata["reward"] + 
+            exp_scale_reward(
+                reward_config.tracking_incentive_gain,
+                reward_config.tracking_sigma,
+                pdata["position_error"]
+            )
+        })
+        
+        # 3. Check for "done" on failure
+        .map(lambda pdata: {
+            **pdata,
+            "failure": jnp.any(pdata["joint_angles"] < joystick.lowers) | jnp.any(pdata["joint_angles"] > joystick.uppers)
+        })
+        .bind(lambda pdata:
+            EnvState(lambda state:
+                (state, {
+                    **pdata,
+                    "reward": pdata["reward"] + pdata["failure"] * reward_config.failure_penalty,
+                    "done": pdata["failure"] 
+                })
+            )
+        )
+        .map(lambda pdata: {**pdata, "reward": jnp.clip(pdata["reward"], -10000.0, 10000.0)})
+    )
 ####################################################################################################################
 def create_reset(
     joystick: Joystick
@@ -518,7 +555,6 @@ def create_reset(
 
         # reseta o estado
         state["step"] = 0
-        state["obs_history"] = jnp.zeros(15 * 45)  # store 15 steps of history
         state["mjx_data"] = mjx_data
 
         #obtem um novo alvo a partir do pipeline
@@ -530,8 +566,17 @@ def create_reset(
         op = other_pipeline(joystick, op, mjx_data)
         state, obs = op.run(state)
 
+        first_obs_frame = obs["obs_array"]
+        
+        # jnp.tile(first_obs_frame, 15) creates a (15 * 45,) array
+        primed_obs_history = jnp.tile(first_obs_frame, 15) 
+        
+        # Overwrite the bad obs_history in both the state and the obs_data dict
+        state["obs_history"] = primed_obs_history
+        obs["obs_history"] = primed_obs_history
+
         #para descobrir o tamanho do vetor de observação
-        print(f"obs_shape: {obs["obs_array"].shape}")
+        #print(f"obs_shape: {obs["obs_array"].shape}")
 
         #obtem as recompensas
         rp = reward_pipeline(joystick, EnvState.pure(obs))
@@ -594,7 +639,8 @@ def create_step(
         # condicional
         time_is_up = (state["step"] > 500) | (state["step"] == 0)
         agent_is_done = final_data["done"]
-        cond = time_is_up | agent_is_done
+        #cond = time_is_up | agent_is_done
+        cond = False
 
         # condicional decide se resetamos para um novo alvo para o proximo step
         state, goal_data = jax.lax.cond(

@@ -29,14 +29,23 @@ def rollout(pipeline: EnvState, init_state: Dict[str, Any], num_steps: int):
     return final_state, trajectory
 
 def general_advantage_estimator(
-    critic: nn.Module, critic_params, data, lam, gamma
+    critic: nn.Module, critic_params, data, final_state_obs, lam, gamma
 ):
     obs = data["obs"]["obs_history"]
     dones = data["final_data"]["done"]
     rewards = data["final_data"]["reward"]
 
-    values = critic.apply(critic_params, obs)
-    values_t = values[:-1]
+    # Cria all_obs, que é (T_steps, obs_dim) + (1, obs_dim)
+    all_obs = jnp.concatenate(
+        [obs, jnp.expand_dims(final_state_obs, axis=0)], axis=0
+    )
+    #V(obs_0)...V(obs_T)
+    values = critic.apply(critic_params, all_obs)
+    
+    #V(obs_0)...V(obs_{T-1})
+    values_t = values[:-1] 
+
+    # next_values é V(obs_1)...V(obs_T)
     next_values = values[1:]
 
     def gae_scan_fn(carry, step_inputs):
@@ -50,7 +59,8 @@ def general_advantage_estimator(
         return gae, gae
 
     # faz do ultimo para o primeiro
-    inputs = (rewards[:-1], values_t, next_values, dones[:-1])
+    inputs = (rewards, values_t, next_values, dones)
+
     _, advantages = jax.lax.scan(gae_scan_fn, jnp.asarray(0.0, dtype=jnp.float32), inputs, reverse=True)
 
     returns = advantages + values_t
@@ -102,8 +112,8 @@ def ppo_loss(
     batch_old_log_probs,
     rng,
     clip_eps=0.2,
-    c1=0.5,
-    c2=0.01,
+    c1=0.2,
+    c2=0.1,
     min_alpha_beta=0.1
 ):
     """
@@ -184,8 +194,8 @@ def ppo_train(
 
     # Vetoriza a função GAE
     # general_advantage_estimator (critic, critic_params, data, lam, gamma)
-    def gae_for_vmap(data):
-        return general_advantage_estimator(critic, params["critic"], data, lam, gamma)
+    def gae_for_vmap(data, final_state_obs):
+        return general_advantage_estimator(critic, params["critic"], data, final_state_obs, lam, gamma)
 
     vmapped_gae = jax.vmap(gae_for_vmap)
 
@@ -198,22 +208,43 @@ def ppo_train(
         final_states, trajectory = vmapped_rollout(env_states, num_steps_per_update)
 
         # calcula as vantagens (usando a função vetorizada)
-        advantages, returns = vmapped_gae(trajectory)
+        final_state_obs_history = final_states["obs_history"]
+        advantages, returns = vmapped_gae(trajectory, final_state_obs_history)
 
         #normaliza as vantagens, para prevenir problemas com os gradientes, com as recompensas ruidosas
         advantages_mean = jnp.mean(advantages)
         advantages_std = jnp.std(advantages)
         advantages = (advantages - advantages_mean) / (advantages_std + 1e-8)
+        advantages_std = jnp.maximum(advantages_std, 1e-3)
 
         # Prepara o batch para update
         # Aplica um flatten nas dimensões (num_envs, num_steps) em um único batch
         def flatten(x):
             return x.reshape(-1, *x.shape[2:])
+        
 
-        # MODIFIED: Correctly slice actions and log_probs to match advantages
-        batch_obs = flatten(trajectory["obs"]["obs_history"][:, :-1])
-        batch_actions = flatten(trajectory["action"][:, :-1])
-        batch_old_log_probs = flatten(trajectory["logprob"][:, :-1])
+        # shape (num_envs, obs_dim)
+        # obs_0 ... obs_{T-1}
+        initial_obs_history = env_states["obs_history"]
+
+    
+        # precisamos de um batch com shape shape (num_envs, num_steps, obs_dim)
+        # contendo: [ obs_{t-1}, obs_0, obs_1, ..., obs_{T-2} ]
+        # alinhando com a tragetória: [ action_0, action_1, ..., action_{T-1}
+        trajectory_obs_history = trajectory["obs"]["obs_history"]
+
+        batch_obs = jnp.concatenate(
+            [
+                jnp.expand_dims(initial_obs_history, axis=1), # (num_envs, 1, obs_dim)
+                trajectory_obs_history[:, :-1]                # (num_envs, num_steps-1, obs_dim)
+            ],
+            axis=1
+        )
+        batch_obs = flatten(batch_obs)
+        
+        # The rest of the data is now correctly aligned
+        batch_actions = flatten(trajectory["action"])
+        batch_old_log_probs = flatten(trajectory["logprob"])
         batch_advantages = flatten(advantages)
         batch_returns = flatten(returns)
 

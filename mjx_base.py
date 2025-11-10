@@ -29,7 +29,7 @@ class EnviromentConfig:
     sim_dt: float = 0.005         # time step para a simulação (s)
     episode_length: float = 500   # 5 sec (250*ctrl_dt)
     action_repeat: float = 1
-    action_scale: float = 0.2
+    action_scale: float = 0.5
     obs_noise: float = 0.05
     impl: str = 'jax'
     nconmax: int = 24 * 8192
@@ -47,13 +47,13 @@ class EnviromentConfig:
 @struct.dataclass
 class RewardConfig:
     # Recompensa por acompanhar a posição do efetuador final (distância Euclidiana)
-    position_error_penalty: float = -2.0 #20
+    position_error_penalty: float = -1.0 #20
 
     # Recompensa por acompanhar a orientação do efetuador final
     orientation_error_penalty: float = -1.0 #15
 
-    success_reward: float = 100.0  # Large positive reward for succeeding
-    failure_penalty: float = -50.0 # Large negative penalty for failing
+    success_reward: float = 100.0 # Large positive reward for succeeding
+    failure_penalty: float = -0.5 # Large negative penalty for failing
 
     # Regularização L2 dos torques nas juntas, para evitar torques muito grandes (energia)
     torques_penalty: float = -0.0005
@@ -63,16 +63,16 @@ class RewardConfig:
     action_rate: float = -0.01
 
     # Encoraja não ter movimento quando as velocidades de comando são zero. Reguarização L2
-    stand_still: float = -0.5
+    stand_still: float = 0.5
     
     # Penalidade para término antecipado do episódio (ex: falha)
     termination: float = -1.0
 
     #para incentivar o robô a sair do lugar
-    tracking_incentive_gain: float = 20.0
-    
+    tracking_incentive_gain: float = 2.0
+
     # recompensa exponencialmente decrescente com o erro = exp(-error^2/sigma).
-    tracking_sigma: float = 0.75
+    tracking_sigma: float = 0.95
 
 @struct.dataclass
 class RangeConfig:
