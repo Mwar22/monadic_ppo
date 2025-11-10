@@ -154,6 +154,26 @@ def ppo_loss(
 
 ##########################################################################
 
+def grad_metrics(grads, params):
+    leaves = jax.tree_util.tree_leaves(grads)
+
+    #norma euclidiana (L2) do gradiente
+    grad_norm = jnp.sqrt(sum([jnp.sum(jnp.square(g)) for g in leaves]))
+    mean_abs_grad = jnp.mean(jnp.concatenate([jnp.ravel(jnp.abs(g)) for g in leaves]))
+    max_grad = jnp.max(jnp.concatenate([jnp.ravel(jnp.abs(g)) for g in leaves]))
+
+    num = sum([jnp.sum(jnp.square(g)) for g in leaves])
+    den = sum([jnp.sum(jnp.square(p)) for p in jax.tree_util.tree_leaves(params)])
+    grad_to_param_ratio = jnp.sqrt(num / (den + 1e-12))
+
+    return {
+        "grad_norm": grad_norm,
+        "mean_abs_grad": mean_abs_grad,
+        "max_grad": max_grad,
+        "grad_to_param_ratio": grad_to_param_ratio
+    }
+
+##########################################################################
 
 @partial(
     jax.jit,
@@ -267,7 +287,9 @@ def ppo_train(
         new_params = optax.apply_updates(params, updates)
 
         new_carry = (new_params, new_opt_state, final_states, rollout_rng)
-        return new_carry, {"loss": loss_val, "reward": trajectory["final_data"]["reward"]}
+        grad_info = grad_metrics(grads, params)
+
+        return new_carry, {"loss": loss_val, "reward": trajectory["final_data"]["reward"], **grad_info}
 
     # loop principal de trainamento, executado por lax.scan
     final_carry, metrics = jax.lax.scan(

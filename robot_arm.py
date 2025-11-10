@@ -246,7 +246,10 @@ print(f" Training finished! Average loss of last 100 steps: {avg_loss:.4f}")
 avg_rewards_per_update = jnp.mean(metrics["reward"], axis=1)
 avg_episode_rewards = jnp.sum(avg_rewards_per_update, axis=1)
 
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), tight_layout=True)
+grad_norm = metrics["grad_norm"]
+grad_to_param_ratio = metrics["grad_to_param_ratio"]
+
+fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(10, 8), tight_layout=True)
 ax1.plot(metrics["loss"])
 ax1.set_title("Training Loss")
 ax1.set_xlabel("Update Step")
@@ -256,6 +259,17 @@ ax2.plot(avg_episode_rewards)
 ax2.set_title("Average Episode Reward")
 ax2.set_xlabel("Update Step")
 ax2.set_ylabel("Average Reward")
+
+ax3.plot(grad_norm)
+ax3.set_title("Gradient norm (Euclidian, L2)")
+ax3.set_xlabel("Update Step")
+ax3.set_ylabel("Norm")
+
+ax4.plot(grad_to_param_ratio)
+ax4.set_title("Gradient to parameters ratio")
+ax4.set_xlabel("Update Step")
+ax4.set_ylabel("Ratio")
+
 
 plt.savefig("training_plots.png")
 print("\nTraining plots saved to training_plots.png")
