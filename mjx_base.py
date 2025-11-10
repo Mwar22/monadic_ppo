@@ -29,7 +29,7 @@ class EnviromentConfig:
     sim_dt: float = 0.005         # time step para a simulação (s)
     episode_length: float = 500   # 5 sec (250*ctrl_dt)
     action_repeat: float = 1
-    action_scale: float = 0.5
+    action_scale: float = 0.3
     obs_noise: float = 0.05
     impl: str = 'jax'
     nconmax: int = 24 * 8192
@@ -53,7 +53,7 @@ class RewardConfig:
     orientation_error_penalty: float = -1.0 #15
 
     success_reward: float = 100.0 # Large positive reward for succeeding
-    failure_penalty: float = -0.5 # Large negative penalty for failing
+    failure_penalty: float = -0.25 # Large negative penalty for failing
 
     # Regularização L2 dos torques nas juntas, para evitar torques muito grandes (energia)
     torques_penalty: float = -0.0005
@@ -69,7 +69,7 @@ class RewardConfig:
     termination: float = -1.0
 
     #para incentivar o robô a sair do lugar
-    tracking_incentive_gain: float = 2.0
+    tracking_incentive_gain: float = 3.0
 
     # recompensa exponencialmente decrescente com o erro = exp(-error^2/sigma).
     tracking_sigma: float = 0.95

@@ -524,6 +524,10 @@ def reward_pipeline(joystick: Joystick, env: EnvState):
                 })
             )
         )
+        #penalidade para coibir torques muito elevados
+        .map(lambda pdata: {**pdata, "reward":
+            pdata["reward"] + l1_l2_reward(reward_config.torques_penalty, 0, pdata["torques"])
+        })
         .map(lambda pdata: {**pdata, "reward": jnp.clip(pdata["reward"], -10000.0, 10000.0)})
     )
 ####################################################################################################################
@@ -639,9 +643,8 @@ def create_step(
         # condicional
         time_is_up = (state["step"] > 500) | (state["step"] == 0)
         agent_is_done = final_data["done"]
-        #cond = time_is_up | agent_is_done
-        cond = False
-
+        cond = time_is_up | agent_is_done
+        
         # condicional decide se resetamos para um novo alvo para o proximo step
         state, goal_data = jax.lax.cond(
             cond,
