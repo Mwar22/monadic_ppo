@@ -3,7 +3,7 @@ import optax
 import jax.numpy as jnp
 import flax.linen as nn
 import matplotlib.pyplot as plt
-from enviroment import EnvState, Data, State, Action
+from enviroment import StateMonad, Data, State, Action
 from ppo import ppo_train
 from typing import Tuple
 from etils import epath

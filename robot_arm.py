@@ -5,17 +5,20 @@ import jax.numpy as jnp
 import flax.linen as nn
 import matplotlib.pyplot as plt
 from jax import config
-from enviroment import EnvState, Data, State, Action
+from enviroment import StateMonad, Data, State, Action
 from ppo import ppo_train, cont_sample_beta
 from typing import Tuple, Any
 from etils import epath
 from joystick import create_joystick, create_reset, create_step
 from mjx_base import EnviromentConfig, RangeConfig, ResetConfig, RewardConfig
+from functools import partial
+from jax.nn import initializers
 
 #######################################################################################
 # Modelos
 #######################################################################################
-
+activation_str = "sigmoid"
+activation = lambda x: nn.sigmoid(x)
 
 class Policy(nn.Module):
     action_dim: int
@@ -24,24 +27,30 @@ class Policy(nn.Module):
     @nn.compact
     def __call__(self, obs):
         x = nn.Dense(256)(obs)
-        #x = CauchyActivationModule()(x)
-        x = nn.relu(x)
-        x = nn.Dense(256)(x)
-        #x = CauchyActivationModule()(x)
-        x = nn.relu(x)
-        logits = nn.Dense(self.action_dim)(x)  # discrete actions
+        x = activation(x)
+        #x = nn.LayerNorm()(x)
+        
+   
+        x = nn.Dense(256)(obs)
+        x = activation(x)
+       
+        logits = nn.Dense(self.action_dim)(x)
         return logits
 
 
 class Critic(nn.Module):
+    activation_name: str = "relu" #default
+
     @nn.compact
     def __call__(self, obs):
+       
         x = nn.Dense(256)(obs)
-        #x = CauchyActivationModule()(x)
-        x = nn.relu(x)
-        x = nn.Dense(256)(x)
-        #x = CauchyActivationModule()(x)
-        x = nn.relu(x)
+        x = activation(x)
+        #x = nn.LayerNorm()(x)
+        
+        x = nn.Dense(256)(obs)
+        x = activation(x)
+        
         value = nn.Dense(1)(x)
         return value.squeeze(-1)
 
@@ -107,7 +116,7 @@ class CauchyActivationModule(nn.Module):
 
 #######################################################################################
 
-def get_action(policy: nn.Module, params) -> EnvState:
+def get_action(policy: nn.Module, params) -> StateMonad:
     """
     :: p -> s -> EnvState s a
     """
@@ -122,18 +131,18 @@ def get_action(policy: nn.Module, params) -> EnvState:
         new_state = {**state, "rng": rng2, "action": action_value}
         return new_state, {"action": action_value, "logprob": logprob}
 
-    return EnvState(func)
+    return StateMonad(func)
 
 
-def compose_pipeline(policy: nn.Module, policy_params, step_fn) -> EnvState:
-    env = EnvState.pure({})
+def compose_pipeline(policy: nn.Module, policy_params, step_fn) -> StateMonad:
+    env = StateMonad.pure({})
 
     def action_data_into_step(adata):
         """Combina dados da ação na saída """
         def fn(state):
             new_state, step_data = step_fn(state)
             return new_state, {**adata, **step_data}
-        return EnvState(fn)
+        return StateMonad(fn)
 
     return (
         env.bind(lambda _: get_action(policy, policy_params))
@@ -156,7 +165,7 @@ print(f"jax_enable_x64: {jax.config.read('jax_enable_x64')}")
 #env_states = {"rng":rng, "step":0, "goal":None, "obs_history":}
 #######################################################################################
 # --- Hyperparameters ---
-NUM_UPDATES = 100#1000
+NUM_UPDATES = 250#1000
 NUM_ENVS = 512 #512
 NUM_STEPS_PER_UPDATE = 250
 LEARNING_RATE = 3e-4
@@ -245,9 +254,12 @@ print(f" Training finished! Average loss of last 100 steps: {avg_loss:.4f}")
 # plotagem dos dados
 avg_rewards_per_update = jnp.mean(metrics["reward"], axis=1)
 avg_episode_rewards = jnp.sum(avg_rewards_per_update, axis=1)
+print(f"min avg reward: {jnp.min(avg_episode_rewards)}")
+print(f"max avg reward: {jnp.max(avg_episode_rewards)}")
 
 grad_norm = metrics["grad_norm"]
 grad_to_param_ratio = metrics["grad_to_param_ratio"]
+
 
 fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(10, 8), tight_layout=True)
 ax1.plot(metrics["loss"])
@@ -271,5 +283,17 @@ ax4.set_xlabel("Update Step")
 ax4.set_ylabel("Ratio")
 
 
-plt.savefig("training_plots.png")
+plt.savefig(f"training_plots_{activation_str}.png")
 print("\nTraining plots saved to training_plots.png")
+
+import pandas as pd
+
+df = pd.DataFrame({
+    "step": range(len(metrics["loss"])),
+    "loss": metrics["loss"],
+    "avg_reward": avg_episode_rewards,
+    "grad_norm": grad_norm,
+    "grad_to_param_ratio": grad_to_param_ratio
+})
+df.to_csv(f"l1_{activation_str}.csv", index=False)
+print("Done!")

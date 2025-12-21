@@ -22,7 +22,7 @@ from flax import struct
 from dataclasses import fields
 from typing import Any, Dict, Optional, Union, Tuple, List , NewType
 from mjx_base import ResetConfig, RangeConfig, RewardConfig, EnviromentConfig
-from enviroment import EnvState, Data, State, Action
+from enviroment import StateMonad, Data, State, Action
 
 
 def create_joystick(
@@ -160,7 +160,7 @@ def conv2jax_quat(mujoco_quat: jnp.ndarray) -> jnp.ndarray:
         return jnp.array([mujoco_quat[1], mujoco_quat[2], mujoco_quat[3], mujoco_quat[0]])
 
 ##############################################################################################################3
-def sample_config_coordinates(range_config: RangeConfig, config_name: str, goal_data: Dict[str, Any]) -> EnvState:
+def sample_config_coordinates(range_config: RangeConfig, config_name: str, goal_data: Dict[str, Any]) -> StateMonad:
     """
     Obtem comandos aleatórios para as posições
     :: r, c, g -> EnvState s g'
@@ -184,9 +184,9 @@ def sample_config_coordinates(range_config: RangeConfig, config_name: str, goal_
         new_state = {**state, "rng": rng1}
         return new_state, {**goal_data, str_id: scaled_coord}
     
-    return EnvState(func)
+    return StateMonad(func)
       
-def sample_config_velocities(range_config: RangeConfig, config_name: str, goal_data: Dict[str, Any]) -> EnvState:
+def sample_config_velocities(range_config: RangeConfig, config_name: str, goal_data: Dict[str, Any]) -> StateMonad:
     """
     Obtem comandos aleatórios para as velocidades
     :: r, c, g -> EnvState s g'
@@ -209,7 +209,7 @@ def sample_config_velocities(range_config: RangeConfig, config_name: str, goal_d
         new_state = {**state, "rng": rng1}
         return new_state, {**goal_data, str_id: scaled_coord}
     
-    return EnvState(func)
+    return StateMonad(func)
 
 def tool_position(model: MjModel, data: mjx.Data) -> jax.Array:
         return mjx_base.get_sensor_data(model, data, "tool_position")
@@ -348,9 +348,9 @@ def update_obs_history(data, obs_noise):
 
         return new_state, {**data, "obs_history": new_obs_history}
     
-    return EnvState(func)
+    return StateMonad(func)
 
-def concat_obs_as_array(d: Dict[str, Any]) -> EnvState:
+def concat_obs_as_array(d: Dict[str, Any]) -> StateMonad:
     """
     :: d -> EnvState s c
     """
@@ -375,11 +375,11 @@ def concat_obs_as_array(d: Dict[str, Any]) -> EnvState:
         
         return state, {**d, "obs_array": obs_array}
     
-    return EnvState(func)
+    return StateMonad(func)
 
 ###################################################################################################################
 
-def goal_pipeline(env: EnvState, range_config):
+def goal_pipeline(env: StateMonad, range_config):
     return (
         env.bind(lambda pdata: sample_config_coordinates(range_config, "goal_position", pdata))
         .bind(lambda pdata: sample_config_velocities(range_config, "goal_position", pdata))
@@ -387,37 +387,37 @@ def goal_pipeline(env: EnvState, range_config):
         .bind(lambda pdata: sample_config_velocities(range_config, "goal_orientation", pdata))
     )
 
-def tool_pipeline(env: EnvState, model, data: mjx.Data):
+def tool_pipeline(env: StateMonad, model, data: mjx.Data):
     return (
         env.bind(lambda pdata:
-            EnvState(lambda state: 
+            StateMonad(lambda state: 
                 (state, {**pdata, "position" : tool_position(model, state["mjx_data"])})
             )
         )
         .map(lambda pdata: {**pdata, "position_error": position_error(pdata["goal_position_coordinates"], pdata["position"])})
         .bind(lambda pdata:
-            EnvState(lambda state: 
+            StateMonad(lambda state: 
                 (state, {**pdata, "orientation" : tool_quaternion(model, state["mjx_data"])})
             )
         )
         .map(lambda pdata: {**pdata, "orientation_error":orientation_error(pdata["goal_orientation_coordinates"], pdata["orientation"])})
     )
 
-def other_pipeline(joystick: Joystick, env: EnvState, data: mjx.Data):
+def other_pipeline(joystick: Joystick, env: StateMonad, data: mjx.Data):
  
     return (
         env.bind(lambda pdata:
-            EnvState(lambda state: 
+            StateMonad(lambda state: 
                 (state, {**pdata, "torques" : state["mjx_data"].qfrc_actuator})
             )
         )
         .bind(lambda pdata:
-            EnvState(lambda state: 
+            StateMonad(lambda state: 
                 (state, {**pdata, "joint_angles" : state["mjx_data"].qpos[joystick.joint_qposadr]})
             )
         )
         .bind(lambda pdata:
-            EnvState(lambda state: 
+            StateMonad(lambda state: 
                 (state, {**pdata, "joint_vel" : state["mjx_data"].qvel[joystick.joint_qveladr]})
             )
         )
@@ -426,7 +426,7 @@ def other_pipeline(joystick: Joystick, env: EnvState, data: mjx.Data):
         .bind(lambda pdata: update_obs_history(pdata, joystick.enviroment_config.obs_noise))
     )
 
-def reward_pipeline2(joystick: Joystick, env: EnvState):
+def reward_pipeline(joystick: Joystick, env: StateMonad):
     reward_config = joystick.reward_config
     return (
 
@@ -472,7 +472,7 @@ def reward_pipeline2(joystick: Joystick, env: EnvState):
             "failure": jnp.any(pdata["joint_angles"] < joystick.lowers) | jnp.any(pdata["joint_angles"] > joystick.uppers)
         })
         .bind(lambda pdata:
-            EnvState(lambda state:
+            StateMonad(lambda state:
                 (state, {
                     **pdata,
                     #aplica a correção baseado nas recompensas e penalidades combinados
@@ -490,7 +490,7 @@ def reward_pipeline2(joystick: Joystick, env: EnvState):
     )
 
 
-def reward_pipeline(joystick: Joystick, env: EnvState):
+def reward_pipeline_bkp(joystick: Joystick, env: StateMonad):
     reward_config = joystick.reward_config
     return (
 
@@ -516,7 +516,7 @@ def reward_pipeline(joystick: Joystick, env: EnvState):
             "failure": jnp.any(pdata["joint_angles"] < joystick.lowers) | jnp.any(pdata["joint_angles"] > joystick.uppers)
         })
         .bind(lambda pdata:
-            EnvState(lambda state:
+            StateMonad(lambda state:
                 (state, {
                     **pdata,
                     "reward": pdata["reward"] + pdata["failure"] * reward_config.failure_penalty,
@@ -533,7 +533,7 @@ def reward_pipeline(joystick: Joystick, env: EnvState):
 ####################################################################################################################
 def create_reset(
     joystick: Joystick
-) -> EnvState:
+) -> StateMonad:
     
     def func(state):
         rng, rng2 = jax.random.split(state["rng"], 2)
@@ -562,11 +562,11 @@ def create_reset(
         state["mjx_data"] = mjx_data
 
         #obtem um novo alvo a partir do pipeline
-        gp = goal_pipeline(EnvState.pure({}), joystick.range_config)
+        gp = goal_pipeline(StateMonad.pure({}), joystick.range_config)
         state, goal_data = gp.run(state)
         state["goal"] = goal_data
 
-        op = tool_pipeline(EnvState.pure(goal_data), joystick.mj_model, mjx_data)
+        op = tool_pipeline(StateMonad.pure(goal_data), joystick.mj_model, mjx_data)
         op = other_pipeline(joystick, op, mjx_data)
         state, obs = op.run(state)
 
@@ -583,16 +583,17 @@ def create_reset(
         #print(f"obs_shape: {obs["obs_array"].shape}")
 
         #obtem as recompensas
-        rp = reward_pipeline(joystick, EnvState.pure(obs))
+        rp = reward_pipeline(joystick, StateMonad.pure(obs))
         state, final_data = rp.run(state)
 
+        state ={**state, "rng": rng2,  "action": jnp.reshape(state["action"], (6,))}
         return state, {"obs": obs, "final_data": final_data}
     
-    return EnvState(func)
+    return StateMonad(func)
 
 def create_step(
     joystick: Joystick,
-) -> EnvState:
+) -> StateMonad:
     """
     state.keys() = ["rng", "step", "goal", "obs_history", "action", "mjx_data"]
     """
@@ -618,16 +619,16 @@ def create_step(
 
         #obtem a observação com base no alvo atual
         current_goal_data = state["goal"]
-        op = tool_pipeline(EnvState.pure(current_goal_data), joystick.mj_model, mjx_data)
+        op = tool_pipeline(StateMonad.pure(current_goal_data), joystick.mj_model, mjx_data)
         op = other_pipeline(joystick, op, mjx_data)
         state, obs = op.run(state)
 
         #obtem as recompensas e a flag done
-        rp = reward_pipeline(joystick, EnvState.pure(obs))
+        rp = reward_pipeline(joystick, StateMonad.pure(obs))
         state, final_data = rp.run(state)
 
         #checa as condições para reset
-        gp = goal_pipeline(EnvState.pure({}), joystick.range_config)
+        gp = goal_pipeline(StateMonad.pure({}), joystick.range_config)
 
         def reset_branch(state):
             # obtem novo alvo
@@ -653,7 +654,8 @@ def create_step(
             operand= state
         )
 
-        new_state ={**state, "rng": rng2, "step": state["step"] + 1, "goal": goal_data}
+
+        new_state ={**state, "rng": rng2, "step": state["step"] + 1, "goal": goal_data, "action": jnp.reshape(state["action"], (6,))}
         return new_state, {"obs": obs, "final_data": final_data}
 
-    return EnvState(func)
+    return StateMonad(func)

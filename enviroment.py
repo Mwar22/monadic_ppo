@@ -9,7 +9,7 @@ class State:
     data: Dict[str, Any]
 
 
-@struct.dataclass()
+@struct.dataclass
 class Action:
     value: jax.Array
     logprob: jax.Array
@@ -26,7 +26,7 @@ class Data:
 
 
 @struct.dataclass
-class EnvState:
+class StateMonad:
     """
     Immutable dataclass, where the enviroment by itself is a state monad
     step:: s -> (s', r)
@@ -51,7 +51,7 @@ class EnvState:
             new_state, ret_data = self.exec(state)
             return f(ret_data).exec(new_state)
 
-        return EnvState(new_exec)
+        return StateMonad(new_exec)
 
 
     def map(self, f):
@@ -63,8 +63,8 @@ class EnvState:
             new_state, ret_data = self.exec(state)
             return new_state, f(ret_data)
 
-        return EnvState(new_exec)
+        return StateMonad(new_exec)
     
     @staticmethod
     def pure(value: Any):
-        return EnvState(lambda s: (s, value))
+        return StateMonad(lambda s: (s, value))
