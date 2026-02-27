@@ -1,4 +1,4 @@
-﻿import jax
+import jax
 import optax
 import jax.numpy as jnp
 import flax.linen as nn
@@ -7,7 +7,7 @@ from enviroment import StateMonad, Data, State, Action
 from ppo import ppo_train
 from typing import Tuple
 from etils import epath
-from joystick import create_joystick, create_reset, create_step
+from robot import create_robot, create_reset, create_step
 from mjx_base import EnviromentConfig, RangeConfig, ResetConfig, RewardConfig
 
 
@@ -26,8 +26,8 @@ ARM_JOINTS = [
 
 script_dir = epath.Path(__file__).parent.resolve()
 print(script_dir)
-joystick = create_joystick(
-    script_dir / 'model/joystick_env.xml',
+robot = create_robot(
+    script_dir / 'model/robot_env.xml',
     script_dir / 'model',
     script_dir / 'model/meshes',
     EnviromentConfig(),
@@ -39,7 +39,7 @@ joystick = create_joystick(
 
 #teste reset
 state = {"rng":rng, "step":0, "goal":None, "obs_history":None, "action": jnp.zeros(6), "mjx_data": None}
-reset = create_reset(joystick)
+reset = create_reset(robot)
 reset_jit = jax.jit(reset.run)
 state, r = reset_jit(state)
 
@@ -48,7 +48,7 @@ state, r = reset_jit(state)
 #print(f"state: {state}")
 
 #teste step
-step = create_step(joystick)
+step = create_step(robot)
 step_jit = jax.jit(step.run)
 state, r = step_jit(state)
 

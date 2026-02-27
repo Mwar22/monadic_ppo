@@ -9,7 +9,7 @@ from enviroment import StateMonad, Data, State, Action
 from ppo import ppo_train, cont_sample_beta
 from typing import Tuple, Any
 from etils import epath
-from joystick import create_joystick, create_reset, create_step
+from robot import create_robot, create_reset, create_step
 from mjx_base import EnviromentConfig, RangeConfig, ResetConfig, RewardConfig
 from functools import partial
 from jax.nn import initializers
@@ -118,7 +118,7 @@ class CauchyActivationModule(nn.Module):
 
 def get_action(policy: nn.Module, params) -> StateMonad:
     """
-    :: p -> s -> EnvState s a
+    :: p -> s -> StateMonad s a
     """
     
     def func(state) -> Tuple[Any, Any]:
@@ -186,8 +186,8 @@ ARM_JOINTS = [
     "junta6"
 ]
 
-joystick = create_joystick(
-    epath.Path("model/joystick_env.xml"),
+robot = create_robot(
+    epath.Path("model/robot_env.xml"),
     epath.Path("model"),
     epath.Path("model/meshes"),
     EnviromentConfig(),
@@ -198,8 +198,8 @@ joystick = create_joystick(
 )
 
 #controi-se as funções de step e reset para o ambiente
-reset_jit = jax.jit(create_reset(joystick).run)
-step_jit = jax.jit(create_step(joystick).run)
+reset_jit = jax.jit(create_reset(robot).run)
+step_jit = jax.jit(create_step(robot).run)
 
 
 # Inicializa os modelos
