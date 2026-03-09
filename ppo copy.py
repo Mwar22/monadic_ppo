@@ -1,11 +1,14 @@
+from os import wait
 import jax
 import optax
+import chex
 import jax.numpy as jnp
 import flax.linen as nn
+from jax import lax
 from flax import struct
 from enviroment import Data, State, StateMonad
 from functools import partial
-from typing import Dict, Any
+from typing import Dict, Any, cast
 from jax.scipy.special import gammaln, digamma
 
 
@@ -17,7 +20,7 @@ class BatchedBuffer:
     done_flag: jax.Array  # (num_envs,)
 
 
-def create(num_envs, max_steps, obs_shape):
+def batched_buffer_create(num_envs, max_steps, obs_shape):
     return BatchedBuffer(
         jnp.zeros((num_envs, max_steps, *obs_shape)),
         jnp.zeros((num_envs, max_steps), dtype=jnp.float32),
@@ -127,32 +130,64 @@ def rollout(
     (final_state, final_buffer), trajectory = jax.lax.scan(
         scan_fn, (init_state, buffer), None, length=num_steps
     )
-    return final_state, final_buffer
+    return final_state, final_buffer, trajectory
 
 
-def general_advantage_estimator(rewards, values, lam, gamma):
-    # V(obs_0)...V(obs_{T-1})
+def shift_array(array: jax.Array, ptr: jax.Array):
+    steps = array.shape[0]
+    shift = steps - ptr
+    
+    # shift circular para empurrar os dados validos para o fim
+    shifted = jnp.roll(array, shift, axis=0)
+    
+    # tudos os indices abaixo de shift são marcados para serem zerados
+    mask = jnp.arange(steps) < shift
+    
+    # concatena as dimensões para uma mascara para qualquer formato,
+    # tal como um array de multiplas dimensões
+    broadcast_dims = (steps,) + (1,) * (array.ndim - 1)
+    return jnp.where(mask.reshape(broadcast_dims), 0.0, shifted)
+
+
+def general_advantage_estimator(
+    obs_buffer: jax.Array,
+    reward_buffer: jax.Array,
+    ptr: jax.Array,
+    *,
+    critic: nn.Module,
+    critic_params,
+    lam,
+    gamma,
+):
+    # garante que o checador de tipos não reclame
+    values = cast(jax.Array, critic.apply(critic_params, obs_buffer))
+
+    # desloca para que os zeros não utilizados fiquem no começo
+    values = shift_array(values, ptr)
+    reward_buffer = shift_array(reward_buffer, ptr)
+
+    # V(t) and V(t+1)
     values_t = values[:-1]
-
-    # next_values é V(obs_1)...V(obs_T)
     next_values = values[1:]
+    rewards = reward_buffer[:-1] # Usualmente alinham com values_t
 
-    inputs = jnp.stack([rewards, values_t, next_values], axis=-1)
-
-    def gae_scan_fn(carry, step_inputs):
-        gae_next = carry
-        reward = step_inputs[..., 0]
-        value = step_inputs[..., 1]
-        next_value = step_inputs[..., 2]
-
+    def gae_scan_fn(gae_next, step_inputs):
+        reward, value, next_value = step_inputs
+        
+        # delta_t = r_t + gamma * V(s_{t+1}) - V(s_t)
         delta = reward + gamma * next_value - value
         gae = delta + gamma * lam * gae_next
 
-        # next_carry, y
         return gae, gae
 
+    # entradas para scan (T-1 steps)
+    inputs = (rewards, values_t, next_values)
+
     _, advantages = jax.lax.scan(
-        gae_scan_fn, jnp.asarray(0.0, dtype=jnp.float32), inputs, reverse=True
+        gae_scan_fn, 
+        jnp.zeros((), dtype=jnp.float32), 
+        inputs, 
+        reverse=True
     )
 
     returns = advantages + values_t
@@ -290,6 +325,7 @@ def ppo_train(
     policy,
     critic,
     optimizer,
+    num_envs,
     episodes: int,
     max_steps_per_episode: int,
     gamma,
@@ -297,140 +333,32 @@ def ppo_train(
 ):
     """The complete, JIT-compiled training function."""
 
-    # (state = {
-    #   "reward": jnp.array( max_steps_per_episode),
-    #   "value": jnp.array( max_steps_per_episode),
-    #   "ptr": 0,
-    #   "count":0
-    # }, None))
-    buffer = StateMonad.pure(None)
-
-    state, data = step_fn({**carry_state, "rng": step_rng})
-
-    def buffer_push(data, new_value):
-        def fn(state):
-            ptr = state["ptr"]
-            count = state["count"]
-            reward = state["reward"]
-            value = state["value"]
-            loss = state["loss"]
-
-            reward = reward.at[ptr].set(data["final_data"]["reward"])
-            value = value.at[ptr].set(new_value)
-
-            ptr += 1
-            count += 1
-
-            return {
-                "rewards": reward,
-                "values": value,
-                "loss": loss,
-                "ptr": ptr,
-                "count": count,
-            }, None
-
-        return StateMonad(fn)
-
-    def buffer_reset():
-        def fn(state):
-            new_state = {
-                "obs": jnp.zeros((max_steps_per_episode, *obs_shape)),
-                "rewards": jnp.zeros(max_steps_per_episode),
-                "values": jnp.zeros(max_steps_per_episode),
-                "loss": jnp.zeros(max_steps_per_episode),
-                "ptr": 0,
-                "count": 0,
-            }
-            return new_state, None
-
-        return StateMonad(fn)
-
-    def scan_fn(carry, _):
-        carry_state, _ = carry
-        rng, step_rng, reset_rng = jax.random.split(carry_state["rng"], 3)
-
-        def rollout_running():
-            """"""
-            state, data = step_fn({**carry_state, "rng": step_rng})
-            obs = data["obs"]["obs_history"]
-            rewards = data["final_data"]["reward"]
-
-            # aplica a observação na rede do critico para obter o valor
-            value = critic.apply(params["critic"], obs)
-
-            # salva no buffer
-            buffer.bind(buffer_push(data, value))
-
-            # faz o update do rng
-            state["rng"] = rng
-            return state, data
-
-        def rollout_done():
-            # calcula o gae
-            buffer_state, _ = buffer.run(
-                {
-                    "rewards": jnp.zeros(max_steps_per_episode),
-                    "values": jnp.zeros(max_steps_per_episode),
-                    "ptr": 0,
-                    "count": 0,
-                }
-            )
-
-            # calcula as vantagens
-            advantages, returns = general_advantage_estimator(
-                buffer_state["rewards"], buffer_state["values"], lam, gamma
-            )
-
-            # normaliza as vantagens, para prevenir problemas com os gradientes, com as recompensas ruidosas
-            advantages_mean = jnp.mean(advantages)
-            advantages_std = jnp.std(advantages)
-            advantages = (advantages - advantages_mean) / (advantages_std + 1e-8)
-            advantages_std = jnp.maximum(advantages_std, 1e-3)
-
-            buffer.bind(buffer_reset())
-            return carry
-
-        # Escolhe qual função executar para definir o próximo estado
-        done = carry_state["done"] > 0.5  # Booleano
-        state, data = jax.lax.cond(done, rollout_done, rollout_running, operand=None)
-
-        # Atualiza o RNG principal para o próximo loop
-        state["rng"] = rng
-        return state, data
-
-    start_carry = (init_envs_states, None)
-    final_state, trajectory = jax.lax.scan(
-        scan_fn, start_carry, None, length=max_steps_per_episode * episodes
-    )
-
-    # Vetoriza a função de rollout, para rodar de forma paralela entre os ambientes
-    # rollout(pipeline, init_state, num_steps)
-    vmapped_rollout = jax.vmap(
-        partial(rollout, pipeline),
-        in_axes=(0, None),
-        out_axes=0,
-    )
-
     # Vetoriza a função GAE
-    # general_advantage_estimator (critic, critic_params, data, lam, gamma)
-    def gae_for_vmap(data, final_state_obs):
-        return general_advantage_estimator(
-            critic, params["critic"], data, final_state_obs, lam, gamma
-        )
-
-    vmapped_gae = jax.vmap(gae_for_vmap)
+    vmapped_gae = jax.vmap(general_advantage_estimator, in_axes=(0, 0))
 
     def _update_step(carry, _):
         """This is the body of the scan, representing one full update."""
         params, opt_state, env_states, rng = carry
         rng, rollout_rng, rng_loss = jax.random.split(rng, 3)
 
+        # cria um buffer
+        buffer = batched_buffer_create(num_envs, max_steps_per_episode, obs_shape)
+
         # Faz um rollout (usando a função vetorizada)
-        final_states, trajectory = vmapped_rollout(env_states, max_steps_per_episode)
+        final_states, buffer = rollout(
+            pipeline, init_envs_states, max_steps_per_episode, buffer
+        )
 
         # calcula as vantagens (usando a função vetorizada)
-        final_state_obs_history = final_states["obs_history"]
-        advantages, returns = vmapped_gae(trajectory, final_state_obs_history)
+        advantages, returns = vmapped_gae(
+            buffer.obs_buffer,
+            buffer.reward_buffer,
+            buffer.ptr_array,
+            critic=critic,
+            critic_params=params["critic"],
+            lam=lam,
+            gamma=gamma,
+        )
 
         # normaliza as vantagens, para prevenir problemas com os gradientes, com as recompensas ruidosas
         advantages_mean = jnp.mean(advantages)
