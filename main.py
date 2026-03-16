@@ -10,7 +10,7 @@ from ppo import ppo_train, cont_sample_beta
 from typing import Tuple, Any
 from etils import epath
 from robot import create_robot, create_reset, create_step
-from mjx_base import EnviromentConfig, RangeConfig, ResetConfig, RewardConfig
+from config import EnviromentConfig, RangeConfig, ResetConfig, RewardConfig
 from functools import partial
 from jax.nn import initializers
 
@@ -165,9 +165,9 @@ print(f"jax_enable_x64: {jax.config.read('jax_enable_x64')}")
 #env_states = {"rng":rng, "step":0, "goal":None, "obs_history":}
 #######################################################################################
 # --- Hyperparameters ---
-NUM_UPDATES = 250#1000
-NUM_ENVS = 512 #512
-NUM_STEPS_PER_UPDATE = 250
+NUM_UPDATES = 6#1000
+NUM_ENVS = 2 #512
+NUM_STEPS_PER_UPDATE = 5
 LEARNING_RATE = 3e-4
 GAMMA = 0.99
 GAE_LAMBDA = 0.95
@@ -217,7 +217,6 @@ opt_state = optimizer.init(params)
 
 # Inicializa os estados para os ambientes em paralelo
 # (num_envs, features_dim)
-envs_obs = jnp.zeros((NUM_ENVS, 1)) #dimensão extra do batch
 envs_step = jnp.zeros((NUM_ENVS,))
 envs_rng = jax.random.split(env_rng, NUM_ENVS)
 envs_action = jnp.zeros((NUM_ENVS, ACTION_DIM))
@@ -242,6 +241,8 @@ print("JIT compiling and starting training...")
     rng,
     policy=policy,
     critic=critic,
+    obs_shape=(15 * 45, ),
+    action_shape=(ACTION_DIM,),
     optimizer=optimizer,
     num_updates=NUM_UPDATES,
     num_steps_per_update=NUM_STEPS_PER_UPDATE,

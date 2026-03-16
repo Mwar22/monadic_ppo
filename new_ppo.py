@@ -14,15 +14,19 @@ from jax.scipy.special import gammaln, digamma
 
 @struct.dataclass
 class BatchedBuffer:
-    obs_buffer: jax.Array  # (num_envs, max_steps, *obs_shape)
-    reward_buffer: jax.Array  # (num_envs, max_steps)
+    obs_buffer: jax.Array       # (num_envs, max_steps, *obs_shape)
+    action_buffer: jax.Array    # (num_envs, max_steps, *action_shape)
+    reward_buffer: jax.Array    # (num_envs, max_steps)
+    logprob_buffer: jax.Array   # (num_envs, max_steps)
     ptr_array: jax.Array  # (num_envs,)
     done_flag: jax.Array  # (num_envs,)
 
 
-def batched_buffer_create(num_envs, max_steps, obs_shape):
+def batched_buffer_create(num_envs, max_steps, obs_shape, action_shape):
     return BatchedBuffer(
         jnp.zeros((num_envs, max_steps, *obs_shape)),
+        jnp.zeros((num_envs, max_steps, *action_shape)),
+        jnp.zeros((num_envs, max_steps), dtype=jnp.float32),
         jnp.zeros((num_envs, max_steps), dtype=jnp.float32),
         jnp.zeros((num_envs,), dtype=jnp.int32),
         jnp.zeros((num_envs,), dtype=jnp.bool),
@@ -31,10 +35,14 @@ def batched_buffer_create(num_envs, max_steps, obs_shape):
 
 def push(
     obs_buffer: jax.Array,
+    action_buffer: jax.Array,
     reward_buffer: jax.Array,
-    ptr: jax.Array,
+    logprob_buffer: jax.Array,
     obs: jax.Array,
+    action: jax.Array,
     reward: jax.Array,
+    logprob: jax.Array,
+    ptr: jax.Array
 ):
     """
     Adiciona um dado em um buffer de dimensões (max_steps, *data_shape)
@@ -59,16 +67,20 @@ def push(
 
     ptr = jnp.minimum(ptr, obs_buffer.shape[0] - 1)
     obs_buffer = obs_buffer.at[ptr].set(obs)
+    action_buffer = action_buffer.at[ptr].set(action)
     reward_buffer = reward_buffer.at[ptr].set(reward)
+    logprob_buffer = logprob_buffer.at[ptr].set(logprob)
 
-    return obs_buffer, reward_buffer, ptr + 1
+    return obs_buffer, action_buffer, reward_buffer, logprob_buffer, ptr + 1
 
 
 def rollout_step(
     pipeline: StateMonad,
     state: Dict[str, Any],
     obs_buffer: jax.Array,
+    action_buffer: jax.Array,
     reward_buffer: jax.Array,
+    logprob_buffer: jax.Array,
     ptr: jax.Array,
     done_flag: jax.Array,
 ):
@@ -84,28 +96,36 @@ def rollout_step(
 
     # Caso done_flag esteja como False
     def do_step(carry):
-        state, obs_buffer, reward_buffer, ptr, done_flag = carry
+        state, obs_buffer, action_buffer, reward_buffer, logprob_buffer, ptr, done_flag = carry
         rng, step_rng = jax.random.split(state["rng"])
 
         # executa o ambiente
         new_state, data = pipeline.run({**state, "rng": step_rng})
 
         # adiciona o dado no buffer
-        obs_buffer, reward_buffer, ptr = push(
-            obs_buffer, reward_buffer, ptr, data["obs_history"], data["reward"]
+        obs_buffer, action_buffer, reward_buffer, logprob_buffer, ptr = push(
+            obs_buffer,
+            action_buffer,
+            reward_buffer,
+            logprob_buffer,
+            data["obs_history"],
+            data["action"],
+            data["reward"],
+            data["logprob"],
+            ptr
         )
 
         # faz o update do rng
         new_state["rng"] = rng
         done_flag = data["done"] > 0.5
-        return new_state, obs_buffer, reward_buffer, ptr, done_flag
+        return new_state, obs_buffer, action_buffer, reward_buffer, logprob_buffer, ptr, done_flag
 
     # Caso done_flag esteja como True
     def no_step(carry):  #
         return carry
 
     return jax.lax.cond(
-        done_flag, no_step, do_step, (state, obs_buffer, reward_buffer, ptr, done_flag)
+        done_flag, no_step, do_step, (state, obs_buffer, action_buffer, reward_buffer, logprob_buffer, ptr, done_flag)
     )
 
 
@@ -116,21 +136,27 @@ def rollout(
     buffer: BatchedBuffer,
 ):
     vmap_rollout_step = jax.vmap(
-        partial(rollout_step, pipeline), in_axes=(None, 0, 0, 0, 0)
+        partial(rollout_step, pipeline), in_axes=(None, 0, 0, 0, 0, 0, 0, 0)
     )
 
     def scan_fn(carry, _):
         state, buffer = carry
-        state, obs_buffer, reward_buffer, ptr, done_flag = vmap_rollout_step(
-            state, buffer.obs_buffer, buffer.reward_buffer, buffer.ptr, buffer.done_flag
+        state, obs_buffer, action_buffer, reward_buffer, logprob_buffer, ptr, done_flag = vmap_rollout_step(
+            state,
+            buffer.obs_buffer,
+            buffer.action_buffer,
+            buffer.reward_buffer,
+            buffer.logprob_buffer,
+            buffer.ptr,
+            buffer.done_flag
         )
-        buffer = BatchedBuffer(obs_buffer, reward_buffer, ptr, done_flag)
-        return state, buffer
+        buffer = BatchedBuffer(obs_buffer, action_buffer, reward_buffer, logprob_buffer, ptr, done_flag)
+        return (state, buffer), None
 
-    (final_state, final_buffer), trajectory = jax.lax.scan(
+    (final_state, final_buffer), _ = jax.lax.scan(
         scan_fn, (init_state, buffer), None, length=num_steps
     )
-    return final_state, final_buffer, trajectory
+    return final_state, final_buffer
 
 
 def shift_array(array: jax.Array, ptr: jax.Array):
@@ -315,15 +341,14 @@ def grad_metrics(grads, params):
 
 def ppo_train(
     pipeline,
-    step_fn,
-    reset_fn,
-    obs_shape,
     params,
-    opt_state,
+    optim_state,
     init_envs_states,
     rng,
     policy,
     critic,
+    obs_shape,
+    action_shape,
     optimizer,
     num_envs,
     episodes: int,
@@ -338,14 +363,14 @@ def ppo_train(
 
     def _update_step(carry, _):
         """This is the body of the scan, representing one full update."""
-        params, opt_state, env_states, rng = carry
+        params, optim_state, env_states, rng = carry
         rng, rollout_rng, rng_loss = jax.random.split(rng, 3)
 
         # cria um buffer
-        buffer = batched_buffer_create(num_envs, max_steps_per_episode, obs_shape)
+        buffer = batched_buffer_create(num_envs, max_steps_per_episode, obs_shape, action_shape)
 
         # Faz um rollout (usando a função vetorizada)
-        final_states, buffer = rollout(
+        final_state, final_buffer= rollout(
             pipeline, init_envs_states, max_steps_per_episode, buffer
         )
 
@@ -375,23 +400,9 @@ def ppo_train(
         # obs_0 ... obs_{T-1}
         initial_obs_history = env_states["obs_history"]
 
-        # precisamos de um batch com shape shape (num_envs, num_steps, obs_dim)
-        # contendo: [ obs_{t-1}, obs_0, obs_1, ..., obs_{T-2} ]
-        # alinhando com a tragetória: [ action_0, action_1, ..., action_{T-1}
-        trajectory_obs_history = trajectory["obs"]["obs_history"]
-
-        batch_obs = jnp.concatenate(
-            [
-                jnp.expand_dims(initial_obs_history, axis=1),  # (num_envs, 1, obs_dim)
-                trajectory_obs_history[:, :-1],  # (num_envs, num_steps-1, obs_dim)
-            ],
-            axis=1,
-        )
-        batch_obs = flatten(batch_obs)
-
-        # The rest of the data is now correctly aligned
-        batch_actions = flatten(trajectory["action"])
-        batch_old_log_probs = flatten(trajectory["logprob"])
+        batch_obs = flatten(final_buffer.obs_buffer)
+        batch_actions = flatten(final_buffer.action_buffer)
+        batch_old_log_probs = flatten(final_buffer.logprob_buffer)
         batch_advantages = flatten(advantages)
         batch_returns = flatten(returns)
 
@@ -410,22 +421,22 @@ def ppo_train(
 
         # calcula os gradientes e atualiza os parametros
         loss_val, grads = jax.value_and_grad(loss_fn)(params)
-        updates, new_opt_state = optimizer.update(grads, opt_state)
+        updates, new_optim_state = optimizer.update(grads, optim_state)
         new_params = optax.apply_updates(params, updates)
 
-        new_carry = (new_params, new_opt_state, final_states, rollout_rng)
+        new_carry = (new_params, new_optim_state, final_state, rollout_rng)
         grad_info = grad_metrics(grads, params)
 
         return new_carry, {
             "loss": loss_val,
-            "reward": trajectory["final_data"]["reward"],
+            "avg_reward": jnp.mean(final_buffer.reward_buffer, axis=0),
             **grad_info,
         }
 
     # loop principal de trainamento, executado por lax.scan
     final_carry, metrics = jax.lax.scan(
         _update_step,
-        (params, opt_state, init_envs_states, rng),
+        (params, optim_state, init_envs_states, rng),
         None,
         length=int(episodes),
     )
