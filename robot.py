@@ -264,61 +264,44 @@ def check_done(
 
 
 def sample_config_coordinates(
-    rsd:RobotSharedData, config_name: str, goal_data: Dict[str, Any]
-) -> StateMonad:
+    rsd:RobotSharedData, rng, config_name: str
+):
     """
     Obtem comandos aleatórios para as posições
-    :: r, c, g -> StateMonad s g'
     """
+    config_value = getattr(rsd.range_config, config_name)
 
-    def func(state):
-        """
-        :: s -> (s', p)
-        """
-        rng, rng1 = jax.random.split(state["rng"])
-        config_value = getattr(rsd.range_config, config_name)
+    # faz um sampleamento
+    samples = jax.random.uniform(rng, shape=(3,))
 
-        # faz um sampleamento
-        samples = jax.random.uniform(rng, shape=(3,))
+    # ajusta a escala para que fique dentro da faixa [min, max]
+    scaled_coord = (
+        config_value[:, 0] + (config_value[:, 1] - config_value[:, 0]) * samples
+    )
 
-        # ajusta a escala para que fique dentro da faixa [min, max]
-        scaled_coord = (
-            config_value[:, 0] + (config_value[:, 1] - config_value[:, 0]) * samples
-        )
+    str_id = config_name + "_coordinates"
+   
+    return {str_id: scaled_coord}
 
-        str_id = config_name + "_coordinates"
-        new_state = {**state, "rng": rng1}
-        return new_state, {**goal_data, str_id: scaled_coord}
 
-    return StateMonad(func)
 
 
 def sample_config_velocities(
-    rsd:RobotSharedData, config_name: str, goal_data: Dict[str, Any]
-) -> StateMonad:
+    rsd:RobotSharedData, rng, config_name: str
+):
     """
     Obtem comandos aleatórios para as velocidades
-    :: r, c, g -> StateMonad s g'
     """
+    config_value = getattr(rsd.range_config, config_name)
 
-    def func(state):
-        """
-        :: s -> (s', p)
-        """
-        rng, rng1 = jax.random.split(state["rng"])
-        config_value = getattr(rsd.range_config, config_name)
+    # faz um sampleamento
+    samples = jax.random.uniform(rng, shape=(3,))
 
-        # faz um sampleamento
-        samples = jax.random.uniform(rng, shape=(3,))
+    # ajusta a escala para que fique dentro da faixa [0, max]
+    scaled_coord = config_value[:, 1] * samples
 
-        # ajusta a escala para que fique dentro da faixa [0, max]
-        scaled_coord = config_value[:, 1] * samples
-
-        str_id = config_name + "_velocities"
-        new_state = {**state, "rng": rng1}
-        return new_state, {**goal_data, str_id: scaled_coord}
-
-    return StateMonad(func)
+    str_id = config_name + "_velocities"
+    return {str_id: scaled_coord}
 
 
 ##################################################################################################################
@@ -386,21 +369,17 @@ def concat_obs_as_array(d: Dict[str, Any]) -> StateMonad:
 ###################################################################################################################
 
 
-def goal_pipeline(rsd: RobotSharedData, env: StateMonad):
-    return (
-        env.bind(
-            lambda pdata: sample_config_coordinates(rsd, "goal_position", pdata)
-        )
-        .bind(
-            lambda pdata: sample_config_velocities(rsd, "goal_position", pdata)
-        )
-        .bind(
-            lambda pdata: sample_config_coordinates(rsd, "goal_orientation", pdata)
-        )
-        .bind(
-            lambda pdata: sample_config_velocities(rsd, "goal_orientation", pdata)
-        )
-    )
+def get_goal(rsd: RobotSharedData, rng):
+    r0,r1, r2, r3, r4 = jax.random.split(rng, 5)
+    goals = {
+        **sample_config_coordinates(rsd, r1, "goal_position"),
+        **sample_config_velocities(rsd, r2, "goal_position"),
+        **sample_config_coordinates(rsd, r3,"goal_orientation"),
+        **sample_config_velocities(rsd, r4, "goal_orientation"),
+    }
+    return r0, goals
+
+   
 
 def obs_pipeline(rsd:RobotSharedData, env: StateMonad):
     return (

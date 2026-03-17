@@ -6,13 +6,14 @@ import flax.linen as nn
 import matplotlib.pyplot as plt
 from jax import config
 from enviroment import StateMonad, Data, State, Action
-from new_ppo import ppo_train
+from new_ppo import ppo_train, create_initial_state
 from typing import Tuple, Any
 from etils import epath
-from robot import create_step, create_rsd
+from robot import create_step, create_rsd, RobotSharedData
 from config import EnviromentConfig, RangeConfig, ResetConfig, RewardConfig
 from functools import partial
 from jax.nn import initializers
+from mujoco import mjx
 
 #######################################################################################
 # Modelos
@@ -139,6 +140,7 @@ LEARNING_RATE = 3e-4
 GAMMA = 0.99
 GAE_LAMBDA = 0.95
 ACTION_DIM = 6
+OBS_DIM = 15 * 45
 
 # --- Inicialização ---
 rng = jax.random.PRNGKey(42)
@@ -185,16 +187,8 @@ step_jit = jax.jit(create_step(rsd, params[0]))
 optimizer = optax.adam(LEARNING_RATE)
 optim_state = optimizer.init(params)
 
-# Inicializa os estados para os ambientes em paralelo
-# (num_envs, features_dim)
-envs_step = jnp.zeros((NUM_ENVS,))
-envs_rng = jax.random.split(env_rng, NUM_ENVS)
-envs_action = jnp.zeros((NUM_ENVS, ACTION_DIM))
-envs_obs = jnp.zeros((NUM_ENVS, 15 * 45))
-
 #estado inicial 
-init_envs_states = {"rng":envs_rng, "step":envs_step, "goal":None, "obs":envs_obs, "action": envs_action, "mjx_data": None}
-#init_envs_states, _ = jax.vmap(reset_jit)(init_envs_states)
+initial_state = create_initial_state(rsd, rng, NUM_ENVS, ACTION_DIM, OBS_DIM)
 
 # --- Executa o treinamento ---
 #jax.config.update("jax_disable_jit", True)
@@ -207,7 +201,7 @@ print("JIT compiling and starting training...")
     optimizer,
     optim_state,
     rng,
-    init_envs_states,
+    initial_state,
     NUM_ENVS,
     NUM_EPISODES,
     STEPS_PER_EPISODE,

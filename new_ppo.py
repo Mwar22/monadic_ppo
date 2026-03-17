@@ -9,7 +9,8 @@ from functools import partial
 from typing import Dict, Any, cast
 from jax.scipy.special import gammaln, digamma
 from mathutils import cont_sample_beta, beta_entropy, shift_array
-from robot import RobotSharedData
+from robot import RobotSharedData, get_goal
+from mujoco import mjx
 
 
 @struct.dataclass
@@ -136,9 +137,20 @@ def rollout(
     num_steps: int,
     buffer: BatchedBuffer,
 ):
-    
+    from jax.tree_util import tree_structure
+
+    print(tree_structure(init_state))
+    state_axes = {
+        "action": 0,
+        "goal": None,
+        "mjx_data": 0,
+        "obs": 0,
+        "rng": 0,
+        "step": 0,
+    }
     vmap_rollout_step = jax.vmap(
-        partial(rollout_step, step_fn), in_axes=(None, 0, 0, 0, 0, 0, 0)
+        partial(rollout_step, step_fn),
+        in_axes=(None, state_axes, 0, 0, 0, 0, 0)
     )
 
     def scan_fn(carry, _):
@@ -224,6 +236,7 @@ def ppo_loss(
     """
     # Get policy logits and critic values for the batch of observations
     logits = rsd.actor.apply(params[0], batch_obs)
+    logits = cast(jax.Array, logits)
     values = rsd.critic.apply(params[1], batch_obs)
 
     # Map actions -> their log probabilities under the current policy
@@ -379,3 +392,31 @@ def ppo_train(
     )
 
     return final_carry, metrics
+
+
+def create_initial_state(rsd: RobotSharedData, rng, num_envs, action_dim, obs_dim):
+    # Inicializa os estados para os ambientes em paralelo
+    # (num_envs, features_dim)
+    batched_steps = jnp.zeros((num_envs,))
+    batched_rng = jax.random.split(rng, num_envs)
+    batched_action = jnp.zeros((num_envs, action_dim))
+    batched_obs = jnp.zeros((num_envs, *obs_dim))
+
+    vmapped_get_goal = jax.vmap(partial(get_goal, rsd))
+    batched_goal = vmapped_get_goal(batched_rng)
+
+    mjx_data = mjx.make_data(rsd.mjx_model)
+    batched_mjx_data = jax.tree_util.tree_map(
+        lambda x: jax.numpy.repeat(x[None], num_envs, axis=0),
+        mjx_data
+    )
+    #estado inicial 
+    return {
+        "rng":batched_rng,
+        "step":batched_steps,
+        "goal":batched_goal,
+        "obs":batched_obs,
+        "action": batched_action,
+        "mjx_data": batched_mjx_data
+    }
+   
