@@ -6,7 +6,7 @@ import flax.linen as nn
 import matplotlib.pyplot as plt
 from jax import config
 from enviroment import StateMonad, Data, State, Action
-from ppo import ppo_train, cont_sample_beta
+from new_ppo import ppo_train, cont_sample_beta
 from typing import Tuple, Any
 from etils import epath
 from robot import create_robot, create_reset, create_step
@@ -165,9 +165,9 @@ print(f"jax_enable_x64: {jax.config.read('jax_enable_x64')}")
 #env_states = {"rng":rng, "step":0, "goal":None, "obs_history":}
 #######################################################################################
 # --- Hyperparameters ---
-NUM_UPDATES = 6#1000
+NUM_EPISODES = 6#1000
 NUM_ENVS = 2 #512
-NUM_STEPS_PER_UPDATE = 5
+STEPS_PER_EPISODE = 5
 LEARNING_RATE = 3e-4
 GAMMA = 0.99
 GAE_LAMBDA = 0.95
@@ -187,7 +187,7 @@ ARM_JOINTS = [
 ]
 
 robot = create_robot(
-    epath.Path("model/robot_env.xml"),
+    epath.Path("model/joystick_env.xml"),
     epath.Path("model"),
     epath.Path("model/meshes"),
     EnviromentConfig(),
@@ -234,7 +234,7 @@ pipeline = compose_pipeline(policy, params["policy"], step_jit)
 
 print("JIT compiling and starting training...")
 (final_params, _, _, _), metrics = ppo_train(
-    pipeline,
+    step_jit,
     params,
     opt_state,
     init_envs_states,
@@ -244,8 +244,9 @@ print("JIT compiling and starting training...")
     obs_shape=(15 * 45, ),
     action_shape=(ACTION_DIM,),
     optimizer=optimizer,
-    num_updates=NUM_UPDATES,
-    num_steps_per_update=NUM_STEPS_PER_UPDATE,
+    num_envs=NUM_ENVS,
+    episodes=NUM_EPISODES,
+    max_steps_per_episode=STEPS_PER_EPISODE,
     gamma=GAMMA,
     lam=GAE_LAMBDA,
 )

@@ -10,6 +10,7 @@ from enviroment import Data, State, StateMonad
 from functools import partial
 from typing import Dict, Any, cast
 from jax.scipy.special import gammaln, digamma
+from mathutils import cont_sample_beta, beta_entropy, shift_array
 
 
 @struct.dataclass
@@ -18,7 +19,7 @@ class BatchedBuffer:
     action_buffer: jax.Array    # (num_envs, max_steps, *action_shape)
     reward_buffer: jax.Array    # (num_envs, max_steps)
     logprob_buffer: jax.Array   # (num_envs, max_steps)
-    ptr_array: jax.Array  # (num_envs,)
+    ptr: jax.Array  # (num_envs,)
     done_flag: jax.Array  # (num_envs,)
 
 
@@ -75,7 +76,7 @@ def push(
 
 
 def rollout_step(
-    pipeline: StateMonad,
+    step_fn,
     state: Dict[str, Any],
     obs_buffer: jax.Array,
     action_buffer: jax.Array,
@@ -100,7 +101,8 @@ def rollout_step(
         rng, step_rng = jax.random.split(state["rng"])
 
         # executa o ambiente
-        new_state, data = pipeline.run({**state, "rng": step_rng})
+        state = {**state, "rng": step_rng}  #atualiza o rng
+        new_state, data = step_fn(state)
 
         # adiciona o dado no buffer
         obs_buffer, action_buffer, reward_buffer, logprob_buffer, ptr = push(
@@ -130,13 +132,14 @@ def rollout_step(
 
 
 def rollout(
-    pipeline: StateMonad,
+    step_fn,
     init_state: Dict[str, Any],
     num_steps: int,
     buffer: BatchedBuffer,
 ):
+    
     vmap_rollout_step = jax.vmap(
-        partial(rollout_step, pipeline), in_axes=(None, 0, 0, 0, 0, 0, 0, 0)
+        partial(rollout_step, step_fn), in_axes=(None, 0, 0, 0, 0, 0, 0)
     )
 
     def scan_fn(carry, _):
@@ -157,22 +160,6 @@ def rollout(
         scan_fn, (init_state, buffer), None, length=num_steps
     )
     return final_state, final_buffer
-
-
-def shift_array(array: jax.Array, ptr: jax.Array):
-    steps = array.shape[0]
-    shift = steps - ptr
-    
-    # shift circular para empurrar os dados validos para o fim
-    shifted = jnp.roll(array, shift, axis=0)
-    
-    # tudos os indices abaixo de shift são marcados para serem zerados
-    mask = jnp.arange(steps) < shift
-    
-    # concatena as dimensões para uma mascara para qualquer formato,
-    # tal como um array de multiplas dimensões
-    broadcast_dims = (steps,) + (1,) * (array.ndim - 1)
-    return jnp.where(mask.reshape(broadcast_dims), 0.0, shifted)
 
 
 def general_advantage_estimator(
@@ -218,48 +205,6 @@ def general_advantage_estimator(
 
     returns = advantages + values_t
     return advantages, returns
-
-
-def cont_sample_beta(logits: jax.Array, rng: jax.Array, min_alpha_beta=0.1):
-    """
-    Sample continuous actions in [0,1] using independent Beta distributions
-    parameterized by logits.
-
-    Args:
-        logits: shape (action_dim,), any real numbers
-        rng: JAX PRNGKey
-        min_alpha_beta: minimum value for alpha and beta to avoid numerical issues
-
-    Returns:
-        action: shape (action_dim,)
-        logprob: shape (action_dim,)
-    """
-
-    # mapeia os logits para parametros positivos para serem utilizados na distribuição beta
-    alpha = jnp.clip(jax.nn.softplus(logits), min_alpha_beta, 1000.0)
-    beta = jnp.clip(jax.nn.softplus(1 - logits), min_alpha_beta, 1000.0)
-
-    # separa o rng para amostras independentes
-    rng, subkey = jax.random.split(rng)
-    actions = jax.random.beta(subkey, alpha, beta)
-
-    # Clip actions to be just inside (0, 1) to avoid -inf logpdf
-    clipped_actions = jnp.clip(actions, 1e-6, 1.0 - 1e-6)
-
-    # logprob para cada dimensão
-    logprobs = jax.scipy.stats.beta.logpdf(clipped_actions, alpha, beta)
-    return actions, jnp.sum(logprobs, axis=-1)
-
-
-def beta_entropy(alpha, beta):
-    lnB = gammaln(alpha) + gammaln(beta) - gammaln(alpha + beta)
-    H = (
-        lnB
-        - (alpha - 1) * digamma(alpha)
-        - (beta - 1) * digamma(beta)
-        + (alpha + beta - 2) * digamma(alpha + beta)
-    )
-    return H
 
 
 def ppo_loss(
@@ -340,7 +285,7 @@ def grad_metrics(grads, params):
 
 
 def ppo_train(
-    pipeline,
+    step_fn,
     params,
     optim_state,
     init_envs_states,
@@ -371,14 +316,14 @@ def ppo_train(
 
         # Faz um rollout (usando a função vetorizada)
         final_state, final_buffer= rollout(
-            pipeline, init_envs_states, max_steps_per_episode, buffer
+            step_fn, init_envs_states, max_steps_per_episode, buffer
         )
 
         # calcula as vantagens (usando a função vetorizada)
         advantages, returns = vmapped_gae(
             buffer.obs_buffer,
             buffer.reward_buffer,
-            buffer.ptr_array,
+            buffer.ptr,
             critic=critic,
             critic_params=params["critic"],
             lam=lam,

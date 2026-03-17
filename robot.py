@@ -9,20 +9,22 @@ Tarefa para o thor alcançar um alvo
 import mujoco
 import jax
 import mjx_base
+import flax.linen as nn
 from mujoco import MjModel  # type: ignore
 from jax import numpy as jnp
 from jax.scipy.spatial.transform import Rotation
 from mujoco import mjx
 from etils import epath
 from flax import struct
-from typing import Any, Dict, Tuple, List
+from typing import Any, Dict, Tuple, List, cast
 from config import ResetConfig, RangeConfig, RewardConfig, EnviromentConfig
 from enviroment import StateMonad
 from mathutils import l1_l2_reward, exp_scale_reward, conv2jax_quat
+from new_ppo import cont_sample_beta
 
 
 @struct.dataclass
-class Robot:
+class RobotSharedData:
     mjx_model: mjx.Model
     mj_model: MjModel
     init_q: jax.Array
@@ -43,9 +45,16 @@ class Robot:
     reward_config: RewardConfig
     range_config: RangeConfig
     reset_config: ResetConfig
+    
+    # todos os robôs compartilham actor e critic
+    actor: nn.Module
+    actor_params: Any
+
+    critic: nn.Module
+    critic_params:Any
 
 
-def create_robot(
+def make_rsd(
     xml_path: epath.Path,
     model_path: epath.Path,
     meshes_path: epath.Path,
@@ -54,6 +63,10 @@ def create_robot(
     range_config: RangeConfig,
     reset_config: ResetConfig,
     arm_joints: List[str],
+    actor: nn.Module,
+    actor_params: Any,
+    critic: nn.Module,
+    critic_params: Any,
 ):
     """
     Método fábrica para o ambiente
@@ -127,7 +140,7 @@ def create_robot(
     min_qpos_rnd, max_qpos_rnd = calculate_joint_span(reset_config.rnd_range)
     min_qpos_clp, max_qpos_clp = calculate_joint_span(reset_config.clip_range)
 
-    return Robot(
+    return RobotSharedData(
         mjx_model,
         mj_model,
         init_q,
@@ -148,23 +161,49 @@ def create_robot(
         reward_config,
         range_config,
         reset_config,
+        actor,
+        actor_params,
+        critic,
+        critic_params,
     )
 
 
 ##############################################################################################################3
+def qpos(rsd: RobotSharedData, mjx_data: mjx.Data):
+    return mjx_data.qpos[rsd.joint_qposadr]
 
+def qvel(rsd:RobotSharedData, mjx_data: mjx.Data):
+    return mjx_data.qvel[rsd.joint_qveladr]
 
-def tool_position(model: MjModel, data: mjx.Data) -> jax.Array:
-    return mjx_base.get_sensor_data(model, data, "tool_position")
+def qfrc(mjx_data: mjx.Data):
+    return mjx_data.qfrc_actuator
 
-
-def tool_quaternion(model: MjModel, data: mjx.Data) -> jax.Array:
+def sensor_data(
+    rsd: RobotSharedData, mjx_data: mjx.Data, sensor_name: str
+) -> jax.Array:
     """
-    Obtem o quaternion de orientação da ferramenta em relação ao Sistema de coordenadas global.
-    o eixo da ferramenta se alinha com o eixo z do sistema global
+    Obtem os dados de um determinado sensor, de acordo com seu nome
+
+    Parameters
+    ----------
+    model: mujoco.MjModel
+        Modelo do mujoco.
+
+    data: mjx.Data
+        Estado dinâmico que atualiza a cada step.
+
+    sensor_name: str
+        nome do sensor que se deseja obter os dados.
+
+    Returns
+    -------
+    ret: jax.Array
+        Dados obtidos do sensor.
     """
-    mj_quat = mjx_base.get_sensor_data(model, data, "tool_orientation")
-    return conv2jax_quat(mj_quat)
+    sensor_id = rsd.mj_model.sensor(sensor_name).id
+    sensor_adr = rsd.mj_model.sensor_adr[sensor_id]
+    sensor_dim = rsd.mj_model.sensor_dim[sensor_id]
+    return mjx_data.sensordata[sensor_adr : sensor_adr + sensor_dim]
 
 
 def position_error(goal_position: jax.Array, tool_position: jax.Array) -> jax.Array:
@@ -209,14 +248,14 @@ def orientation_error(
 
 
 def check_done(
-    robot: Robot, joint_angles: jax.Array, position_error, orientation_error
+    rsd: RobotSharedData, joint_angles: jax.Array, position_error, orientation_error
 ):
     # se tiver alcançado os objetivos de posição e orientação
     done = (position_error < 0.0001) & (orientation_error < 0.0001)
 
     # termina se os limites de junta forem ultrapassados
-    done |= jnp.any(joint_angles < robot.lowers)
-    done |= jnp.any(joint_angles > robot.uppers)
+    done |= jnp.any(joint_angles < rsd.lowers)
+    done |= jnp.any(joint_angles > rsd.uppers)
 
     return done
 
@@ -225,7 +264,7 @@ def check_done(
 
 
 def sample_config_coordinates(
-    range_config: RangeConfig, config_name: str, goal_data: Dict[str, Any]
+    rsd:RobotSharedData, config_name: str, goal_data: Dict[str, Any]
 ) -> StateMonad:
     """
     Obtem comandos aleatórios para as posições
@@ -237,7 +276,7 @@ def sample_config_coordinates(
         :: s -> (s', p)
         """
         rng, rng1 = jax.random.split(state["rng"])
-        config_value = getattr(range_config, config_name)
+        config_value = getattr(rsd.range_config, config_name)
 
         # faz um sampleamento
         samples = jax.random.uniform(rng, shape=(3,))
@@ -255,7 +294,7 @@ def sample_config_coordinates(
 
 
 def sample_config_velocities(
-    range_config: RangeConfig, config_name: str, goal_data: Dict[str, Any]
+    rsd:RobotSharedData, config_name: str, goal_data: Dict[str, Any]
 ) -> StateMonad:
     """
     Obtem comandos aleatórios para as velocidades
@@ -267,7 +306,7 @@ def sample_config_velocities(
         :: s -> (s', p)
         """
         rng, rng1 = jax.random.split(state["rng"])
-        config_value = getattr(range_config, config_name)
+        config_value = getattr(rsd.range_config, config_name)
 
         # faz um sampleamento
         samples = jax.random.uniform(rng, shape=(3,))
@@ -347,36 +386,29 @@ def concat_obs_as_array(d: Dict[str, Any]) -> StateMonad:
 ###################################################################################################################
 
 
-def goal_pipeline(env: StateMonad, range_config):
+def goal_pipeline(rsd: RobotSharedData, env: StateMonad):
     return (
         env.bind(
-            lambda pdata: sample_config_coordinates(
-                range_config, "goal_position", pdata
-            )
+            lambda pdata: sample_config_coordinates(rsd, "goal_position", pdata)
         )
         .bind(
-            lambda pdata: sample_config_velocities(range_config, "goal_position", pdata)
+            lambda pdata: sample_config_velocities(rsd, "goal_position", pdata)
         )
         .bind(
-            lambda pdata: sample_config_coordinates(
-                range_config, "goal_orientation", pdata
-            )
+            lambda pdata: sample_config_coordinates(rsd, "goal_orientation", pdata)
         )
         .bind(
-            lambda pdata: sample_config_velocities(
-                range_config, "goal_orientation", pdata
-            )
+            lambda pdata: sample_config_velocities(rsd, "goal_orientation", pdata)
         )
     )
 
-
-def tool_pipeline(env: StateMonad, model, data: mjx.Data):
+def obs_pipeline(rsd:RobotSharedData, env: StateMonad):
     return (
         env.bind(
             lambda pdata: StateMonad(
                 lambda state: (
                     state,
-                    {**pdata, "tool_position": tool_position(model, state["mjx_data"])},
+                    {**pdata, "tool_position": sensor_data(rsd, state["mjx_data"], "tool_position")},
                 )
             )
         )
@@ -392,9 +424,14 @@ def tool_pipeline(env: StateMonad, model, data: mjx.Data):
             lambda pdata: StateMonad(
                 lambda state: (
                     state,
-                    {**pdata, "orientation": tool_quaternion(model, state["mjx_data"])},
+                    {**pdata, "orientation": sensor_data(rsd, state["mjx_data"], "tool_orientation")},
                 )
             )
+        )
+        .map(
+            lambda pdata:{
+                **pdata, "orientation": conv2jax_quat(pdata["orientation"])
+            }
         )
         .map(
             lambda pdata: {
@@ -404,16 +441,11 @@ def tool_pipeline(env: StateMonad, model, data: mjx.Data):
                 ),
             }
         )
-    )
-
-
-def other_pipeline(robot: Robot, env: StateMonad, data: mjx.Data):
-    return (
-        env.bind(
+        .bind(
             lambda pdata: StateMonad(
                 lambda state: (
                     state,
-                    {**pdata, "torques": state["mjx_data"].qfrc_actuator},
+                    {**pdata, "torques": qfrc(state["mjx_data"])},
                 )
             )
         )
@@ -423,7 +455,7 @@ def other_pipeline(robot: Robot, env: StateMonad, data: mjx.Data):
                     state,
                     {
                         **pdata,
-                        "joint_angles": state["mjx_data"].qpos[robot.joint_qposadr],
+                        "joint_angles": qpos(rsd, state["mjx_data"]),
                     },
                 )
             )
@@ -434,7 +466,7 @@ def other_pipeline(robot: Robot, env: StateMonad, data: mjx.Data):
                     state,
                     {
                         **pdata,
-                        "joint_vel": state["mjx_data"].qvel[robot.joint_qveladr],
+                        "joint_vel": qvel(rsd, state["mjx_data"]),
                     },
                 )
             )
@@ -442,18 +474,18 @@ def other_pipeline(robot: Robot, env: StateMonad, data: mjx.Data):
         .map(
             lambda pdata: {
                 **pdata,
-                "pose_dist": pdata["joint_angles"] - robot.default_pose,
+                "pose_dist": pdata["joint_angles"] - rsd.default_pose,
             }
         )
         .bind(lambda pdata: concat_obs_as_array(pdata))
         .bind(
-            lambda pdata: update_obs_history(pdata, robot.enviroment_config.obs_noise)
+            lambda pdata: update_obs_history(pdata, rsd.enviroment_config.obs_noise)
         )
     )
 
 
-def reward_pipeline(robot: Robot, env: StateMonad):
-    reward_config = robot.reward_config
+def reward_pipeline(rsd: RobotSharedData, env: StateMonad):
+    reward_config = rsd.reward_config
     return (
         # Penalidade (custo) por erro de posição
         env.map(
@@ -511,8 +543,8 @@ def reward_pipeline(robot: Robot, env: StateMonad):
                 "success": (pdata["position_error"] < 0.0001)
                 & (pdata["orientation_error"] < 0.0001),
                 # checa se atingiu o limite das juntas
-                "failure": jnp.any(pdata["joint_angles"] < robot.lowers)
-                | jnp.any(pdata["joint_angles"] > robot.uppers),
+                "failure": jnp.any(pdata["joint_angles"] < rsd.lowers)
+                | jnp.any(pdata["joint_angles"] > rsd.uppers),
             }
         )
         .bind(
@@ -543,109 +575,78 @@ def reward_pipeline(robot: Robot, env: StateMonad):
 
 
 ####################################################################################################################
-def create_reset(robot: Robot) -> StateMonad:
-    def func(state):
-        rng, rng2 = jax.random.split(state["rng"], 2)
-
-        # inicializa as posições de junta e as velocidades e randomiza a posição inicial
-        random_q = robot.init_q.copy()
-
-        # incrementa de acordo com uma distribuição uniforme, em conformidade com os limites,
-        # e depois clampea o resultado
-        random_q += jax.random.uniform(
-            rng,
-            random_q.shape,
-            minval=robot.min_qpos_rnd,
-            maxval=robot.max_qpos_rnd,
-        )
-        random_q = jnp.clip(random_q, min=robot.min_qpos_clp, max=robot.max_qpos_clp)
-
-        init_qvel = jnp.zeros(robot.mjx_model.nv, dtype=float)
-        ctrl = robot.init_ctrl
-
-        # Cria os dados de simulação
-        mjx_data = mjx_base.init(
-            robot.mjx_model,
-            qpos=random_q,
-            qvel=init_qvel,
-            ctrl=ctrl,
-        )
-
-        # reseta o estado
-        state["step"] = 0
-        state["mjx_data"] = mjx_data
-
-        # obtem um novo alvo a partir do pipeline
-        gp = goal_pipeline(StateMonad.pure({}), robot.range_config)
-        state, goal_data = gp.run(state)
-        state["goal"] = goal_data
-
-        tp = tool_pipeline(StateMonad.pure(goal_data), robot.mj_model, mjx_data)
-        op = other_pipeline(robot, tp, mjx_data)
-        state, obs = op.run(state)
-
-        first_obs_frame = obs["obs_array"]
-
-        # jnp.tile(first_obs_frame, 15) creates a (15 * 45,) array
-        primed_obs_history = jnp.tile(first_obs_frame, 15)
-
-        # Overwrite the bad obs_history in both the state and the obs_data dict
-        state["obs_history"] = primed_obs_history
-        obs["obs_history"] = primed_obs_history
-
-        # para descobrir o tamanho do vetor de observação
-        # print(f"obs_shape: {obs["obs_array"].shape}")
-
-        # obtem as recompensas
-        rp = reward_pipeline(robot, StateMonad.pure(obs))
-        state, final_data = rp.run(state)
-
-        state = {**state, "rng": rng2, "action": jnp.reshape(state["action"], (6,))}
-        return state, {"obs": obs, "final_data": final_data}
-
-    return StateMonad(func)
-
-
-def create_step(
-    robot: Robot,
-) -> StateMonad:
+def create_step(rsd: RobotSharedData):
     """
     state.keys() = ["rng", "step", "goal", "obs_history", "action", "mjx_data"]
     """
 
-    def func(state):
-        rng, rng2 = jax.random.split(state["rng"], 2)
+    def get_action():
+        def fn(state):
+            last_obs = state["obs_history"]
+            rng1, rng2 = jax.random.split(state["rng"])
 
-        # escala para de [0, 1] para [-1, 1]
-        action = (state["action"] * 2.0) - 1.0
+            output = rsd.actor.apply(rsd.actor_params, last_obs)
+            output = cast(jax.Array, output)
+            action_value, logprob = cont_sample_beta(output, rng1)
+            
+            new_state = {**state, "rng": rng2, "action": action_value}
+            return new_state, {"action": action_value, "logprob": logprob}
+        return StateMonad(fn)
 
-        # configura novos alvos para os motores, de acordo com a ação  selecionada a partir da posição atual
-        current_pos = state["mjx_data"].qpos[robot.joint_qposadr]
-        motor_targets = current_pos + action * robot.enviroment_config.action_scale
+    def get_motor_targets(pdata):
+        def fn(state):
+            # escala ação para de [0, 1] para [-1, 1]
+            action_value_action = 2.0 * pdata["action"]- 1.0
 
-        # para evitar que os limites de junta do robô sejam desrespeitados
-        motor_targets = jnp.clip(motor_targets, robot.lowers, robot.uppers)
+            # configura novos alvos para os motores, de acordo com a ação  selecionada a partir da posição atual
+            current_pos = qpos(rsd, state["mjx_data"])
+            motor_targets = current_pos + action_value_action * rsd.enviroment_config.action_scale
 
-        mjx_data = mjx_base.mjx_step(
-            robot.mjx_model,
-            state["mjx_data"],
-            motor_targets,
-            robot.enviroment_config.n_substeps,
+            # para evitar que os limites de junta do robô sejam desrespeitados
+            return state, {**pdata, "motor_targets":jnp.clip(motor_targets, rsd.lowers, rsd.uppers)}
+        return StateMonad(fn)
+
+    def mujoco_step(pdata):
+        def fn(state):
+            mjx_data = mjx_base.mjx_step(
+                rsd.mjx_model,
+                state["mjx_data"],
+                pdata["motor_targets"],
+                rsd.enviroment_config.n_substeps,
+            )
+            state = {**state, "mjx_data": mjx_data}
+            return state , pdata
+        return StateMonad(fn)
+    
+    def shape_return(pdata):
+        def fn(state):
+            state = {**state, "step": state["step"] + 1}
+            data = {
+                "obs": pdata["obs_history"],
+                "action": pdata["action"],
+                "reward": pdata["reward"],
+                "logprob": pdata["logprob"]
+            }
+            return state, data
+        return StateMonad(fn)
+    
+    def step_fn(state):
+
+        # obtem uma ação pela observação anterior
+        p = (get_action()
+            .bind(get_motor_targets)    #obtem para os motores segundo a ação
+            .bind(mujoco_step)          #movimenta no mujoco
         )
 
-        state = {**state, "mjx_data": mjx_data, "rng": rng}
-        ########################################################
+        # obtem novas observações
+        p = obs_pipeline(rsd, p)
 
-        # obtem a observação com base no alvo atual
-        op = tool_pipeline(StateMonad.pure(state["goal"]), robot.mj_model, mjx_data)
-        op = other_pipeline(robot, op, mjx_data)
-        state, pdata = op.run(state)
+        # de acordo com as observações obtem a recompensa
+        p = reward_pipeline(rsd, p)
 
-        # obtem as recompensas e a flag done
-        rp = reward_pipeline(robot, StateMonad.pure(pdata))
-        state, final_data = rp.run(state)
+        # dá a forma final aos valores de retorno
+        p = p.bind(shape_return)
 
-        new_state = {**state, "rng": rng2, "step": state["step"] + 1}
-        return new_state, final_data
+        return p.run(state)
 
-    return StateMonad(func)
+    return step_fn

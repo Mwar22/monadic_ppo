@@ -68,34 +68,6 @@ def mjx_step(
     return jax.lax.scan(single_step, data, (), n_substeps)[0]
 
 
-def get_sensor_data(
-    model: mujoco.MjModel, data: mjx.Data, sensor_name: str
-) -> jax.Array:
-    """
-    Obtem os dados de um determinado sensor, de acordo com seu nome
-
-    Parameters
-    ----------
-    model: mujoco.MjModel
-        Modelo do mujoco.
-
-    data: mjx.Data
-        Estado dinâmico que atualiza a cada step.
-
-    sensor_name: str
-        nome do sensor que se deseja obter os dados.
-
-    Returns
-    -------
-    ret: jax.Array
-        Dados obtidos do sensor.
-    """
-    sensor_id = model.sensor(sensor_name).id
-    sensor_adr = model.sensor_adr[sensor_id]
-    sensor_dim = model.sensor_dim[sensor_id]
-    return data.sensordata[sensor_adr : sensor_adr + sensor_dim]
-
-
 ###############
 
 
