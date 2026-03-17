@@ -408,6 +408,8 @@ def ppo_train(
 
         return new_carry, {
             "loss": loss_val,
+            "last_ptr": buffer.ptr,
+            "success_count": jnp.mean(final_state["success_count"]),
             "avg_reward": jnp.mean(final_buffer.reward_buffer, axis=0),
             **grad_info,
         }

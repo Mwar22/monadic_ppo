@@ -387,6 +387,13 @@ def get_goal(rsd: RobotSharedData, rng):
     }
     return goals
 
+def debug(pdata, name):
+    def func(state):
+        jax.debug.print("{} = {}", name, pdata[name])
+        return state, pdata
+    return StateMonad(func)
+
+
 def obs_pipeline(rsd:RobotSharedData, env: StateMonad):
     return (
         env.bind(
@@ -474,6 +481,8 @@ def obs_pipeline(rsd:RobotSharedData, env: StateMonad):
         .bind(
             lambda pdata: update_obs_history(pdata, rsd.enviroment_config.obs_noise)
         )
+        .bind(lambda pdata: debug(pdata, "position_error"))
+        .bind(lambda pdata: debug(pdata, "orientation_error"))
     )
 
 
@@ -534,7 +543,7 @@ def reward_pipeline(rsd: RobotSharedData, env: StateMonad):
                 **pdata,
                 # checa se houve sucesso (atingiu o alvo)
                 "success": (pdata["position_error"] < 0.0001)
-                & (pdata["orientation_error"] < 0.0001),
+                & (pdata["orientation_error"] < 0.01),
                 # checa se atingiu o limite das juntas
                 "failure": jnp.any(pdata["joint_angles"] < rsd.lowers)
                 | jnp.any(pdata["joint_angles"] > rsd.uppers),
@@ -565,6 +574,7 @@ def reward_pipeline(rsd: RobotSharedData, env: StateMonad):
                 "reward": jnp.clip(pdata["reward"], -10000.0, 10000.0),
             }
         )
+        .bind(lambda pdata: debug(pdata, "reward"))
     )
 
 
@@ -583,6 +593,10 @@ def create_step(rsd: RobotSharedData, actor_params):
             output = rsd.actor.apply(actor_params, last_obs)
             output = cast(jax.Array, output)
             action_value, logprob = cont_sample_beta(output, rng1)
+
+            ogc = state["goal"]["goal_orientation_coordinates"]
+            jax.debug.print("goal orientation coord = {}", ogc)
+            jax.debug.print("action_value = {}", action_value)
             
             new_state = {**state, "rng": rng2, "action": action_value}
             return new_state, {"action": action_value, "logprob": logprob}
@@ -597,6 +611,7 @@ def create_step(rsd: RobotSharedData, actor_params):
             current_pos = qpos(rsd, state["mjx_data"])
             motor_targets = current_pos + action_value_action * rsd.enviroment_config.action_scale
 
+            jax.debug.print("motor_targets = {}", motor_targets)
             # para evitar que os limites de junta do robô sejam desrespeitados
             return state, {**pdata, "motor_targets":jnp.clip(motor_targets, rsd.lowers, rsd.uppers)}
         return StateMonad(fn)

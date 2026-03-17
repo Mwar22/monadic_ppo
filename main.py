@@ -133,9 +133,9 @@ print(f"jax_enable_x64: {jax.config.read('jax_enable_x64')}")
 #env_states = {"rng":rng, "step":0, "goal":None, "obs_history":}
 #######################################################################################
 # --- Hyperparameters ---
-NUM_EPISODES = 200#1000
-NUM_ENVS = 1024
-STEPS_PER_EPISODE = 256
+NUM_EPISODES = 4#1000
+NUM_ENVS = 3
+STEPS_PER_EPISODE = 10
 LEARNING_RATE = 10e-4
 GAMMA = 0.99
 GAE_LAMBDA = 0.95
@@ -190,7 +190,7 @@ optim_state = optimizer.init(params)
 
 
 # --- Executa o treinamento ---
-#jax.config.update("jax_disable_jit", True)
+jax.config.update("jax_disable_jit", True)
 
 print("JIT compiling and starting training...")
 (final_params, final_optim_state, final_rng), metrics = ppo_train(
@@ -220,7 +220,10 @@ print(f"min avg reward: {jnp.min(avg_episode_rewards)}")
 print(f"max avg reward: {jnp.max(avg_episode_rewards)}")
 
 grad_norm = metrics["grad_norm"]
-grad_to_param_ratio = metrics["grad_to_param_ratio"]
+avg_success_count = metrics["success_count"]
+print(f"success_count shape: {avg_success_count.shape}")
+
+print(f"last ptr: {metrics["last_ptr"]}")
 
 
 fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(10, 8), tight_layout=True)
@@ -239,10 +242,10 @@ ax3.set_title("Gradient norm (Euclidian, L2)")
 ax3.set_xlabel("Update Step")
 ax3.set_ylabel("Norm")
 
-ax4.plot(grad_to_param_ratio)
-ax4.set_title("Gradient to parameters ratio")
+ax4.plot(avg_success_count)
+ax4.set_title("Average (across batches) success count")
 ax4.set_xlabel("Update Step")
-ax4.set_ylabel("Ratio")
+ax4.set_ylabel("Count")
 
 
 plt.savefig(f"training_plots_{activation_str}.png")
@@ -255,7 +258,7 @@ df = pd.DataFrame({
     "loss": metrics["loss"],
     "avg_reward": avg_episode_rewards,
     "grad_norm": grad_norm,
-    "grad_to_param_ratio": grad_to_param_ratio
+    "success_count": avg_success_count
 })
 df.to_csv(f"l1_{activation_str}.csv", index=False)
 print("Done!")
