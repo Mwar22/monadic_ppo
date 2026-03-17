@@ -366,6 +366,14 @@ def concat_obs_as_array(d: Dict[str, Any]) -> StateMonad:
     return StateMonad(func)
 
 
+def success_count(pdata):
+    def func(state):
+        count = jax.lax.cond(
+            state["success_count"], lambda c: c+ 1, lambda c: c, state["success_count"]
+        )
+        return {**state, "success_count": count}, pdata
+    return StateMonad(func)
+
 ###################################################################################################################
 
 
@@ -532,6 +540,7 @@ def reward_pipeline(rsd: RobotSharedData, env: StateMonad):
                 | jnp.any(pdata["joint_angles"] > rsd.uppers),
             }
         )
+        .bind(success_count)
         .bind(
             lambda pdata: StateMonad(
                 lambda state: (

@@ -157,7 +157,8 @@ def rollout(
         'mjx_data': 0, 
         'obs': 0,
         'rng': 0,
-        'step': 0
+        'step': 0,
+        'success_count':0
     }
     vmap_rollout_step = jax.vmap(
         partial(rollout_step, step_fn),
@@ -427,6 +428,7 @@ def create_initial_state(rsd: RobotSharedData, rng, num_envs, obs_dim, action_di
     # Inicializa os estados para os ambientes em paralelo
     # (num_envs, features_dim)
     batched_steps = jnp.zeros((num_envs,))
+    batched_success_count = jnp.zeros((num_envs,))
     batched_rng = jax.random.split(rng, num_envs)
     batched_action = jnp.zeros((num_envs, action_dim))
     batched_obs = jnp.zeros((num_envs, obs_dim))
@@ -447,6 +449,7 @@ def create_initial_state(rsd: RobotSharedData, rng, num_envs, obs_dim, action_di
         "goal":batched_goal,
         "obs":batched_obs,
         "action": batched_action,
-        "mjx_data": batched_mjx_data
+        "mjx_data": batched_mjx_data,
+        "success_count":batched_success_count, 
     }
    

@@ -19,7 +19,7 @@ from mujoco import mjx
 # Modelos
 #######################################################################################
 activation_str = "sigmoid"
-activation = lambda x: nn.sigmoid(x)
+activation = lambda x: nn.relu(x)
 
 class Actor(nn.Module):
     action_dim: int
@@ -134,9 +134,9 @@ print(f"jax_enable_x64: {jax.config.read('jax_enable_x64')}")
 #######################################################################################
 # --- Hyperparameters ---
 NUM_EPISODES = 200#1000
-NUM_ENVS = 3 #512
-STEPS_PER_EPISODE = 8
-LEARNING_RATE = 3e-4
+NUM_ENVS = 1024
+STEPS_PER_EPISODE = 256
+LEARNING_RATE = 10e-4
 GAMMA = 0.99
 GAE_LAMBDA = 0.95
 ACTION_DIM = 6
@@ -210,8 +210,8 @@ print("JIT compiling and starting training...")
 )
 
 
-avg_loss = jnp.mean(metrics["loss"][-100:])
-print(f" Training finished! Average loss of last 100 steps: {avg_loss:.4f}")
+avg_loss = jnp.mean(metrics["loss"][-20:])
+print(f" Training finished! Average loss of last 20 steps: {avg_loss:.4f}")
 
 # plotagem dos dados
 avg_rewards_per_update = metrics["avg_reward"]
