@@ -22,6 +22,14 @@ class BatchedBuffer:
     ptr: jax.Array  # (num_envs,)
     done_flag: jax.Array  # (num_envs,)
 
+    def __str__(self):
+        return f"obs_buffer: {self.obs_buffer.shape}\n \
+        action_buffer: {self.action_buffer.shape}\n \
+        reward_buffer: {self.reward_buffer.shape}\n \
+        logprob_buffer: {self.logprob_buffer.shape}\n \
+        ptr: {self.ptr.shape}\n \
+        done_flag: {self.done_flag.shape}"
+
 
 def batched_buffer_create(num_envs, max_steps, obs_shape, action_shape):
     return BatchedBuffer(
@@ -137,20 +145,31 @@ def rollout(
     num_steps: int,
     buffer: BatchedBuffer,
 ):
-    from jax.tree_util import tree_structure
-
-    print(tree_structure(init_state))
-    state_axes = {
-        "action": 0,
-        "goal": None,
-        "mjx_data": 0,
-        "obs": 0,
-        "rng": 0,
-        "step": 0,
+    # Match the structure of your 'state' dictionary exactly
+    state_in_axes = {
+        'action': 0,
+        'goal': {
+            'goal_orientation_coordinates': 0, # or 0 if batched
+            'goal_orientation_velocities': 0,
+            'goal_position_coordinates': 0,
+            'goal_position_velocities': 0,
+        },
+        'mjx_data': 0, 
+        'obs': 0,
+        'rng': 0,
+        'step': 0
     }
     vmap_rollout_step = jax.vmap(
         partial(rollout_step, step_fn),
-        in_axes=(None, state_axes, 0, 0, 0, 0, 0)
+        in_axes=(
+            state_in_axes,  # Arg 0: state (was Arg 1 in your version)
+            0,               # Arg 1: obs_buffer
+            0,               # Arg 2: action_buffer
+            0,               # Arg 3: reward_buffer
+            0,               # Arg 4: logprob_buffer
+            0,               # Arg 5: ptr
+            0                # Arg 6: done_flag
+        )
     )
 
     def scan_fn(carry, _):
@@ -174,14 +193,13 @@ def rollout(
 
 
 def general_advantage_estimator(
-    obs_buffer: jax.Array,
-    reward_buffer: jax.Array,
-    ptr: jax.Array,
-    *,
     critic: nn.Module,
     critic_params,
     lam,
     gamma,
+    obs_buffer: jax.Array,
+    reward_buffer: jax.Array,
+    ptr: jax.Array,
 ):
     # garante que o checador de tipos não reclame
     values = cast(jax.Array, critic.apply(critic_params, obs_buffer))
@@ -225,7 +243,7 @@ def ppo_loss(
     batch_actions,
     batch_advantages,
     batch_returns,
-    batch_old_log_probs,
+    old_log_probs,
     clip_eps=0.2,
     c1=0.2,
     c2=0.1,
@@ -234,7 +252,11 @@ def ppo_loss(
     """
     Calculates the PPO loss.
     """
-    # Get policy logits and critic values for the batch of observations
+    # dropa 1 step, por conta que os dados do gae tem o shift de 1 para conseguir valores futuros
+    batch_obs = batch_obs[:, :-1, :]
+    batch_actions = batch_actions[:, :-1, :]
+    old_log_probs = old_log_probs[:, :-1]
+
     logits = rsd.actor.apply(params[0], batch_obs)
     logits = cast(jax.Array, logits)
     values = rsd.critic.apply(params[1], batch_obs)
@@ -246,10 +268,10 @@ def ppo_loss(
     # Compute log probability of the *stored* actions
     clipped_batch_actions = jnp.clip(batch_actions, 1e-6, 1.0 - 1e-6)
     logprobs = jax.scipy.stats.beta.logpdf(clipped_batch_actions, alpha, beta)
-    logprobs = jnp.sum(logprobs, axis=1)  # (batch,)
+    logprobs = jnp.sum(logprobs, axis=2)  # (batch, max_steps)
 
-    ratio = jnp.exp(logprobs - batch_old_log_probs)
-
+    ratio = jnp.exp(logprobs - old_log_probs)
+  
     # Clipped surrogate objective
     unclipped = ratio * batch_advantages
     clipped = jnp.clip(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * batch_advantages
@@ -301,41 +323,48 @@ def ppo_train(
     optimizer,
     optim_state,
     rng,
-    init_envs_states,
     num_envs,
     episodes: int,
+    obs_dim,
+    action_dim,
     max_steps_per_episode: int,
     gamma,
     lam,
 ):
     """The complete, JIT-compiled training function."""
 
-    # Vetoriza a função GAE
-    vmapped_gae = jax.vmap(general_advantage_estimator, in_axes=(0, 0))
+    
+    
 
     def _update_step(carry, _):
         """This is the body of the scan, representing one full update."""
         parameters, optim_state, rng = carry
         rng, rollout_rng, rng_loss = jax.random.split(rng, 3)
 
+        #estado inicial 
+        rng, initial_state = create_initial_state(rsd, rng, num_envs, obs_dim, action_dim)
+
         # cria um buffer
         buffer = batched_buffer_create(num_envs, max_steps_per_episode, rsd.obs_shape, rsd.action_shape)
 
         # Faz um rollout (usando a função vetorizada)
         final_state, final_buffer= rollout(
-            step_fn, init_envs_states, max_steps_per_episode, buffer
+            step_fn, initial_state, max_steps_per_episode, buffer
+        )
+
+        # Vetoriza a função GAE
+        vmapped_gae = jax.vmap(
+            partial(general_advantage_estimator, rsd.critic, parameters[1], lam, gamma),
+            in_axes=(0, 0, 0)
         )
 
         # calcula as vantagens (usando a função vetorizada)
         advantages, returns = vmapped_gae(
             buffer.obs_buffer,
             buffer.reward_buffer,
-            buffer.ptr,
-            critic=rsd.critic,
-            critic_params=parameters[1],
-            lam=lam,
-            gamma=gamma,
+            buffer.ptr
         )
+
 
         #bloqueia o calculo de gradientes para as vantagens
         advantages = jax.lax.stop_gradient(advantages)
@@ -361,12 +390,11 @@ def ppo_train(
             return ppo_loss(
                 par,
                 rsd,
-                batch_obs,
-                batch_actions,
-                batch_advantages,
-                batch_returns,
-                batch_old_log_probs,
-                rng_loss,
+                final_buffer.obs_buffer,
+                final_buffer.action_buffer,
+                advantages,
+                returns,
+                final_buffer.logprob_buffer,
             )
 
         # calcula os gradientes e atualiza os parametros
@@ -394,13 +422,14 @@ def ppo_train(
     return final_carry, metrics
 
 
-def create_initial_state(rsd: RobotSharedData, rng, num_envs, action_dim, obs_dim):
+def create_initial_state(rsd: RobotSharedData, rng, num_envs, obs_dim, action_dim):
+    rng, rng1 = jax.random.split(rng)
     # Inicializa os estados para os ambientes em paralelo
     # (num_envs, features_dim)
     batched_steps = jnp.zeros((num_envs,))
     batched_rng = jax.random.split(rng, num_envs)
     batched_action = jnp.zeros((num_envs, action_dim))
-    batched_obs = jnp.zeros((num_envs, *obs_dim))
+    batched_obs = jnp.zeros((num_envs, obs_dim))
 
     vmapped_get_goal = jax.vmap(partial(get_goal, rsd))
     batched_goal = vmapped_get_goal(batched_rng)
@@ -410,8 +439,9 @@ def create_initial_state(rsd: RobotSharedData, rng, num_envs, action_dim, obs_di
         lambda x: jax.numpy.repeat(x[None], num_envs, axis=0),
         mjx_data
     )
+
     #estado inicial 
-    return {
+    return rng1, {
         "rng":batched_rng,
         "step":batched_steps,
         "goal":batched_goal,

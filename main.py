@@ -133,9 +133,9 @@ print(f"jax_enable_x64: {jax.config.read('jax_enable_x64')}")
 #env_states = {"rng":rng, "step":0, "goal":None, "obs_history":}
 #######################################################################################
 # --- Hyperparameters ---
-NUM_EPISODES = 6#1000
-NUM_ENVS = 2 #512
-STEPS_PER_EPISODE = 5
+NUM_EPISODES = 200#1000
+NUM_ENVS = 3 #512
+STEPS_PER_EPISODE = 8
 LEARNING_RATE = 3e-4
 GAMMA = 0.99
 GAE_LAMBDA = 0.95
@@ -187,8 +187,7 @@ step_jit = jax.jit(create_step(rsd, params[0]))
 optimizer = optax.adam(LEARNING_RATE)
 optim_state = optimizer.init(params)
 
-#estado inicial 
-initial_state = create_initial_state(rsd, rng, NUM_ENVS, ACTION_DIM, OBS_DIM)
+
 
 # --- Executa o treinamento ---
 #jax.config.update("jax_disable_jit", True)
@@ -201,19 +200,21 @@ print("JIT compiling and starting training...")
     optimizer,
     optim_state,
     rng,
-    initial_state,
     NUM_ENVS,
     NUM_EPISODES,
+    OBS_DIM,
+    ACTION_DIM,
     STEPS_PER_EPISODE,
     GAMMA,
     GAE_LAMBDA
 )
 
+
 avg_loss = jnp.mean(metrics["loss"][-100:])
 print(f" Training finished! Average loss of last 100 steps: {avg_loss:.4f}")
 
 # plotagem dos dados
-avg_rewards_per_update = jnp.mean(metrics["reward"], axis=1)
+avg_rewards_per_update = metrics["avg_reward"]
 avg_episode_rewards = jnp.sum(avg_rewards_per_update, axis=1)
 print(f"min avg reward: {jnp.min(avg_episode_rewards)}")
 print(f"max avg reward: {jnp.max(avg_episode_rewards)}")

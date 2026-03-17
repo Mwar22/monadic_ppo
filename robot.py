@@ -325,14 +325,14 @@ def update_obs_history(data, obs_noise=0.0):
         # Adiciona a nova observação no buffer, deslocando as outras observações e descartando a mais antiga
         new_obs_history = (
             jnp.roll(
-                state["obs_history"], obs_processed.size
+                state["obs"], obs_processed.size
             )  # desloca todo o array para a direita, obs_processd.size de distancia (circular)
             .at[: obs_processed.size]
             .set(obs_processed)  # adiciona os novos dados de observação
         )
-        new_state = {**state, "rng": rng1, "obs_history": new_obs_history}
+        new_state = {**state, "rng": rng1, "obs": new_obs_history}
 
-        return new_state, {**data, "obs_history": new_obs_history}
+        return new_state, {**data, "obs": new_obs_history}
 
     return StateMonad(func)
 
@@ -345,10 +345,10 @@ def concat_obs_as_array(d: Dict[str, Any]) -> StateMonad:
     def func(state):
         # Manually list keys to ensure order and handle scalars
         obs_list = [
-            d["goal_position_coordinates"],  # (3,)
-            d["goal_position_velocities"],  # (3,)
-            d["goal_orientation_coordinates"],  # (3,)
-            d["goal_orientation_velocities"],  # (3,)
+            state["goal"]["goal_position_coordinates"],  # (3,)
+            state["goal"]["goal_position_velocities"],  # (3,)
+            state["goal"]["goal_orientation_coordinates"],  # (3,)
+            state["goal"]["goal_orientation_velocities"],  # (3,)
             d["tool_position"],  # (3,)
             jnp.expand_dims(d["position_error"], axis=0),  # () -> (1,)
             d["orientation"],  # (4,)
@@ -370,16 +370,14 @@ def concat_obs_as_array(d: Dict[str, Any]) -> StateMonad:
 
 
 def get_goal(rsd: RobotSharedData, rng):
-    r0,r1, r2, r3, r4 = jax.random.split(rng, 5)
+    r1, r2, r3, r4 = jax.random.split(rng, 4)
     goals = {
         **sample_config_coordinates(rsd, r1, "goal_position"),
         **sample_config_velocities(rsd, r2, "goal_position"),
         **sample_config_coordinates(rsd, r3,"goal_orientation"),
         **sample_config_velocities(rsd, r4, "goal_orientation"),
     }
-    return r0, goals
-
-   
+    return goals
 
 def obs_pipeline(rsd:RobotSharedData, env: StateMonad):
     return (
@@ -391,14 +389,18 @@ def obs_pipeline(rsd:RobotSharedData, env: StateMonad):
                 )
             )
         )
-        .map(
-            lambda pdata: {
-                **pdata,
-                "position_error": position_error(
-                    pdata["goal_position_coordinates"], pdata["tool_position"]
-                ),
-            }
-        )
+        .bind(lambda pdata: StateMonad(
+            lambda state:(
+                state,
+                {
+                    **pdata,
+                    "position_error": position_error(
+                        state["goal"]["goal_position_coordinates"], pdata["tool_position"]
+                    ),
+                }
+            )
+        ))
+
         .bind(
             lambda pdata: StateMonad(
                 lambda state: (
@@ -412,14 +414,18 @@ def obs_pipeline(rsd:RobotSharedData, env: StateMonad):
                 **pdata, "orientation": conv2jax_quat(pdata["orientation"])
             }
         )
-        .map(
-            lambda pdata: {
-                **pdata,
-                "orientation_error": orientation_error(
-                    pdata["goal_orientation_coordinates"], pdata["orientation"]
-                ),
-            }
-        )
+        .bind(lambda pdata: StateMonad(
+            lambda state:(
+                state,
+                {
+                    **pdata,
+                    "orientation_error": orientation_error(
+                        state["goal"]["goal_orientation_coordinates"], pdata["orientation"]
+                    ),
+                }
+            )
+        ))
+
         .bind(
             lambda pdata: StateMonad(
                 lambda state: (
@@ -559,9 +565,10 @@ def create_step(rsd: RobotSharedData, actor_params):
     state.keys() = ["rng", "step", "goal", "obs_history", "action", "mjx_data"]
     """
 
+   
     def get_action():
         def fn(state):
-            last_obs = state["obs_history"]
+            last_obs = state["obs"]
             rng1, rng2 = jax.random.split(state["rng"])
 
             output = rsd.actor.apply(actor_params, last_obs)
@@ -601,10 +608,11 @@ def create_step(rsd: RobotSharedData, actor_params):
         def fn(state):
             state = {**state, "step": state["step"] + 1}
             data = {
-                "obs": pdata["obs_history"],
+                "obs": pdata["obs"],
                 "action": pdata["action"],
                 "reward": pdata["reward"],
-                "logprob": pdata["logprob"]
+                "logprob": pdata["logprob"],
+                "done": pdata["done"]
             }
             return state, data
         return StateMonad(fn)
