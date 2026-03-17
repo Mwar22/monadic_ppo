@@ -6,10 +6,10 @@ import flax.linen as nn
 import matplotlib.pyplot as plt
 from jax import config
 from enviroment import StateMonad, Data, State, Action
-from new_ppo import ppo_train, cont_sample_beta
+from new_ppo import ppo_train
 from typing import Tuple, Any
 from etils import epath
-from robot import create_robot, create_reset, create_step
+from robot import create_step, create_rsd
 from config import EnviromentConfig, RangeConfig, ResetConfig, RewardConfig
 from functools import partial
 from jax.nn import initializers
@@ -20,7 +20,7 @@ from jax.nn import initializers
 activation_str = "sigmoid"
 activation = lambda x: nn.sigmoid(x)
 
-class Policy(nn.Module):
+class Actor(nn.Module):
     action_dim: int
     discrete: bool
 
@@ -116,39 +116,6 @@ class CauchyActivationModule(nn.Module):
 
 #######################################################################################
 
-def get_action(policy: nn.Module, params) -> StateMonad:
-    """
-    :: p -> s -> StateMonad s a
-    """
-    
-    def func(state) -> Tuple[Any, Any]:
-        last_obs = state["obs_history"]
-        rng1, rng2 = jax.random.split(state["rng"])
-
-        output = policy.apply(params, last_obs)
-        action_value, logprob = cont_sample_beta(output, rng1)
-        
-        new_state = {**state, "rng": rng2, "action": action_value}
-        return new_state, {"action": action_value, "logprob": logprob}
-
-    return StateMonad(func)
-
-
-def compose_pipeline(policy: nn.Module, policy_params, step_fn) -> StateMonad:
-    env = StateMonad.pure({})
-
-    def action_data_into_step(adata):
-        """Combina dados da ação na saída """
-        def fn(state):
-            new_state, step_data = step_fn(state)
-            return new_state, {**adata, **step_data}
-        return StateMonad(fn)
-
-    return (
-        env.bind(lambda _: get_action(policy, policy_params))
-        .bind(lambda adata: action_data_into_step(adata))
-    )
-
 
 #######################################################################################
 # deve ser configurado antes de importar o jax ou TensorFlow/XLA
@@ -186,7 +153,17 @@ ARM_JOINTS = [
     "junta6"
 ]
 
-robot = create_robot(
+
+# Inicializa os modelos
+actor = Actor(action_dim=ACTION_DIM, discrete=True)
+critic = Critic()
+dummy_obs_single = jnp.zeros((1, 15 * 45))
+params = (
+    actor.init(policy_rng, dummy_obs_single),
+    critic.init(critic_rng, dummy_obs_single),
+)
+
+rsd = create_rsd(
     epath.Path("model/joystick_env.xml"),
     epath.Path("model"),
     epath.Path("model/meshes"),
@@ -194,62 +171,50 @@ robot = create_robot(
     RewardConfig(),
     RangeConfig(),
     ResetConfig(),
-    ARM_JOINTS
+    ARM_JOINTS,
+    actor,
+    critic,
+    (15 * 45,),
+    (ACTION_DIM,)
 )
 
-#controi-se as funções de step e reset para o ambiente
-reset_jit = jax.jit(create_reset(robot).run)
-step_jit = jax.jit(create_step(robot).run)
+step_jit = jax.jit(create_step(rsd, params[0]))
 
-
-# Inicializa os modelos
-policy = Policy(action_dim=ACTION_DIM, discrete=True)
-critic = Critic()
-dummy_obs_single = jnp.zeros((1, 15 * 45))
-params = {
-    "policy": policy.init(policy_rng, dummy_obs_single),
-    "critic": critic.init(critic_rng, dummy_obs_single),
-}
 
 # Inicializa o otimizador
 optimizer = optax.adam(LEARNING_RATE)
-opt_state = optimizer.init(params)
+optim_state = optimizer.init(params)
 
 # Inicializa os estados para os ambientes em paralelo
 # (num_envs, features_dim)
 envs_step = jnp.zeros((NUM_ENVS,))
 envs_rng = jax.random.split(env_rng, NUM_ENVS)
 envs_action = jnp.zeros((NUM_ENVS, ACTION_DIM))
-envs_obs_history = jnp.zeros((NUM_ENVS, 15 * 45))
+envs_obs = jnp.zeros((NUM_ENVS, 15 * 45))
 
 #estado inicial 
-init_envs_states = {"rng":envs_rng, "step":envs_step, "goal":None, "obs_history":envs_obs_history, "action": envs_action, "mjx_data": None}
-init_envs_states, _ = jax.vmap(reset_jit)(init_envs_states)
-
-#compõe o pipeline com as transformações
-pipeline = compose_pipeline(policy, params["policy"], step_jit)
+init_envs_states = {"rng":envs_rng, "step":envs_step, "goal":None, "obs":envs_obs, "action": envs_action, "mjx_data": None}
+#init_envs_states, _ = jax.vmap(reset_jit)(init_envs_states)
 
 # --- Executa o treinamento ---
 #jax.config.update("jax_disable_jit", True)
 
 print("JIT compiling and starting training...")
-(final_params, _, _, _), metrics = ppo_train(
-    step_jit,
+(final_params, final_optim_state, final_rng), metrics = ppo_train(
+    rsd,
     params,
-    opt_state,
-    init_envs_states,
+    step_jit,
+    optimizer,
+    optim_state,
     rng,
-    policy=policy,
-    critic=critic,
-    obs_shape=(15 * 45, ),
-    action_shape=(ACTION_DIM,),
-    optimizer=optimizer,
-    num_envs=NUM_ENVS,
-    episodes=NUM_EPISODES,
-    max_steps_per_episode=STEPS_PER_EPISODE,
-    gamma=GAMMA,
-    lam=GAE_LAMBDA,
+    init_envs_states,
+    NUM_ENVS,
+    NUM_EPISODES,
+    STEPS_PER_EPISODE,
+    GAMMA,
+    GAE_LAMBDA
 )
+
 avg_loss = jnp.mean(metrics["loss"][-100:])
 print(f" Training finished! Average loss of last 100 steps: {avg_loss:.4f}")
 

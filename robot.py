@@ -48,13 +48,13 @@ class RobotSharedData:
     
     # todos os robôs compartilham actor e critic
     actor: nn.Module
-    actor_params: Any
-
     critic: nn.Module
-    critic_params:Any
+
+    obs_shape: Tuple[Any]
+    action_shape: Tuple[Any]
 
 
-def make_rsd(
+def create_rsd(
     xml_path: epath.Path,
     model_path: epath.Path,
     meshes_path: epath.Path,
@@ -64,9 +64,9 @@ def make_rsd(
     reset_config: ResetConfig,
     arm_joints: List[str],
     actor: nn.Module,
-    actor_params: Any,
     critic: nn.Module,
-    critic_params: Any,
+    obs_shape: Tuple[Any],
+    action_shape: Tuple[Any]
 ):
     """
     Método fábrica para o ambiente
@@ -162,9 +162,9 @@ def make_rsd(
         range_config,
         reset_config,
         actor,
-        actor_params,
         critic,
-        critic_params,
+        obs_shape,
+        action_shape
     )
 
 
@@ -575,7 +575,7 @@ def reward_pipeline(rsd: RobotSharedData, env: StateMonad):
 
 
 ####################################################################################################################
-def create_step(rsd: RobotSharedData):
+def create_step(rsd: RobotSharedData, actor_params):
     """
     state.keys() = ["rng", "step", "goal", "obs_history", "action", "mjx_data"]
     """
@@ -585,7 +585,7 @@ def create_step(rsd: RobotSharedData):
             last_obs = state["obs_history"]
             rng1, rng2 = jax.random.split(state["rng"])
 
-            output = rsd.actor.apply(rsd.actor_params, last_obs)
+            output = rsd.actor.apply(actor_params, last_obs)
             output = cast(jax.Array, output)
             action_value, logprob = cont_sample_beta(output, rng1)
             

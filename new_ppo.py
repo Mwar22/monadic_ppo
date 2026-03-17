@@ -1,16 +1,15 @@
 from os import wait
 import jax
 import optax
-import chex
 import jax.numpy as jnp
 import flax.linen as nn
-from jax import lax
 from flax import struct
 from enviroment import Data, State, StateMonad
 from functools import partial
 from typing import Dict, Any, cast
 from jax.scipy.special import gammaln, digamma
 from mathutils import cont_sample_beta, beta_entropy, shift_array
+from robot import RobotSharedData
 
 
 @struct.dataclass
@@ -110,7 +109,7 @@ def rollout_step(
             action_buffer,
             reward_buffer,
             logprob_buffer,
-            data["obs_history"],
+            data["obs"],
             data["action"],
             data["reward"],
             data["logprob"],
@@ -209,14 +208,12 @@ def general_advantage_estimator(
 
 def ppo_loss(
     params,
-    policy,
-    critic,
+    rsd: RobotSharedData,
     batch_obs,
     batch_actions,
     batch_advantages,
     batch_returns,
     batch_old_log_probs,
-    rng,
     clip_eps=0.2,
     c1=0.2,
     c2=0.1,
@@ -226,8 +223,8 @@ def ppo_loss(
     Calculates the PPO loss.
     """
     # Get policy logits and critic values for the batch of observations
-    logits = policy.apply(params["policy"], batch_obs)
-    values = critic.apply(params["critic"], batch_obs)
+    logits = rsd.actor.apply(params[0], batch_obs)
+    values = rsd.critic.apply(params[1], batch_obs)
 
     # Map actions -> their log probabilities under the current policy
     alpha = jnp.clip(jax.nn.softplus(logits), min_alpha_beta, 1000.0)
@@ -285,16 +282,13 @@ def grad_metrics(grads, params):
 
 
 def ppo_train(
-    step_fn,
+    rsd: RobotSharedData,
     params,
-    optim_state,
-    init_envs_states,
-    rng,
-    policy,
-    critic,
-    obs_shape,
-    action_shape,
+    step_fn,
     optimizer,
+    optim_state,
+    rng,
+    init_envs_states,
     num_envs,
     episodes: int,
     max_steps_per_episode: int,
@@ -308,11 +302,11 @@ def ppo_train(
 
     def _update_step(carry, _):
         """This is the body of the scan, representing one full update."""
-        params, optim_state, env_states, rng = carry
+        parameters, optim_state, rng = carry
         rng, rollout_rng, rng_loss = jax.random.split(rng, 3)
 
         # cria um buffer
-        buffer = batched_buffer_create(num_envs, max_steps_per_episode, obs_shape, action_shape)
+        buffer = batched_buffer_create(num_envs, max_steps_per_episode, rsd.obs_shape, rsd.action_shape)
 
         # Faz um rollout (usando a função vetorizada)
         final_state, final_buffer= rollout(
@@ -324,11 +318,14 @@ def ppo_train(
             buffer.obs_buffer,
             buffer.reward_buffer,
             buffer.ptr,
-            critic=critic,
-            critic_params=params["critic"],
+            critic=rsd.critic,
+            critic_params=parameters[1],
             lam=lam,
             gamma=gamma,
         )
+
+        #bloqueia o calculo de gradientes para as vantagens
+        advantages = jax.lax.stop_gradient(advantages)
 
         # normaliza as vantagens, para prevenir problemas com os gradientes, com as recompensas ruidosas
         advantages_mean = jnp.mean(advantages)
@@ -341,21 +338,16 @@ def ppo_train(
         def flatten(x):
             return x.reshape(-1, *x.shape[2:])
 
-        # shape (num_envs, obs_dim)
-        # obs_0 ... obs_{T-1}
-        initial_obs_history = env_states["obs_history"]
-
         batch_obs = flatten(final_buffer.obs_buffer)
         batch_actions = flatten(final_buffer.action_buffer)
         batch_old_log_probs = flatten(final_buffer.logprob_buffer)
         batch_advantages = flatten(advantages)
         batch_returns = flatten(returns)
 
-        def loss_fn(params):
+        def loss_fn(par):
             return ppo_loss(
-                params,
-                policy,
-                critic,
+                par,
+                rsd,
                 batch_obs,
                 batch_actions,
                 batch_advantages,
@@ -365,12 +357,12 @@ def ppo_train(
             )
 
         # calcula os gradientes e atualiza os parametros
-        loss_val, grads = jax.value_and_grad(loss_fn)(params)
+        loss_val, grads = jax.value_and_grad(loss_fn)(parameters)
         updates, new_optim_state = optimizer.update(grads, optim_state)
-        new_params = optax.apply_updates(params, updates)
+        new_parameters = optax.apply_updates(parameters, updates)
 
-        new_carry = (new_params, new_optim_state, final_state, rollout_rng)
-        grad_info = grad_metrics(grads, params)
+        new_carry = (new_parameters, new_optim_state, rollout_rng)
+        grad_info = grad_metrics(grads, parameters)
 
         return new_carry, {
             "loss": loss_val,
@@ -381,7 +373,7 @@ def ppo_train(
     # loop principal de trainamento, executado por lax.scan
     final_carry, metrics = jax.lax.scan(
         _update_step,
-        (params, optim_state, init_envs_states, rng),
+        (params, optim_state, rng),
         None,
         length=int(episodes),
     )
