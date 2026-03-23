@@ -595,6 +595,9 @@ def create_step(rsd: RobotSharedData, actor_params):
             action_value, logprob = cont_sample_beta(output, rng1)
 
             ogc = state["goal"]["goal_orientation_coordinates"]
+            opc = state["goal"]["goal_position_coordinates"]
+
+            jax.debug.print("goal position coord = {}", opc)
             jax.debug.print("goal orientation coord = {}", ogc)
             jax.debug.print("action_value = {}", action_value)
             

@@ -23,12 +23,12 @@ class BatchedBuffer:
     done_flag: jax.Array  # (num_envs,)
 
     def __str__(self):
-        return f"obs_buffer: {self.obs_buffer.shape}\n \
-        action_buffer: {self.action_buffer.shape}\n \
-        reward_buffer: {self.reward_buffer.shape}\n \
-        logprob_buffer: {self.logprob_buffer.shape}\n \
-        ptr: {self.ptr.shape}\n \
-        done_flag: {self.done_flag.shape}"
+        return f"obs_buffer: {self.obs_buffer}\n \
+        action_buffer: {self.action_buffer}\n \
+        reward_buffer: {self.reward_buffer}\n \
+        logprob_buffer: {self.logprob_buffer}\n \
+        ptr: {self.ptr}\n \
+        done_flag: {self.done_flag}"
 
 
 def batched_buffer_create(num_envs, max_steps, obs_shape, action_shape):
@@ -185,6 +185,8 @@ def rollout(
             buffer.done_flag
         )
         buffer = BatchedBuffer(obs_buffer, action_buffer, reward_buffer, logprob_buffer, ptr, done_flag)
+         #debug
+        jax.debug.print("buffer:\n {}", buffer)
         return (state, buffer), None
 
     (final_state, final_buffer), _ = jax.lax.scan(
@@ -349,7 +351,7 @@ def ppo_train(
         buffer = batched_buffer_create(num_envs, max_steps_per_episode, rsd.obs_shape, rsd.action_shape)
 
         # Faz um rollout (usando a função vetorizada)
-        final_state, final_buffer= rollout(
+        state, buffer= rollout(
             step_fn, initial_state, max_steps_per_episode, buffer
         )
 
@@ -381,9 +383,9 @@ def ppo_train(
         def flatten(x):
             return x.reshape(-1, *x.shape[2:])
 
-        batch_obs = flatten(final_buffer.obs_buffer)
-        batch_actions = flatten(final_buffer.action_buffer)
-        batch_old_log_probs = flatten(final_buffer.logprob_buffer)
+        batch_obs = flatten(buffer.obs_buffer)
+        batch_actions = flatten(buffer.action_buffer)
+        batch_old_log_probs = flatten(buffer.logprob_buffer)
         batch_advantages = flatten(advantages)
         batch_returns = flatten(returns)
 
@@ -391,15 +393,23 @@ def ppo_train(
             return ppo_loss(
                 par,
                 rsd,
-                final_buffer.obs_buffer,
-                final_buffer.action_buffer,
+                buffer.obs_buffer,
+                buffer.action_buffer,
                 advantages,
                 returns,
-                final_buffer.logprob_buffer,
+                buffer.logprob_buffer,
             )
 
         # calcula os gradientes e atualiza os parametros
         loss_val, grads = jax.value_and_grad(loss_fn)(parameters)
+
+        #debug
+        leaves = jax.tree_util.tree_leaves(grads)
+        grad_norm = jnp.sqrt(sum([jnp.sum(jnp.square(g)) for g in leaves]))
+
+        jax.debug.print("loss = {}", loss_val)
+        jax.debug.print("grad_norm = {}", grad_norm)
+
         updates, new_optim_state = optimizer.update(grads, optim_state)
         new_parameters = optax.apply_updates(parameters, updates)
 
@@ -409,8 +419,8 @@ def ppo_train(
         return new_carry, {
             "loss": loss_val,
             "last_ptr": buffer.ptr,
-            "success_count": jnp.mean(final_state["success_count"]),
-            "avg_reward": jnp.mean(final_buffer.reward_buffer, axis=0),
+            "success_count": jnp.mean(state["success_count"]),
+            "avg_reward": jnp.mean(buffer.reward_buffer, axis=0),
             **grad_info,
         }
 

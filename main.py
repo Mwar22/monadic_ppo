@@ -133,9 +133,9 @@ print(f"jax_enable_x64: {jax.config.read('jax_enable_x64')}")
 #env_states = {"rng":rng, "step":0, "goal":None, "obs_history":}
 #######################################################################################
 # --- Hyperparameters ---
-NUM_EPISODES = 4#1000
-NUM_ENVS = 3
-STEPS_PER_EPISODE = 10
+NUM_EPISODES = 1#1000
+NUM_ENVS = 2
+STEPS_PER_EPISODE = 2
 LEARNING_RATE = 10e-4
 GAMMA = 0.99
 GAE_LAMBDA = 0.95
