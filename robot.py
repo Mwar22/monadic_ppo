@@ -316,13 +316,27 @@ def sample_config_velocities(
 
 ##################################################################################################################
 
+def normalize_obs(data, obs_stats:RunningStats):
+    def func(state):
+        std = jnp.sqrt(obs_stats.var + 1e-8)
+        norm_obs = (data["obs"] - obs_stats.mean) / std
+
+        new_state = {**state,"obs": norm_obs}
+        return new_state, {**data, "obs": norm_obs}
+    return StateMonad(func)
 
 def update_obs(data, obs_stats:RunningStats, obs_noise=0.0):
     def func(state):
         rng, rng1 = jax.random.split(state["rng"])
 
         # clipa a observação
-        obs_processed = jnp.clip(data["obs_array"], -100.0, 100.0)
+        #normaliza a observação
+        #std = jnp.sqrt(obs_stats.var + 1e-8)
+        #norm_obs = (data["obs_array"] - obs_stats.mean) / std
+        obs = data["obs_array"]
+
+        #proteje a rede contra explosões no inicio
+        obs_processed = jnp.clip(obs, -5.0, 5.0)
 
         # Adiciona um ruido adicional.
         # Este 'if' funciona com JIT contanto que obs_noise seja um valor estático.
@@ -333,7 +347,7 @@ def update_obs(data, obs_stats:RunningStats, obs_noise=0.0):
             obs_processed += noise
 
         # Adiciona a nova observação no buffer, deslocando as outras observações e descartando a mais antiga
-        new_obs = (
+        obs_history = (
             jnp.roll(
                 state["obs"], obs_processed.size
             )  # desloca todo o array para a direita, obs_processd.size de distancia (circular)
@@ -341,15 +355,10 @@ def update_obs(data, obs_stats:RunningStats, obs_noise=0.0):
             .set(obs_processed)  # adiciona os novos dados de observação
         )
 
-        #normaliza a observação
-        std = jnp.sqrt(obs_stats.var + 1e-8)
-        norm_obs = (new_obs - obs_stats.mean) / std
-
-        #proteje a rede contra explosões no inicio
-        norm_obs = jnp.clip(norm_obs, -5.0, 5.0)
-    
-        new_state = {**state, "rng": rng1, "obs": norm_obs}
-        return new_state, {**data, "obs": norm_obs}
+        mean_mask = jnp.zeros_like(obs)
+        
+        new_state = {**state, "rng": rng1, "obs": obs_history}
+        return new_state, {**data, "obs": obs_history}
 
     return StateMonad(func)
 
@@ -383,9 +392,8 @@ def concat_obs_as_array(d: Dict[str, Any]) -> StateMonad:
 
 def success_count(pdata):
     def func(state):
-        count = jax.lax.cond(
-            state["success_count"], lambda c: c+ 1, lambda c: c, state["success_count"]
-        )
+        # Transforma True em 1 e False em 0 e soma
+        count = state["success_count"] + jnp.array(pdata["success"], dtype=jnp.int32)
         return {**state, "success_count": count}, pdata
     return StateMonad(func)
 
@@ -496,9 +504,11 @@ def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningStats, env: StateMonad)
             }
         )
         .bind(lambda pdata: concat_obs_as_array(pdata))
-        .bind(
-            lambda pdata: update_obs(pdata, obs_stats, rsd.enviroment_config.obs_noise)
-        )
+        .map(lambda pdata: {**pdata, "obs": pdata["obs_array"]})
+        .bind(lambda pdata: normalize_obs(pdata, obs_stats))
+        #.bind(
+        #    lambda pdata: update_obs(pdata, obs_stats, rsd.enviroment_config.obs_noise)
+        #)
         #.bind(lambda pdata: debug(pdata, "position_error"))
         #.bind(lambda pdata: debug(pdata, "orientation_error"))
     )

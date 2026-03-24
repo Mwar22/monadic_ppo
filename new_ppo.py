@@ -61,6 +61,22 @@ class NetworksSettings:
     critic: nn.Module
     params: Tuple[Any, Any]
 
+    @classmethod
+    def init(cls, 
+        obs_size: int,
+        action_size: int,
+        actor: nn.Module,
+        critic: nn.Module,
+        params: Tuple[Any, Any],
+    ):
+        return cls(
+            obs_size,
+            action_size,
+            actor,
+            critic,
+            params,
+        )
+    
     @property
     def actor_params(self):
         return self.params[0]
@@ -383,9 +399,9 @@ def ppo_loss(
     batch_returns,      #shape: (num_envs, max_steps)
     old_log_probs,      #shape: (num_envs, max_steps +1)
     clip_eps=0.2,
-    c1=0.1,
-    c2=0.3,
-    min_alpha_beta=1.1,
+    c1=0.5,
+    c2=0.01,
+    min_alpha_beta=1.0,
 ):
     """
     Calculates the PPO loss.

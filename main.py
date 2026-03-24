@@ -147,7 +147,7 @@ def create_networks(rng:jax.Array, obs_size:int, action_size:int):
 
 # --- Inicialização ---
 rng = jax.random.PRNGKey(42)
-rng, network_settings = create_networks(rng, obs_size=5*39, action_size=6)
+rng, network_settings = create_networks(rng, obs_size=39, action_size=6)
 
 
 robot_shared_data = create_rsd(
@@ -167,11 +167,11 @@ settings = TrainingSettings.init(
     robot_shared_data,
     optimizer_creator  = lambda lr: optax.adam(lr),
     step_fn_creator = create_step,
-    scheduler_fn= lambda i, n: ProgressScheduler.power(i, n, p=1.5),
+    scheduler_fn= lambda i, n: ProgressScheduler.linear(i, n),
     num_envs= 500,
     num_episodes=300,
     steps_per_episode=30,
-    learning_rate=1e-4
+    learning_rate=5e-4
 )
 
 
