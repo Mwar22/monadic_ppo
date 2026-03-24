@@ -511,6 +511,14 @@ def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningStats, env: StateMonad)
         #)
         #.bind(lambda pdata: debug(pdata, "position_error"))
         #.bind(lambda pdata: debug(pdata, "orientation_error"))
+        .bind(
+            lambda pdata: StateMonad(
+                lambda state: (
+                    {**state, "err": jnp.minimum(state["err"], pdata["position_error"])},
+                    pdata
+                )
+            )
+        )
     )
 
 
@@ -524,19 +532,19 @@ def reward_pipeline(progress, rsd: RobotSharedData,  env: StateMonad):
                 "reward": (
                     # Incentivo de Posição
                     exp_scale_reward(
-                        reward_config.pos_incentive_gain,
-                        reward_config.pos_incentive_sigma,
+                        reward_config.pos_incentive_gain.update(progress),
+                        reward_config.pos_incentive_sigma.update(progress),
                         pdata["position_error"]
                     ) + 
 
                     # Incentivo de Orientação
                     exp_scale_reward(
-                        reward_config.rot_incentive_gain,
-                        reward_config.rot_incentive_sigma,
+                        reward_config.rot_incentive_gain.update(progress),
+                        reward_config.rot_incentive_sigma.update(progress),
                         pdata["orientation_error"]
                     ) +
                     # Penalidade L2 de torque para evitar movimentos espasmódicos
-                    jnp.sum(jnp.square(pdata["torques"])) * reward_config.torques_penalty
+                    jnp.sum(jnp.square(pdata["torques"])) * reward_config.torques_penalty.update(progress)
                 ),
             }
         )
@@ -547,10 +555,7 @@ def reward_pipeline(progress, rsd: RobotSharedData,  env: StateMonad):
                     state,
                     {
                         **pdata,
-                        "err_tol": jnp.maximum(
-                            reward_config.min_err_tol, 
-                            reward_config.start_err_tol - (progress * (reward_config.start_err_tol - 1e-4))
-                        )
+                        "err_tol": reward_config.err_tol.update(progress), 
                     }
                 )
             )
@@ -577,8 +582,8 @@ def reward_pipeline(progress, rsd: RobotSharedData,  env: StateMonad):
 
                         # Bônus de Sucesso + Bônus de Velocidade
                         "reward": pdata["reward"]
-                        + pdata["success"] * (reward_config.success_reward + (30 - state["step"]) * 5.0)
-                        + pdata["failure"] * reward_config.failure_penalty,
+                        + pdata["success"] * (reward_config.success_reward.update(progress) + (30 - state["step"]) * 5.0)
+                        + pdata["failure"] * reward_config.failure_penalty.update(progress),
                     },
                 )
             )

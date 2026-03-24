@@ -10,6 +10,7 @@ import jax
 import jax.numpy as jnp
 from flax import struct
 from dataclasses import field
+from typing import Callable
 
 
 @struct.dataclass
@@ -39,28 +40,46 @@ class EnviromentConfig:
 
 
 @struct.dataclass
+class RewardConfigParameter:
+    update: Callable[[float], float]
+
+    @classmethod
+    def const(cls, value):
+        return cls(lambda _: value)
+
+    @classmethod
+    def linear_tracking(cls, start_value, end_value):
+        def func(p):
+            return start_value - (start_value - end_value)*p
+        
+        return cls(func)
+        
+@struct.dataclass
 class RewardConfig:
     # --- Incentivo de Posição ---
     # O ganho máximo quando o erro é zero
-    pos_incentive_gain: float = 10.0 
+    pos_incentive_gain = RewardConfigParameter.const(100.0)
 
     # 'Largura' da recompensa: se o erro for igual a sigma, a recompensa cai para ~36%
-    pos_incentive_sigma: float = 1.5 
+    # No início do treino (progress=0), sigma=0.5
+    # No fim do treino (progress=1), sigma=0.1
+    pos_incentive_sigma = RewardConfigParameter.linear_tracking(0.5, 0.1)
 
     # --- Incentivo de Orientação ---
-    rot_incentive_gain: float = 10.0
-    rot_incentive_sigma: float = 1.0
+    rot_incentive_gain = RewardConfigParameter.const(10.0)
+    rot_incentive_sigma = RewardConfigParameter.linear_tracking(0.5, 0.1)
 
     # --- Sucesso e Falha ---
-    success_reward: float = 500.0
-    failure_penalty: float = -100.0
+    success_reward = RewardConfigParameter.const(1000.0)
+    failure_penalty = RewardConfigParameter.const(-100.0)
     
     # --- Tolerância ---
-    start_err_tol: float = 0.3
-    min_err_tol: float = 0.01
+    # No início do treino (progress=0), err_tol=0.6
+    # No fim do treino (progress=1), err_tol=0.1
+    err_tol = RewardConfigParameter.linear_tracking(0.6, 0.01)
     
     # --- Regularização ---
-    torques_penalty: float = -1e-5
+    torques_penalty = RewardConfigParameter.const(-1e-5)
 
 
 @struct.dataclass

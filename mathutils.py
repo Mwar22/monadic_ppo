@@ -14,7 +14,7 @@ from jax import numpy as jnp
 from jax.scipy.special import gammaln, digamma
 
 
-class ProgressScheduler:
+class Scheduler:
     @staticmethod
     def linear(step, total_steps):
         return jnp.clip(step / total_steps, 0.0, 1.0)

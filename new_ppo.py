@@ -6,7 +6,7 @@ import flax.linen as nn
 from flax import struct
 from functools import partial
 from typing import Dict, Any, cast, Tuple, Callable, Self
-from mathutils import  beta_entropy, cont_sample_beta, ProgressScheduler
+from mathutils import  beta_entropy, cont_sample_beta
 from robot import RobotSharedData, get_goal
 from mujoco import mjx
 
@@ -300,6 +300,7 @@ def rollout(
         'rng': 0,
         'step': 0,
         'success_count':0,
+        "err":0
     }
     state_out_axes = {**state_in_axes, 'obs_stats': 0}
     vmap_rollout_step = jax.vmap(
@@ -400,7 +401,7 @@ def ppo_loss(
     old_log_probs,      #shape: (num_envs, max_steps +1)
     clip_eps=0.2,
     c1=0.5,
-    c2=0.01,
+    c2=0.1,
     min_alpha_beta=1.0,
 ):
     """
@@ -550,6 +551,7 @@ def ppo_train(rng: jax.Array, settings: TrainingSettings):
             "loss": loss_val,
             "ptr": buffer.ptr,
             "success_count": state["success_count"],
+            "err": state["err"],
             "avg_reward": jnp.mean(buffer.reward_buffer, axis=0),
             **grad_info,
             **aux_metrics,
@@ -586,6 +588,9 @@ def create_initial_state(rng: jax.Array, progress, settings: TrainingSettings):
 
     vmapped_get_goal = jax.vmap(partial(get_goal, settings.robot_shared_data, progress, mjx_data))
     batched_goal = vmapped_get_goal(batched_rng)
+
+    batched_err = jnp.ones((num_envs, ))*jnp.inf
+
     #estado inicial 
     return rng1, {
         "rng":batched_rng,
@@ -595,6 +600,7 @@ def create_initial_state(rng: jax.Array, progress, settings: TrainingSettings):
         "action": batched_action,
         "mjx_data": batched_mjx_data,
         "success_count":batched_success_count, 
+        "err": batched_err,
     }
    
 

@@ -10,7 +10,7 @@ from new_ppo import TrainingSettings, ppo_train
 from etils import epath
 from robot import create_step, create_rsd
 from config import EnviromentConfig, RangeConfig, ResetConfig, RewardConfig
-from mathutils import ProgressScheduler
+from mathutils import Scheduler
 from new_ppo import NetworksSettings
 
 #######################################################################################
@@ -167,9 +167,9 @@ settings = TrainingSettings.init(
     robot_shared_data,
     optimizer_creator  = lambda lr: optax.adam(lr),
     step_fn_creator = create_step,
-    scheduler_fn= lambda i, n: ProgressScheduler.linear(i, n),
+    scheduler_fn= lambda i, n: jnp.minimum(0.7, Scheduler.power(i, n, p=1.5)),
     num_envs= 500,
-    num_episodes=300,
+    num_episodes=1000,
     steps_per_episode=30,
     learning_rate=5e-4
 )
@@ -212,11 +212,17 @@ ax2.set_title("Average Episode Reward")
 ax2.set_xlabel("Update Step")
 ax2.set_ylabel("Average Reward")
 
+mean_err = jnp.mean(metrics["err"], axis=1)
+ax3.plot(mean_err)
+ax3.set_title("Mean pos err")
+ax3.set_xlabel("Update Step")
+ax3.set_ylabel("Pos Err")
+"""
 ax3.plot(grad_norm)
 ax3.set_title("Gradient norm (Euclidian, L2)")
 ax3.set_xlabel("Update Step")
 ax3.set_ylabel("Norm")
-
+"""
 ax4.plot(entropy)
 ax4.set_title("Entropy")
 ax4.set_xlabel("Update Step")
