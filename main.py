@@ -1,3 +1,4 @@
+from __future__ import annotations
 import jax
 import os
 import optax
@@ -5,16 +6,12 @@ import jax.numpy as jnp
 import flax.linen as nn
 import matplotlib.pyplot as plt
 from jax import config
-from enviroment import StateMonad, Data, State, Action
-from new_ppo import TrainingSettings, NetworksSettings
-from new_ppo import create_training_settings, ppo_train, create_initial_state
-from typing import Tuple, Any
+from new_ppo import create_training_settings, ppo_train
 from etils import epath
-from robot import create_step, create_rsd, RobotSharedData
+from robot import create_step, create_rsd
 from config import EnviromentConfig, RangeConfig, ResetConfig, RewardConfig
-from functools import partial
-from jax.nn import initializers
-from mujoco import mjx
+
+from new_ppo import NetworksSettings
 
 #######################################################################################
 # Modelos
@@ -169,15 +166,15 @@ settings = create_training_settings(
     robot_shared_data,
     optimizer_creator  = lambda lr: optax.adam(lr),
     step_fn_creator = create_step,
-    num_envs= 128,
-    num_episodes=300,
-    steps_per_episode=64
+    num_envs= 2,
+    num_episodes=1,
+    steps_per_episode=1
 )
 
 
 
 # --- Executa o treinamento ---
-#jax.config.update("jax_disable_jit", True)
+jax.config.update("jax_disable_jit", True)
 
 print("JIT compiling and starting training...")
 (final_params, final_optim_state, final_rng), metrics = ppo_train(rng, settings)

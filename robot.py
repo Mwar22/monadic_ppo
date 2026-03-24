@@ -6,6 +6,7 @@ See the LICENSE file in the project root for full license details.
 Tarefa para o thor alcançar um alvo
 """
 
+from __future__ import annotations
 import mujoco
 import jax
 import mjx_base
@@ -19,8 +20,11 @@ from flax import struct
 from typing import Any, Dict, Tuple, List, cast
 from config import ResetConfig, RangeConfig, RewardConfig, EnviromentConfig
 from enviroment import StateMonad
-from mathutils import l1_l2_reward, exp_scale_reward, conv2jax_quat
-from new_ppo import NetworksSettings, cont_sample_beta
+from mathutils import l1_l2_reward, exp_scale_reward, conv2jax_quat, cont_sample_beta
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from new_ppo import NetworksSettings
 
 
 @struct.dataclass

@@ -4,13 +4,12 @@ import optax
 import jax.numpy as jnp
 import flax.linen as nn
 from flax import struct
-from enviroment import Data, State, StateMonad
 from functools import partial
 from typing import Dict, Any, cast, Tuple, Callable
-from jax.scipy.special import gammaln, digamma
-from mathutils import cont_sample_beta, beta_entropy, shift_array
+from mathutils import  beta_entropy
 from robot import RobotSharedData, get_goal
 from mujoco import mjx
+
 
 @struct.dataclass
 class NetworksSettings:
@@ -47,7 +46,7 @@ def create_training_settings(
     network_settings: NetworksSettings,
     robot_shared_settings: RobotSharedData,
     optimizer_creator: Callable[[float], optax.GradientTransformationExtraArgs],
-    step_fn_creator:Callable[[NetworksSettings, RobotSharedData]],
+    step_fn_creator:Callable[[NetworksSettings, RobotSharedData], Callable],
     num_envs: int = 1,
     num_episodes: int = 1,
     steps_per_episode: int = 1,
@@ -367,6 +366,10 @@ def ppo_loss(
 
     # logprobs
     clipped_actions = jnp.clip(batch_actions, 1e-6, 1 - 1e-6)
+
+    jax.debug.print("actions.shape = {}", clipped_actions.shape)
+    jax.debug.print("alpha.shape = {}", alpha.shape)
+    jax.debug.print("beta.shape = {}", beta.shape)
     logprobs = jax.scipy.stats.beta.logpdf(clipped_actions, alpha, beta)
     logprobs = jnp.sum(logprobs, axis=2)
 
