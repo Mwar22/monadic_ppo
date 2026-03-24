@@ -6,7 +6,7 @@ import flax.linen as nn
 from flax import struct
 from functools import partial
 from typing import Dict, Any, cast, Tuple, Callable
-from mathutils import  beta_entropy
+from mathutils import  beta_entropy, cont_sample_beta
 from robot import RobotSharedData, get_goal
 from mujoco import mjx
 
@@ -255,78 +255,63 @@ def rollout(
 
 def general_advantage_estimator(
     settings: TrainingSettings,
-    obs_buffer: jax.Array,  # shape: (num_steps, *obs_shape)
-    reward_buffer: jax.Array,
-    ptr: jax.Array,
-    done_flag:jax.Array,
+    obs_buffer: jax.Array,    # Shape: (N, *obs)
+    reward_buffer: jax.Array, # Shape: (N,)
+    ptr: jax.Array,                 # Fim dos dados validos
+    done_flag: jax.Array          # True if Goal/Limit reached, False if Max Steps
 ):
-    network_settings = settings.network_settings
-    lam = settings.gae_lambda
     gamma = settings.gamma
-
-    #num_steps
+    lam = settings.gae_lambda
     N = obs_buffer.shape[0]
 
-    # obtem os "values" por meio do critico
-    values = network_settings.critic.apply(network_settings.critic_params, obs_buffer)  # (N,)
+    # 1. Get Critic values for the entire buffer
+    # Note: We need the value at 'ptr' to bootstrap if it wasn't a 'done' state
+    values = settings.network_settings.critic.apply(
+        settings.network_settings.critic_params, obs_buffer
+    )
     values = cast(jax.Array, values)
 
-    t = jnp.arange(N)
+    # 2. Define the Bootstrap Value
+    # If done_flag is True (Goal/Limit), the value of the 'next' state is 0
+    # If done_flag is False (Max steps), we use V(s_ptr)
+    bootstrap_value = jnp.where(done_flag, 0.0, values[ptr])
 
-    # mascara que marca os timesteps preenchidos
-    #valid_mask = [1, 1, ...,1, 0, 0, ..., 0]
-    valid_mask = (t < ptr).astype(jnp.float32)
+    def gae_scan_fn(carry, t):
+        gae_next, next_val = carry
+        
+        # Current step data
+        rew = reward_buffer[t]
+        val = values[t]
+        
+        # In your case, every step PRIOR to ptr is "not done" 
+        # because the episode only ends at ptr-1.
+        # So for all t < ptr-1, mask is 1.0.
+        # At t = ptr-1, the 'next_val' is our bootstrap_value.
+        
+        delta = rew + gamma * next_val - val
+        gae = delta + gamma * lam * gae_next
+        
+        return (gae, val), gae
 
-  
-    #done_mask = [0, 0, ..., 1, 0, 0, ..., 0]
-    done_mask = jnp.zeros((N,), dtype=jnp.float32)
-    done_mask = done_mask.at[jnp.maximum(ptr - 1, 0)].set(
-        jnp.where(done_flag, 1.0, 0.0)
-    )
+    # 3. Initialize the scan at the boundary
+    # The 'next_val' for the very last step (ptr-1) is our bootstrap_value
+    initial_carry = (0.0, bootstrap_value)
 
-    # Transições (N-1)
-    values_t = values[:-1]
-    next_values = values[1:]
-    rewards = reward_buffer[:-1]
+    # 4. Use a mask to ignore indices >= ptr
+    indices = jnp.arange(N)
+    valid_mask = (indices < ptr).astype(jnp.float32)
 
-    valid_t = valid_mask[:-1]
-    valid_next = valid_mask[1:]
-    done_t = done_mask[:-1]
-
-    # --- stop propagation correctly ---
-    not_done = (1.0 - done_t) * valid_next
-
-    # --- bootstrap (critical for truncation) ---
-    # if done → no bootstrap
-    # if not done → bootstrap from V(s_T)
-    bootstrap_value = jnp.where(
-        done_t,
-        0.0,
-        values[jnp.minimum(ptr, N - 1)]
-    )
-
-    def gae_scan_fn(gae_next, inputs):
-        reward, value, next_value, nd = inputs
-
-        delta = reward + gamma * next_value * nd - value
-        gae = delta + gamma * lam * nd * gae_next
-
-        return gae, gae
-
-    inputs = (rewards, values_t, next_values, not_done)
-
+    # Reverse scan from N-1 down to 0
     _, advantages = jax.lax.scan(
         gae_scan_fn,
-        bootstrap_value,
-        inputs,
+        initial_carry,
+        jnp.arange(N),
         reverse=True
     )
 
-    returns = advantages + values_t
-
-    # --- mask out padding ---
-    advantages = advantages * valid_t
-    returns = returns * valid_t
+    # 5. Clean up padding and compute returns
+    advantages = advantages * valid_mask
+    returns = advantages + values
 
     return advantages, returns
 
@@ -367,9 +352,6 @@ def ppo_loss(
     # logprobs
     clipped_actions = jnp.clip(batch_actions, 1e-6, 1 - 1e-6)
 
-    jax.debug.print("actions.shape = {}", clipped_actions.shape)
-    jax.debug.print("alpha.shape = {}", alpha.shape)
-    jax.debug.print("beta.shape = {}", beta.shape)
     logprobs = jax.scipy.stats.beta.logpdf(clipped_actions, alpha, beta)
     logprobs = jnp.sum(logprobs, axis=2)
 

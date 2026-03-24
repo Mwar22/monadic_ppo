@@ -89,8 +89,9 @@ def cont_sample_beta(logits: jax.Array, rng: jax.Array, min_alpha_beta=0.1):
     """
 
     # mapeia os logits para parametros positivos para serem utilizados na distribuição beta
-    alpha = jnp.clip(jax.nn.softplus(logits), min_alpha_beta, 1000.0)
-    beta = jnp.clip(jax.nn.softplus(1 - logits), min_alpha_beta, 1000.0)
+    alpha_logits, beta_logits = jnp.split(logits, 2, axis=-1)
+    alpha = jax.nn.softplus(alpha_logits) + min_alpha_beta
+    beta  = jax.nn.softplus(beta_logits) + min_alpha_beta
 
     # separa o rng para amostras independentes
     rng, subkey = jax.random.split(rng)

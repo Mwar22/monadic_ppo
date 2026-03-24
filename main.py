@@ -33,7 +33,8 @@ class Actor(nn.Module):
         x = nn.Dense(256)(obs)
         x = activation(x)
        
-        logits = nn.Dense(self.action_dim)(x)
+        # 2 pois é uma distribuição, gerando metade para os parametros alfa e metade para beta
+        logits = nn.Dense(2 * self.action_dim)(x)
         return logits
 
 
@@ -166,15 +167,15 @@ settings = create_training_settings(
     robot_shared_data,
     optimizer_creator  = lambda lr: optax.adam(lr),
     step_fn_creator = create_step,
-    num_envs= 2,
-    num_episodes=1,
-    steps_per_episode=1
+    num_envs= 128,
+    num_episodes=100,
+    steps_per_episode=30
 )
 
 
 
 # --- Executa o treinamento ---
-jax.config.update("jax_disable_jit", True)
+#jax.config.update("jax_disable_jit", True)
 
 print("JIT compiling and starting training...")
 (final_params, final_optim_state, final_rng), metrics = ppo_train(rng, settings)
