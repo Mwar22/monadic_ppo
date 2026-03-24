@@ -5,11 +5,53 @@ import jax.numpy as jnp
 import flax.linen as nn
 from flax import struct
 from functools import partial
-from typing import Dict, Any, cast, Tuple, Callable
+from typing import Dict, Any, cast, Tuple, Callable, Self
 from mathutils import  beta_entropy, cont_sample_beta
 from robot import RobotSharedData, get_goal
 from mujoco import mjx
 
+@struct.dataclass
+class RunningStats:
+    mean: jax.Array
+    var: jax.Array
+    count: jax.Array
+
+    @classmethod
+    def init(cls, shape) -> Self:
+        # Inicializamos com uma contagem pequena para evitar divisões por zero
+        return cls(
+            mean=jnp.zeros(shape),
+            var=jnp.ones(shape),
+            count=jnp.array(1e-4)
+        )
+
+@jax.jit
+def update_running_stats(stats: RunningStats, batch_obs: jax.Array) -> RunningStats:
+    """
+    Atualiza média e variância usando o Algoritmo de Welford vetorizado.
+    batch_obs esperado: (num_envs, num_steps, obs_dim)
+    """
+    # achata as dimensões de batch (envs * steps) pra ficar mais facil
+    obs_dim = batch_obs.shape[-1]
+    batch_obs = batch_obs.reshape(-1, obs_dim)
+    
+    # obtem as estatisticas do batch atual
+    batch_mean = jnp.mean(batch_obs, axis=0)
+    batch_var = jnp.var(batch_obs, axis=0)
+    batch_count = jnp.array(batch_obs.shape[0], dtype=jnp.float32)
+
+    # lógica do algoritmo de welford
+    delta = batch_mean - stats.mean
+    total_count = stats.count + batch_count
+
+    new_mean = stats.mean + delta * (batch_count / total_count)
+    m_a = stats.var * stats.count
+    m_b = batch_var * batch_count
+    M2 = m_a + m_b + jnp.square(delta) * (stats.count * batch_count / total_count)
+    new_var = M2 / total_count
+
+    # evita que gradientes sejam calculados
+    return jax.lax.stop_gradient(RunningStats(mean=new_mean, var=new_var, count=total_count))
 
 @struct.dataclass
 class NetworksSettings:
@@ -42,34 +84,36 @@ class TrainingSettings:
     optimizer_state: optax.OptState
     step_fn: Callable
 
-def create_training_settings(
-    network_settings: NetworksSettings,
-    robot_shared_settings: RobotSharedData,
-    optimizer_creator: Callable[[float], optax.GradientTransformationExtraArgs],
-    step_fn_creator:Callable[[NetworksSettings, RobotSharedData], Callable],
-    num_envs: int = 1,
-    num_episodes: int = 1,
-    steps_per_episode: int = 1,
-    learning_rate: float = 1e-4,
-    gamma: float = 0.99,
-    gae_lambda: float = 0.95,
-):
-    optimizer = optimizer_creator(learning_rate)
-    optimizer_params = optimizer.init(network_settings.params)
-    step_fn = jax.jit(step_fn_creator(network_settings, robot_shared_settings))
+    @classmethod
+    def init(
+        cls,
+        network_settings: NetworksSettings,
+        robot_shared_settings: RobotSharedData,
+        optimizer_creator: Callable[[float], optax.GradientTransformationExtraArgs],
+        step_fn_creator:Callable[[NetworksSettings, RobotSharedData], Callable],
+        num_envs: int = 1,
+        num_episodes: int = 1,
+        steps_per_episode: int = 1,
+        learning_rate: float = 1e-4,
+        gamma: float = 0.99,
+        gae_lambda: float = 0.95,
+    ):
+        optimizer = optimizer_creator(learning_rate)
+        optimizer_params = optimizer.init(network_settings.params)
+        step_fn = jax.jit(step_fn_creator(network_settings, robot_shared_settings))
 
-    return TrainingSettings(
-        network_settings,
-        num_episodes,
-        num_envs,
-        steps_per_episode,
-        gamma,
-        gae_lambda,
-        robot_shared_settings,
-        optimizer,
-        optimizer_params,
-        step_fn
-    )
+        return cls(
+            network_settings,
+            num_episodes,
+            num_envs,
+            steps_per_episode,
+            gamma,
+            gae_lambda,
+            robot_shared_settings,
+            optimizer,
+            optimizer_params,
+            step_fn
+        )
 
 @struct.dataclass
 class BatchedBuffer:
@@ -98,19 +142,20 @@ class BatchedBuffer:
     def is_full(self):
         return self.ptr >= self.num_steps
     
-def batched_buffer_create(settings: TrainingSettings):
-    num_envs = settings.num_envs
-    max_steps = settings.steps_per_episode +1
-  
-    return BatchedBuffer(
-        jnp.zeros((num_envs, max_steps, settings.network_settings.obs_size)),
-        jnp.zeros((num_envs, max_steps, settings.network_settings.action_size)),
-        jnp.zeros((num_envs, max_steps), dtype=jnp.float32),
-        jnp.zeros((num_envs, max_steps), dtype=jnp.float32),
-        jnp.zeros((num_envs,), dtype=jnp.int32),
-        jnp.zeros((num_envs,), dtype=jnp.bool),
-        jnp.zeros((num_envs,), dtype=jnp.bool),
-    )
+    @classmethod
+    def init(cls, settings: TrainingSettings):
+        num_envs = settings.num_envs
+        max_steps = settings.steps_per_episode +1
+    
+        return cls(
+            jnp.zeros((num_envs, max_steps, settings.network_settings.obs_size)),
+            jnp.zeros((num_envs, max_steps, settings.network_settings.action_size)),
+            jnp.zeros((num_envs, max_steps), dtype=jnp.float32),
+            jnp.zeros((num_envs, max_steps), dtype=jnp.float32),
+            jnp.zeros((num_envs,), dtype=jnp.int32),
+            jnp.zeros((num_envs,), dtype=jnp.bool),
+            jnp.zeros((num_envs,), dtype=jnp.bool),
+        )
 
 
 def push(
@@ -156,6 +201,7 @@ def push(
 
 def rollout_step(
     step_fn,
+    obs_stats: RunningStats,
     state: Dict[str, Any],
     obs_buffer: jax.Array,
     action_buffer: jax.Array,
@@ -182,7 +228,7 @@ def rollout_step(
 
         # executa o ambiente
         _state = {**_state, "rng": step_rng}  #atualiza o rng
-        _state, data = step_fn(_state)
+        _state, data = step_fn(_state, obs_stats)
 
         # adiciona o dado no buffer
         _obs_buffer, _action_buffer, _reward_buffer, _logprob_buffer, _ptr = push(
@@ -217,6 +263,7 @@ def rollout(
     settings: TrainingSettings,
     init_state: Dict[str, Any],
     buffer: BatchedBuffer,
+    obs_stats: RunningStats,
 ):
     # Match the structure of your 'state' dictionary exactly
     state_in_axes = {
@@ -231,10 +278,11 @@ def rollout(
         'obs': 0,
         'rng': 0,
         'step': 0,
-        'success_count':0
+        'success_count':0,
     }
+    state_out_axes = {**state_in_axes, 'obs_stats': 0}
     vmap_rollout_step = jax.vmap(
-        partial(rollout_step, settings.step_fn),
+        partial(rollout_step, settings.step_fn, obs_stats),
         in_axes=(
             state_in_axes,  # Arg 0: state (was Arg 1 in your version)
             0,               # Arg 1: obs_buffer
@@ -244,7 +292,7 @@ def rollout(
             0,               # Arg 5: ptr
             0,               # Arg 6: done_flag
             0,               # Arg 7: stop_flag
-        )
+        ),
     )
 
     def scan_fn(carry, _):
@@ -259,6 +307,7 @@ def rollout(
             buffer.done_flag,
             buffer.stop_flag
         )
+
         buffer = BatchedBuffer(obs_buffer, action_buffer, reward_buffer, logprob_buffer, ptr, done_flag, stop_flag)
         return (state, buffer), None
 
@@ -329,7 +378,7 @@ def ppo_loss(
     batch_returns,      #shape: (num_envs, max_steps)
     old_log_probs,      #shape: (num_envs, max_steps +1)
     clip_eps=0.2,
-    c1=0.2,
+    c1=0.1,
     c2=0.3,
     min_alpha_beta=1.1,
 ):
@@ -375,7 +424,8 @@ def ppo_loss(
     # entropy
     entropy = c2 * jnp.mean(beta_entropy(alpha, beta).sum(axis=2))
 
-    return policy_loss + value_loss - entropy
+    total_loss = policy_loss + value_loss - entropy
+    return total_loss, {"entropy": entropy, "policy_loss": policy_loss, "value_loss": value_loss}
 
 
 
@@ -405,23 +455,29 @@ def grad_metrics(grads, params):
 ##########################################################################
 
 
-def ppo_train(rng: jax.Array,settings: TrainingSettings):
+def ppo_train(rng: jax.Array, settings: TrainingSettings):
     """The complete, JIT-compiled training function."""
 
 
-    def _update_step(carry, _):
+    def _update_step(carry, update_idx):
         """This is the body of the scan, representing one full update."""
-        parameters, optim_state, rng = carry
+        parameters, optim_state, obs_stats, rng = carry
         rng, initial_state_rng, rollout_rng = jax.random.split(rng, 3)
 
         #estado inicial 
-        rng, initial_state = create_initial_state(initial_state_rng, settings)
+        progress = update_idx / settings.num_episodes
+        rng, initial_state = create_initial_state(initial_state_rng, progress, settings)
 
         # cria um buffer
-        buffer = batched_buffer_create(settings)
+        buffer = BatchedBuffer.init(settings)
 
         # Faz um rollout (usando a função vetorizada)
-        state, buffer= rollout(settings, initial_state,buffer)
+        state, buffer= rollout(settings, initial_state,buffer, obs_stats)
+
+        #atualiza as estatisticas considerando as novas observações
+        obs_stats = update_running_stats(obs_stats, buffer.obs_buffer)
+        #jax.debug.print("obs buffer {}", buffer.obs_buffer)
+        
 
         # Vetoriza a função GAE
         vmapped_gae = jax.vmap(
@@ -438,7 +494,6 @@ def ppo_train(rng: jax.Array,settings: TrainingSettings):
         )
 
 
-        
         # normaliza as vantagens, para prevenir problemas com os gradientes, com as recompensas ruidosas
         advantages_mean = jnp.mean(advantages)
         advantages_std = jnp.std(advantages)
@@ -463,11 +518,11 @@ def ppo_train(rng: jax.Array,settings: TrainingSettings):
             )
 
         # calcula os gradientes e atualiza os parametros
-        loss_val, grads = jax.value_and_grad(loss_fn)(parameters)
+        (loss_val, aux_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(parameters)
         updates, new_optim_state = settings.optimizer.update(grads, optim_state)
         new_parameters = optax.apply_updates(parameters, updates)
 
-        new_carry = (new_parameters, new_optim_state, rollout_rng)
+        new_carry = (new_parameters, new_optim_state, obs_stats, rollout_rng)
         grad_info = grad_metrics(grads, parameters)
 
         return new_carry, {
@@ -476,20 +531,21 @@ def ppo_train(rng: jax.Array,settings: TrainingSettings):
             "success_count": state["success_count"],
             "avg_reward": jnp.mean(buffer.reward_buffer, axis=0),
             **grad_info,
+            **aux_metrics,
         }
 
     # loop principal de trainamento, executado por lax.scan
+    stats = RunningStats.init((settings.network_settings.obs_size, ))
     final_carry, metrics = jax.lax.scan(
         _update_step,
-        (settings.network_settings.params, settings.optimizer_state, rng),
-        None,
-        length=settings.num_episodes,
+        (settings.network_settings.params, settings.optimizer_state, stats, rng),
+        jnp.arange(settings.num_episodes),
     )
 
     return final_carry, metrics
 
 
-def create_initial_state(rng: jax.Array, settings: TrainingSettings):
+def create_initial_state(rng: jax.Array, progress, settings: TrainingSettings):
     rng, rng1 = jax.random.split(rng)
 
     # Inicializa os estados para os ambientes em paralelo
@@ -501,7 +557,7 @@ def create_initial_state(rng: jax.Array, settings: TrainingSettings):
     batched_action = jnp.zeros((num_envs, settings.network_settings.action_size))
     batched_obs = jnp.zeros((num_envs, settings.network_settings.obs_size))
 
-    vmapped_get_goal = jax.vmap(partial(get_goal, settings.robot_shared_data))
+    vmapped_get_goal = jax.vmap(partial(get_goal, settings.robot_shared_data, progress))
     batched_goal = vmapped_get_goal(batched_rng)
 
     mjx_data = mjx.make_data(settings.robot_shared_data.mjx_model)

@@ -6,7 +6,7 @@ import jax.numpy as jnp
 import flax.linen as nn
 import matplotlib.pyplot as plt
 from jax import config
-from new_ppo import create_training_settings, ppo_train
+from new_ppo import TrainingSettings, ppo_train
 from etils import epath
 from robot import create_step, create_rsd
 from config import EnviromentConfig, RangeConfig, ResetConfig, RewardConfig
@@ -147,7 +147,7 @@ def create_networks(rng:jax.Array, obs_size:int, action_size:int):
 
 # --- Inicialização ---
 rng = jax.random.PRNGKey(42)
-rng, network_settings = create_networks(rng, obs_size=15*45, action_size=6)
+rng, network_settings = create_networks(rng, obs_size=15*39, action_size=6)
 
 
 robot_shared_data = create_rsd(
@@ -162,13 +162,13 @@ robot_shared_data = create_rsd(
 )
 
 
-settings = create_training_settings(
+settings = TrainingSettings.init(
     network_settings,
     robot_shared_data,
     optimizer_creator  = lambda lr: optax.adam(lr),
     step_fn_creator = create_step,
     num_envs= 500,
-    num_episodes=100,
+    num_episodes=300,
     steps_per_episode=30,
     learning_rate=5e-4
 )
@@ -179,7 +179,7 @@ settings = create_training_settings(
 #jax.config.update("jax_disable_jit", True)
 
 print("JIT compiling and starting training...")
-(final_params, final_optim_state, final_rng), metrics = ppo_train(rng, settings)
+(final_params, final_optim_state, final_stats, final_rng), metrics = ppo_train(rng, settings)
 
 
 avg_loss = jnp.mean(metrics["loss"][-20:])
@@ -195,6 +195,7 @@ grad_norm = metrics["grad_norm"]
 avg_success_count = jnp.mean(metrics["success_count"], axis=1)
 print(f"avg success_count: {avg_success_count}")
 
+entropy = metrics["entropy"]
 
 avg_ptr = jnp.mean(metrics["ptr"])
 print(f"avg ptr per episode: {avg_ptr}")
@@ -215,10 +216,10 @@ ax3.set_title("Gradient norm (Euclidian, L2)")
 ax3.set_xlabel("Update Step")
 ax3.set_ylabel("Norm")
 
-ax4.plot(avg_success_count)
-ax4.set_title("Average (across batches) success count")
+ax4.plot(entropy)
+ax4.set_title("Entropy")
 ax4.set_xlabel("Update Step")
-ax4.set_ylabel("Count")
+ax4.set_ylabel("Entropy value")
 
 
 plt.savefig(f"training_plots.png")

@@ -24,7 +24,7 @@ from mathutils import l1_l2_reward, exp_scale_reward, conv2jax_quat, cont_sample
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from new_ppo import NetworksSettings
+    from new_ppo import NetworksSettings, RunningStats
 
 
 @struct.dataclass
@@ -251,7 +251,30 @@ def check_done(
 
 
 #################################################################################################################
+def sample_config_coordinates_curriculum(
+    rsd: RobotSharedData, rng, config_name: str, progress: float
+):
+    """
+    Gera alvos que 'expandem' conforme o treino progride.
+    progress: valor de 0.0 a 1.0 (ex: update_atual / total_updates)
+    """
+    config_value = getattr(rsd.range_config, config_name)
+    
+    # 1. Pegamos a posição 'padrão' ou central do robô
+    # (Supondo que você tenha isso no rsd, ou use o centro do range)
+    center = (config_value[:, 0] + config_value[:, 1]) / 2.0
+    
+    # 2. Definimos o 'tamanho' do mundo atual baseado no progresso
+    # No início (progress=0), o mundo tem 10% do tamanho. No fim, 100%.
+    scale = jnp.maximum(0.1, progress) 
+    
+    low = center - (center - config_value[:, 0]) * scale
+    high = center + (config_value[:, 1] - center) * scale
 
+    samples = jax.random.uniform(rng, shape=(3,))
+    scaled_coord = low + (high - low) * samples
+
+    return {config_name + "_coordinates": scaled_coord}
 
 def sample_config_coordinates(
     rsd:RobotSharedData, rng, config_name: str
@@ -297,7 +320,7 @@ def sample_config_velocities(
 ##################################################################################################################
 
 
-def update_obs_history(data, obs_noise=0.0):
+def update_obs(data, obs_stats:RunningStats, obs_noise=0.0):
     def func(state):
         rng, rng1 = jax.random.split(state["rng"])
 
@@ -313,16 +336,23 @@ def update_obs_history(data, obs_noise=0.0):
             obs_processed += noise
 
         # Adiciona a nova observação no buffer, deslocando as outras observações e descartando a mais antiga
-        new_obs_history = (
+        new_obs = (
             jnp.roll(
                 state["obs"], obs_processed.size
             )  # desloca todo o array para a direita, obs_processd.size de distancia (circular)
             .at[: obs_processed.size]
             .set(obs_processed)  # adiciona os novos dados de observação
         )
-        new_state = {**state, "rng": rng1, "obs": new_obs_history}
 
-        return new_state, {**data, "obs": new_obs_history}
+        #normaliza a observação
+        std = jnp.sqrt(obs_stats.var + 1e-8)
+        norm_obs = (new_obs - obs_stats.mean) / std
+
+        #proteje a rede contra explosões no inicio
+        norm_obs = jnp.clip(norm_obs, -5.0, 5.0)
+    
+        new_state = {**state, "rng": rng1, "obs": norm_obs}
+        return new_state, {**data, "obs": norm_obs}
 
     return StateMonad(func)
 
@@ -336,9 +366,7 @@ def concat_obs_as_array(d: Dict[str, Any]) -> StateMonad:
         # Manually list keys to ensure order and handle scalars
         obs_list = [
             state["goal"]["goal_position_coordinates"],  # (3,)
-            state["goal"]["goal_position_velocities"],  # (3,)
             state["goal"]["goal_orientation_coordinates"],  # (3,)
-            state["goal"]["goal_orientation_velocities"],  # (3,)
             d["tool_position"],  # (3,)
             jnp.expand_dims(d["position_error"], axis=0),  # () -> (1,)
             d["orientation"],  # (4,)
@@ -349,7 +377,7 @@ def concat_obs_as_array(d: Dict[str, Any]) -> StateMonad:
             d["pose_dist"],  # (6,)
         ]
         obs_array = jnp.concatenate(obs_list)
-        # (3+3+3+3 + 3 + 1 + 4 + 1 + 6+6+6+6 = 45)
+        # (3+3+3+ 1 + 4 + 1 + 6+6+6+6 = 39)
 
         return state, {**d, "obs_array": obs_array}
 
@@ -367,12 +395,12 @@ def success_count(pdata):
 ###################################################################################################################
 
 
-def get_goal(rsd: RobotSharedData, rng):
+def get_goal(rsd: RobotSharedData, progress, rng):
     r1, r2, r3, r4 = jax.random.split(rng, 4)
     goals = {
-        **sample_config_coordinates(rsd, r1, "goal_position"),
+        **sample_config_coordinates_curriculum(rsd, r1, "goal_position", progress),
         **sample_config_velocities(rsd, r2, "goal_position"),
-        **sample_config_coordinates(rsd, r3,"goal_orientation"),
+        **sample_config_coordinates_curriculum(rsd, r3,"goal_orientation", progress),
         **sample_config_velocities(rsd, r4, "goal_orientation"),
     }
     return goals
@@ -384,7 +412,7 @@ def debug(pdata, name):
     return StateMonad(func)
 
 
-def obs_pipeline(rsd:RobotSharedData, env: StateMonad):
+def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningStats, env: StateMonad):
     return (
         env.bind(
             lambda pdata: StateMonad(
@@ -469,7 +497,7 @@ def obs_pipeline(rsd:RobotSharedData, env: StateMonad):
         )
         .bind(lambda pdata: concat_obs_as_array(pdata))
         .bind(
-            lambda pdata: update_obs_history(pdata, rsd.enviroment_config.obs_noise)
+            lambda pdata: update_obs(pdata, obs_stats, rsd.enviroment_config.obs_noise)
         )
         #.bind(lambda pdata: debug(pdata, "position_error"))
         #.bind(lambda pdata: debug(pdata, "orientation_error"))
@@ -608,7 +636,20 @@ def create_step(network_settings: NetworksSettings, robot_shared_data: RobotShar
             return state, data
         return StateMonad(fn)
     
-    def step_fn(state):
+    def normalize_obs_step(pdata: dict):
+        return StateMonad(
+            lambda state: (
+                state,
+                {
+                    **pdata,
+                    # 'obs' é o array concatenado que veio dos passos anteriores
+                    "obs": (pdata["obs"] - state["obs_stats"].mean) / 
+                        jnp.sqrt(state["obs_stats"].var + 1e-8)
+                }
+            )
+        )
+    
+    def step_fn(state, obs_stats: RunningStats, progress):
 
         # obtem uma ação pela observação anterior
         p = (get_action()
@@ -617,7 +658,7 @@ def create_step(network_settings: NetworksSettings, robot_shared_data: RobotShar
         )
 
         # obtem novas observações
-        p = obs_pipeline(robot_shared_data, p)
+        p = obs_pipeline(robot_shared_data, obs_stats, p)
 
         # de acordo com as observações obtem a recompensa
         p = reward_pipeline(robot_shared_data, p)
