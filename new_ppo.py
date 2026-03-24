@@ -6,12 +6,71 @@ import flax.linen as nn
 from flax import struct
 from enviroment import Data, State, StateMonad
 from functools import partial
-from typing import Dict, Any, cast
+from typing import Dict, Any, cast, Tuple, Callable
 from jax.scipy.special import gammaln, digamma
 from mathutils import cont_sample_beta, beta_entropy, shift_array
 from robot import RobotSharedData, get_goal
 from mujoco import mjx
 
+@struct.dataclass
+class NetworksSettings:
+    obs_size: int
+    action_size: int
+    actor: nn.Module
+    critic: nn.Module
+    params: Tuple[Any, Any]
+
+    @property
+    def actor_params(self):
+        return self.params[0]
+    
+    @property
+    def critic_params(self):
+        return self.params[1]
+    
+
+@struct.dataclass
+class TrainingSettings:
+    network_settings: NetworksSettings
+    num_episodes: int
+    num_envs: int
+    steps_per_episode: int
+    gamma: float
+    gae_lambda: float
+
+    robot_shared_data: RobotSharedData
+    optimizer: optax.GradientTransformationExtraArgs
+    optimizer_state: optax.OptState
+    step_fn: Callable
+
+def create_training_settings(
+    network_settings: NetworksSettings,
+    robot_shared_settings: RobotSharedData,
+    optimizer_creator: Callable[[float], optax.GradientTransformationExtraArgs],
+    step_fn_creator:Callable[[NetworksSettings, RobotSharedData]],
+    num_envs: int = 1,
+    num_episodes: int = 1,
+    steps_per_episode: int = 1,
+    learning_rate: float = 1e-4,
+    gamma: float = 0.99,
+    gae_lambda: float = 0.95,
+):
+    optimizer = optimizer_creator(learning_rate)
+    optimizer_params = optimizer.init(network_settings.params)
+    step_fn = jax.jit(step_fn_creator(network_settings, robot_shared_settings))
+
+    return TrainingSettings(
+        network_settings,
+        num_episodes,
+        num_envs,
+        steps_per_episode,
+        gamma,
+        gae_lambda,
+        robot_shared_settings,
+        optimizer,
+        optimizer_params,
+        step_fn
+    )
 
 @struct.dataclass
 class BatchedBuffer:
@@ -31,10 +90,13 @@ class BatchedBuffer:
         done_flag: {self.done_flag}"
 
 
-def batched_buffer_create(num_envs, max_steps, obs_shape, action_shape):
+def batched_buffer_create(settings: TrainingSettings):
+    num_envs = settings.num_envs
+    max_steps = settings.steps_per_episode
+  
     return BatchedBuffer(
-        jnp.zeros((num_envs, max_steps, *obs_shape)),
-        jnp.zeros((num_envs, max_steps, *action_shape)),
+        jnp.zeros((num_envs, max_steps, settings.network_settings.obs_size)),
+        jnp.zeros((num_envs, max_steps, settings.network_settings.action_size)),
         jnp.zeros((num_envs, max_steps), dtype=jnp.float32),
         jnp.zeros((num_envs, max_steps), dtype=jnp.float32),
         jnp.zeros((num_envs,), dtype=jnp.int32),
@@ -140,9 +202,8 @@ def rollout_step(
 
 
 def rollout(
-    step_fn,
+    settings: TrainingSettings,
     init_state: Dict[str, Any],
-    num_steps: int,
     buffer: BatchedBuffer,
 ):
     # Match the structure of your 'state' dictionary exactly
@@ -161,7 +222,7 @@ def rollout(
         'success_count':0
     }
     vmap_rollout_step = jax.vmap(
-        partial(rollout_step, step_fn),
+        partial(rollout_step, settings.step_fn),
         in_axes=(
             state_in_axes,  # Arg 0: state (was Arg 1 in your version)
             0,               # Arg 1: obs_buffer
@@ -185,68 +246,99 @@ def rollout(
             buffer.done_flag
         )
         buffer = BatchedBuffer(obs_buffer, action_buffer, reward_buffer, logprob_buffer, ptr, done_flag)
-         #debug
-        jax.debug.print("buffer:\n {}", buffer)
         return (state, buffer), None
 
     (final_state, final_buffer), _ = jax.lax.scan(
-        scan_fn, (init_state, buffer), None, length=num_steps
+        scan_fn, (init_state, buffer), None, length=settings.steps_per_episode
     )
     return final_state, final_buffer
 
 
 def general_advantage_estimator(
-    critic: nn.Module,
-    critic_params,
-    lam,
-    gamma,
-    obs_buffer: jax.Array,
+    settings: TrainingSettings,
+    obs_buffer: jax.Array,  # shape: (num_steps, *obs_shape)
     reward_buffer: jax.Array,
     ptr: jax.Array,
+    done_flag:jax.Array,
 ):
-    # garante que o checador de tipos não reclame
-    values = cast(jax.Array, critic.apply(critic_params, obs_buffer))
+    network_settings = settings.network_settings
+    lam = settings.gae_lambda
+    gamma = settings.gamma
 
-    # desloca para que os zeros não utilizados fiquem no começo
-    values = shift_array(values, ptr)
-    reward_buffer = shift_array(reward_buffer, ptr)
+    #num_steps
+    N = obs_buffer.shape[0]
 
-    # V(t) and V(t+1)
+    # obtem os "values" por meio do critico
+    values = network_settings.critic.apply(network_settings.critic_params, obs_buffer)  # (N,)
+    values = cast(jax.Array, values)
+
+    t = jnp.arange(N)
+
+    # mascara que marca os timesteps preenchidos
+    #valid_mask = [1, 1, ...,1, 0, 0, ..., 0]
+    valid_mask = (t < ptr).astype(jnp.float32)
+
+  
+    #done_mask = [0, 0, ..., 1, 0, 0, ..., 0]
+    done_mask = jnp.zeros((N,), dtype=jnp.float32)
+    done_mask = done_mask.at[jnp.maximum(ptr - 1, 0)].set(
+        jnp.where(done_flag, 1.0, 0.0)
+    )
+
+    # Transições (N-1)
     values_t = values[:-1]
     next_values = values[1:]
-    rewards = reward_buffer[:-1] # Usualmente alinham com values_t
+    rewards = reward_buffer[:-1]
 
-    def gae_scan_fn(gae_next, step_inputs):
-        reward, value, next_value = step_inputs
-        
-        # delta_t = r_t + gamma * V(s_{t+1}) - V(s_t)
-        delta = reward + gamma * next_value - value
-        gae = delta + gamma * lam * gae_next
+    valid_t = valid_mask[:-1]
+    valid_next = valid_mask[1:]
+    done_t = done_mask[:-1]
+
+    # --- stop propagation correctly ---
+    not_done = (1.0 - done_t) * valid_next
+
+    # --- bootstrap (critical for truncation) ---
+    # if done → no bootstrap
+    # if not done → bootstrap from V(s_T)
+    bootstrap_value = jnp.where(
+        done_t,
+        0.0,
+        values[jnp.minimum(ptr, N - 1)]
+    )
+
+    def gae_scan_fn(gae_next, inputs):
+        reward, value, next_value, nd = inputs
+
+        delta = reward + gamma * next_value * nd - value
+        gae = delta + gamma * lam * nd * gae_next
 
         return gae, gae
 
-    # entradas para scan (T-1 steps)
-    inputs = (rewards, values_t, next_values)
+    inputs = (rewards, values_t, next_values, not_done)
 
     _, advantages = jax.lax.scan(
-        gae_scan_fn, 
-        jnp.zeros((), dtype=jnp.float32), 
-        inputs, 
+        gae_scan_fn,
+        bootstrap_value,
+        inputs,
         reverse=True
     )
 
     returns = advantages + values_t
+
+    # --- mask out padding ---
+    advantages = advantages * valid_t
+    returns = returns * valid_t
+
     return advantages, returns
 
 
 def ppo_loss(
-    params,
-    rsd: RobotSharedData,
-    batch_obs,
-    batch_actions,
-    batch_advantages,
-    batch_returns,
-    old_log_probs,
+    settings: TrainingSettings,
+    batch_obs,          #shape: (num_envs, max_steps, *obs_shape)
+    batch_actions,      #shape: (num_envs, max_steps, *action_shape)
+    batch_advantages,   #shape: (num_envs, max_steps - 1)
+    batch_returns,      #shape: (num_envs, max_steps - 1)
+    old_log_probs,      #shape: (num_envs, max_steps)
     clip_eps=0.2,
     c1=0.2,
     c2=0.1,
@@ -255,42 +347,45 @@ def ppo_loss(
     """
     Calculates the PPO loss.
     """
+    batch_advantages = jax.lax.stop_gradient(batch_advantages)
+    batch_returns = jax.lax.stop_gradient(batch_returns)
+
     # dropa 1 step, por conta que os dados do gae tem o shift de 1 para conseguir valores futuros
-    batch_obs = batch_obs[:, :-1, :]
-    batch_actions = batch_actions[:, :-1, :]
-    old_log_probs = old_log_probs[:, :-1]
+    batch_obs = jax.lax.stop_gradient(batch_obs[:, :-1, :])
+    batch_actions = jax.lax.stop_gradient(batch_actions[:, :-1, :])
+    old_log_probs = jax.lax.stop_gradient(old_log_probs[:, :-1])
 
-    logits = rsd.actor.apply(params[0], batch_obs)
-    logits = cast(jax.Array, logits)
-    values = rsd.critic.apply(params[1], batch_obs)
+    # forward 
+    networks = settings.network_settings
+    logits = cast(jax.Array, networks.actor.apply(networks.actor_params, batch_obs))
+    values = networks.critic.apply(networks.critic_params, batch_obs)
 
-    # Map actions -> their log probabilities under the current policy
-    alpha = jnp.clip(jax.nn.softplus(logits), min_alpha_beta, 1000.0)
-    beta = jnp.clip(jax.nn.softplus(1.0 - logits), min_alpha_beta, 1000.0)
+    # parametrização
+    alpha_logits, beta_logits = jnp.split(logits, 2, axis=-1)
+    alpha = jax.nn.softplus(alpha_logits) + min_alpha_beta
+    beta  = jax.nn.softplus(beta_logits) + min_alpha_beta
 
-    # Compute log probability of the *stored* actions
-    clipped_batch_actions = jnp.clip(batch_actions, 1e-6, 1.0 - 1e-6)
-    logprobs = jax.scipy.stats.beta.logpdf(clipped_batch_actions, alpha, beta)
-    logprobs = jnp.sum(logprobs, axis=2)  # (batch, max_steps)
+    # logprobs
+    clipped_actions = jnp.clip(batch_actions, 1e-6, 1 - 1e-6)
+    logprobs = jax.scipy.stats.beta.logpdf(clipped_actions, alpha, beta)
+    logprobs = jnp.sum(logprobs, axis=2)
 
+    # ratio
     ratio = jnp.exp(logprobs - old_log_probs)
-  
-    # Clipped surrogate objective
+
+    # PPO objective
     unclipped = ratio * batch_advantages
-    clipped = jnp.clip(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * batch_advantages
+    clipped = jnp.clip(ratio, 1 - clip_eps, 1 + clip_eps) * batch_advantages
     policy_loss = -jnp.mean(jnp.minimum(unclipped, clipped))
 
-    # Value loss (MSE between returns and predicted values)
+    # value loss
     value_loss = c1 * jnp.mean((batch_returns - values) ** 2)
 
-    # Entropy bonus
-    alpha = jnp.clip(jax.nn.softplus(logits), min_alpha_beta, 1000.0)
-    beta = jnp.clip(jax.nn.softplus(1.0 - logits), min_alpha_beta, 1000.0)
+    # entropy
+    entropy = c2 * jnp.mean(beta_entropy(alpha, beta).sum(axis=2))
 
-    entropy = c2 * jnp.mean(beta_entropy(alpha, beta).sum(axis=1))
+    return policy_loss + value_loss - entropy
 
-    total_loss = policy_loss + value_loss - entropy
-    return total_loss
 
 
 ##########################################################################
@@ -319,98 +414,65 @@ def grad_metrics(grads, params):
 ##########################################################################
 
 
-def ppo_train(
-    rsd: RobotSharedData,
-    params,
-    step_fn,
-    optimizer,
-    optim_state,
-    rng,
-    num_envs,
-    episodes: int,
-    obs_dim,
-    action_dim,
-    max_steps_per_episode: int,
-    gamma,
-    lam,
-):
+def ppo_train(rng: jax.Array,settings: TrainingSettings):
     """The complete, JIT-compiled training function."""
 
-    
-    
 
     def _update_step(carry, _):
         """This is the body of the scan, representing one full update."""
         parameters, optim_state, rng = carry
-        rng, rollout_rng, rng_loss = jax.random.split(rng, 3)
+        rng, initial_state_rng, rollout_rng = jax.random.split(rng, 3)
 
         #estado inicial 
-        rng, initial_state = create_initial_state(rsd, rng, num_envs, obs_dim, action_dim)
+        rng, initial_state = create_initial_state(initial_state_rng, settings)
 
         # cria um buffer
-        buffer = batched_buffer_create(num_envs, max_steps_per_episode, rsd.obs_shape, rsd.action_shape)
+        buffer = batched_buffer_create(settings)
 
         # Faz um rollout (usando a função vetorizada)
-        state, buffer= rollout(
-            step_fn, initial_state, max_steps_per_episode, buffer
-        )
+        state, buffer= rollout(settings, initial_state,buffer)
 
         # Vetoriza a função GAE
         vmapped_gae = jax.vmap(
-            partial(general_advantage_estimator, rsd.critic, parameters[1], lam, gamma),
-            in_axes=(0, 0, 0)
+            partial(general_advantage_estimator, settings),
+            in_axes=(0, 0, 0, 0)
         )
 
         # calcula as vantagens (usando a função vetorizada)
         advantages, returns = vmapped_gae(
             buffer.obs_buffer,
             buffer.reward_buffer,
-            buffer.ptr
+            buffer.ptr,
+            buffer.done_flag
         )
 
 
-        #bloqueia o calculo de gradientes para as vantagens
-        advantages = jax.lax.stop_gradient(advantages)
-
+        
         # normaliza as vantagens, para prevenir problemas com os gradientes, com as recompensas ruidosas
         advantages_mean = jnp.mean(advantages)
         advantages_std = jnp.std(advantages)
         advantages = (advantages - advantages_mean) / (advantages_std + 1e-8)
         advantages_std = jnp.maximum(advantages_std, 1e-3)
 
-        # Prepara o batch para update
-        # Aplica um flatten nas dimensões (num_envs, num_steps) em um único batch
-        def flatten(x):
-            return x.reshape(-1, *x.shape[2:])
+        #bloqueia o calculo de gradientes para as vantagens
+        advantages_std = jax.lax.stop_gradient(advantages_std)
+        returns = jax.lax.stop_gradient(returns)
 
-        batch_obs = flatten(buffer.obs_buffer)
-        batch_actions = flatten(buffer.action_buffer)
-        batch_old_log_probs = flatten(buffer.logprob_buffer)
-        batch_advantages = flatten(advantages)
-        batch_returns = flatten(returns)
+
 
         def loss_fn(par):
             return ppo_loss(
-                par,
-                rsd,
+                settings,
                 buffer.obs_buffer,
                 buffer.action_buffer,
-                advantages,
+                advantages_std,
                 returns,
                 buffer.logprob_buffer,
             )
 
         # calcula os gradientes e atualiza os parametros
         loss_val, grads = jax.value_and_grad(loss_fn)(parameters)
-
-        #debug
-        leaves = jax.tree_util.tree_leaves(grads)
-        grad_norm = jnp.sqrt(sum([jnp.sum(jnp.square(g)) for g in leaves]))
-
-        jax.debug.print("loss = {}", loss_val)
-        jax.debug.print("grad_norm = {}", grad_norm)
-
-        updates, new_optim_state = optimizer.update(grads, optim_state)
+        updates, new_optim_state = settings.optimizer.update(grads, optim_state)
         new_parameters = optax.apply_updates(parameters, updates)
 
         new_carry = (new_parameters, new_optim_state, rollout_rng)
@@ -418,8 +480,8 @@ def ppo_train(
 
         return new_carry, {
             "loss": loss_val,
-            "last_ptr": buffer.ptr,
-            "success_count": jnp.mean(state["success_count"]),
+            "ptr": buffer.ptr,
+            "success_count": state["success_count"],
             "avg_reward": jnp.mean(buffer.reward_buffer, axis=0),
             **grad_info,
         }
@@ -427,28 +489,30 @@ def ppo_train(
     # loop principal de trainamento, executado por lax.scan
     final_carry, metrics = jax.lax.scan(
         _update_step,
-        (params, optim_state, rng),
+        (settings.network_settings.params, settings.optimizer_state, rng),
         None,
-        length=int(episodes),
+        length=settings.num_episodes,
     )
 
     return final_carry, metrics
 
 
-def create_initial_state(rsd: RobotSharedData, rng, num_envs, obs_dim, action_dim):
+def create_initial_state(rng: jax.Array, settings: TrainingSettings):
     rng, rng1 = jax.random.split(rng)
+
     # Inicializa os estados para os ambientes em paralelo
     # (num_envs, features_dim)
+    num_envs = settings.num_envs
     batched_steps = jnp.zeros((num_envs,))
     batched_success_count = jnp.zeros((num_envs,))
     batched_rng = jax.random.split(rng, num_envs)
-    batched_action = jnp.zeros((num_envs, action_dim))
-    batched_obs = jnp.zeros((num_envs, obs_dim))
+    batched_action = jnp.zeros((num_envs, settings.network_settings.action_size))
+    batched_obs = jnp.zeros((num_envs, settings.network_settings.obs_size))
 
-    vmapped_get_goal = jax.vmap(partial(get_goal, rsd))
+    vmapped_get_goal = jax.vmap(partial(get_goal, settings.robot_shared_data))
     batched_goal = vmapped_get_goal(batched_rng)
 
-    mjx_data = mjx.make_data(rsd.mjx_model)
+    mjx_data = mjx.make_data(settings.robot_shared_data.mjx_model)
     batched_mjx_data = jax.tree_util.tree_map(
         lambda x: jax.numpy.repeat(x[None], num_envs, axis=0),
         mjx_data
@@ -465,3 +529,4 @@ def create_initial_state(rsd: RobotSharedData, rng, num_envs, obs_dim, action_di
         "success_count":batched_success_count, 
     }
    
+

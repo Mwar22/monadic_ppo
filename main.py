@@ -6,7 +6,8 @@ import flax.linen as nn
 import matplotlib.pyplot as plt
 from jax import config
 from enviroment import StateMonad, Data, State, Action
-from new_ppo import ppo_train, create_initial_state
+from new_ppo import TrainingSettings, NetworksSettings
+from new_ppo import create_training_settings, ppo_train, create_initial_state
 from typing import Tuple, Any
 from etils import epath
 from robot import create_step, create_rsd, RobotSharedData
@@ -132,40 +133,26 @@ print(f"jax_enable_x64: {jax.config.read('jax_enable_x64')}")
 
 #env_states = {"rng":rng, "step":0, "goal":None, "obs_history":}
 #######################################################################################
-# --- Hyperparameters ---
-NUM_EPISODES = 1#1000
-NUM_ENVS = 2
-STEPS_PER_EPISODE = 2
-LEARNING_RATE = 10e-4
-GAMMA = 0.99
-GAE_LAMBDA = 0.95
-ACTION_DIM = 6
-OBS_DIM = 15 * 45
+
+def create_networks(rng:jax.Array, obs_size:int, action_size:int):
+    rng, rng_actor, rng_critic = jax.random.split(rng, 3)
+    dummy_obs= jnp.zeros((1, obs_size)) 
+
+    actor = Actor(action_size, discrete=True)
+    critic = Critic()
+    params = (
+        actor.init(rng_actor, dummy_obs),
+        critic.init(rng_critic, dummy_obs),
+    )
+    return rng, NetworksSettings(obs_size, action_size, actor, critic, params)
+
 
 # --- Inicialização ---
 rng = jax.random.PRNGKey(42)
-rng, policy_rng, critic_rng, env_rng = jax.random.split(rng, 4)
-
-ARM_JOINTS = [
-    "junta1",
-    "junta2",
-    "junta3",
-    "junta4",
-    "junta5",
-    "junta6"
-]
+rng, network_settings = create_networks(rng, obs_size=15*45, action_size=6)
 
 
-# Inicializa os modelos
-actor = Actor(action_dim=ACTION_DIM, discrete=True)
-critic = Critic()
-dummy_obs_single = jnp.zeros((1, 15 * 45))
-params = (
-    actor.init(policy_rng, dummy_obs_single),
-    critic.init(critic_rng, dummy_obs_single),
-)
-
-rsd = create_rsd(
+robot_shared_data = create_rsd(
     epath.Path("model/joystick_env.xml"),
     epath.Path("model"),
     epath.Path("model/meshes"),
@@ -173,41 +160,27 @@ rsd = create_rsd(
     RewardConfig(),
     RangeConfig(),
     ResetConfig(),
-    ARM_JOINTS,
-    actor,
-    critic,
-    (15 * 45,),
-    (ACTION_DIM,)
+    ["junta1", "junta2", "junta3", "junta4","junta5", "junta6"]
 )
 
-step_jit = jax.jit(create_step(rsd, params[0]))
 
-
-# Inicializa o otimizador
-optimizer = optax.adam(LEARNING_RATE)
-optim_state = optimizer.init(params)
+settings = create_training_settings(
+    network_settings,
+    robot_shared_data,
+    optimizer_creator  = lambda lr: optax.adam(lr),
+    step_fn_creator = create_step,
+    num_envs= 128,
+    num_episodes=300,
+    steps_per_episode=64
+)
 
 
 
 # --- Executa o treinamento ---
-jax.config.update("jax_disable_jit", True)
+#jax.config.update("jax_disable_jit", True)
 
 print("JIT compiling and starting training...")
-(final_params, final_optim_state, final_rng), metrics = ppo_train(
-    rsd,
-    params,
-    step_jit,
-    optimizer,
-    optim_state,
-    rng,
-    NUM_ENVS,
-    NUM_EPISODES,
-    OBS_DIM,
-    ACTION_DIM,
-    STEPS_PER_EPISODE,
-    GAMMA,
-    GAE_LAMBDA
-)
+(final_params, final_optim_state, final_rng), metrics = ppo_train(rng, settings)
 
 
 avg_loss = jnp.mean(metrics["loss"][-20:])
@@ -215,16 +188,17 @@ print(f" Training finished! Average loss of last 20 steps: {avg_loss:.4f}")
 
 # plotagem dos dados
 avg_rewards_per_update = metrics["avg_reward"]
-avg_episode_rewards = jnp.sum(avg_rewards_per_update, axis=1)
+avg_episode_rewards = jnp.mean(avg_rewards_per_update, axis=1)
 print(f"min avg reward: {jnp.min(avg_episode_rewards)}")
 print(f"max avg reward: {jnp.max(avg_episode_rewards)}")
 
 grad_norm = metrics["grad_norm"]
-avg_success_count = metrics["success_count"]
-print(f"success_count shape: {avg_success_count.shape}")
+avg_success_count = jnp.mean(metrics["success_count"], axis=1)
+print(f"avg success_count: {avg_success_count}")
 
-print(f"last ptr: {metrics["last_ptr"]}")
 
+avg_ptr = jnp.mean(metrics["ptr"])
+print(f"avg ptr per episode: {avg_ptr}")
 
 fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(10, 8), tight_layout=True)
 ax1.plot(metrics["loss"])
@@ -251,6 +225,7 @@ ax4.set_ylabel("Count")
 plt.savefig(f"training_plots_{activation_str}.png")
 print("\nTraining plots saved to training_plots.png")
 
+"""
 import pandas as pd
 
 df = pd.DataFrame({
@@ -261,4 +236,5 @@ df = pd.DataFrame({
     "success_count": avg_success_count
 })
 df.to_csv(f"l1_{activation_str}.csv", index=False)
+"""
 print("Done!")

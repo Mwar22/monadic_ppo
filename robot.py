@@ -20,7 +20,7 @@ from typing import Any, Dict, Tuple, List, cast
 from config import ResetConfig, RangeConfig, RewardConfig, EnviromentConfig
 from enviroment import StateMonad
 from mathutils import l1_l2_reward, exp_scale_reward, conv2jax_quat
-from new_ppo import cont_sample_beta
+from new_ppo import NetworksSettings, cont_sample_beta
 
 
 @struct.dataclass
@@ -46,13 +46,6 @@ class RobotSharedData:
     range_config: RangeConfig
     reset_config: ResetConfig
     
-    # todos os robôs compartilham actor e critic
-    actor: nn.Module
-    critic: nn.Module
-
-    obs_shape: Tuple[Any]
-    action_shape: Tuple[Any]
-
 
 def create_rsd(
     xml_path: epath.Path,
@@ -62,11 +55,7 @@ def create_rsd(
     reward_config: RewardConfig,
     range_config: RangeConfig,
     reset_config: ResetConfig,
-    arm_joints: List[str],
-    actor: nn.Module,
-    critic: nn.Module,
-    obs_shape: Tuple[Any],
-    action_shape: Tuple[Any]
+    arm_joints: List[str]
 ):
     """
     Método fábrica para o ambiente
@@ -140,6 +129,7 @@ def create_rsd(
     min_qpos_rnd, max_qpos_rnd = calculate_joint_span(reset_config.rnd_range)
     min_qpos_clp, max_qpos_clp = calculate_joint_span(reset_config.clip_range)
 
+
     return RobotSharedData(
         mjx_model,
         mj_model,
@@ -160,11 +150,7 @@ def create_rsd(
         enviroment_config,
         reward_config,
         range_config,
-        reset_config,
-        actor,
-        critic,
-        obs_shape,
-        action_shape
+        reset_config
     )
 
 
@@ -481,8 +467,8 @@ def obs_pipeline(rsd:RobotSharedData, env: StateMonad):
         .bind(
             lambda pdata: update_obs_history(pdata, rsd.enviroment_config.obs_noise)
         )
-        .bind(lambda pdata: debug(pdata, "position_error"))
-        .bind(lambda pdata: debug(pdata, "orientation_error"))
+        #.bind(lambda pdata: debug(pdata, "position_error"))
+        #.bind(lambda pdata: debug(pdata, "orientation_error"))
     )
 
 
@@ -493,8 +479,7 @@ def reward_pipeline(rsd: RobotSharedData, env: StateMonad):
         env.map(
             lambda pdata: {
                 **pdata,
-                "reward": reward_config.position_error_penalty
-                * pdata["position_error"],
+                "reward": reward_config.position_error_penalty * pdata["position_error"],
             }
         )
         # penalidade (custo) por erro de orientação
@@ -537,16 +522,28 @@ def reward_pipeline(rsd: RobotSharedData, env: StateMonad):
                 ),
             }
         )
+
+        # calcula o valor para a tolerância de erro a ser aceita. Aqui seguindo uma exponencial inversa de acordo com o passo atual
+        .bind(
+            lambda pdata: StateMonad(
+                lambda state: (
+                    state,
+                    {
+                        **pdata,
+                        "err_tol": exp_scale_reward(reward_config.start_err_tol, reward_config.tracking_sigma, state["step"])
+                    }
+                )
+            )
+        )
         # penalidade por terminação
         .map(
             lambda pdata: {
                 **pdata,
                 # checa se houve sucesso (atingiu o alvo)
-                "success": (pdata["position_error"] < 0.0001)
-                & (pdata["orientation_error"] < 0.01),
+                "success": (pdata["position_error"] < pdata["err_tol"]) & (pdata["orientation_error"] < pdata["err_tol"]),
+
                 # checa se atingiu o limite das juntas
-                "failure": jnp.any(pdata["joint_angles"] < rsd.lowers)
-                | jnp.any(pdata["joint_angles"] > rsd.uppers),
+                "failure": jnp.any(pdata["joint_angles"] < rsd.lowers) | jnp.any(pdata["joint_angles"] > rsd.uppers),
             }
         )
         .bind(success_count)
@@ -558,9 +555,7 @@ def reward_pipeline(rsd: RobotSharedData, env: StateMonad):
                         **pdata,
                         # aplica a correção baseado nas recompensas e penalidades combinados
                         "reward": pdata["reward"]
-                        + pdata["success"]
-                        * reward_config.success_reward
-                        * (state["step"] < 500)
+                        + pdata["success"] * reward_config.success_reward * (state["step"] < 500)
                         + pdata["failure"] * reward_config.failure_penalty,
                         # se atingiu o sucesso ou houve uma falha, termina o episódio
                         "done": pdata["success"] | pdata["failure"],
@@ -574,12 +569,12 @@ def reward_pipeline(rsd: RobotSharedData, env: StateMonad):
                 "reward": jnp.clip(pdata["reward"], -10000.0, 10000.0),
             }
         )
-        .bind(lambda pdata: debug(pdata, "reward"))
+        #.bind(lambda pdata: debug(pdata, "reward"))
     )
 
 
 ####################################################################################################################
-def create_step(rsd: RobotSharedData, actor_params):
+def create_step(network_settings: NetworksSettings, robot_shared_data: RobotSharedData):
     """
     state.keys() = ["rng", "step", "goal", "obs_history", "action", "mjx_data"]
     """
@@ -590,16 +585,16 @@ def create_step(rsd: RobotSharedData, actor_params):
             last_obs = state["obs"]
             rng1, rng2 = jax.random.split(state["rng"])
 
-            output = rsd.actor.apply(actor_params, last_obs)
+            output = network_settings.actor.apply(network_settings.actor_params, last_obs)
             output = cast(jax.Array, output)
             action_value, logprob = cont_sample_beta(output, rng1)
 
-            ogc = state["goal"]["goal_orientation_coordinates"]
-            opc = state["goal"]["goal_position_coordinates"]
+            #ogc = state["goal"]["goal_orientation_coordinates"]
+            #opc = state["goal"]["goal_position_coordinates"]
 
-            jax.debug.print("goal position coord = {}", opc)
-            jax.debug.print("goal orientation coord = {}", ogc)
-            jax.debug.print("action_value = {}", action_value)
+            #jax.debug.print("goal position coord = {}", opc)
+            #jax.debug.print("goal orientation coord = {}", ogc)
+            #jax.debug.print("action_value = {}", action_value)
             
             new_state = {**state, "rng": rng2, "action": action_value}
             return new_state, {"action": action_value, "logprob": logprob}
@@ -611,21 +606,20 @@ def create_step(rsd: RobotSharedData, actor_params):
             action_value_action = 2.0 * pdata["action"]- 1.0
 
             # configura novos alvos para os motores, de acordo com a ação  selecionada a partir da posição atual
-            current_pos = qpos(rsd, state["mjx_data"])
-            motor_targets = current_pos + action_value_action * rsd.enviroment_config.action_scale
+            current_pos = qpos(robot_shared_data, state["mjx_data"])
+            motor_targets = current_pos + action_value_action * robot_shared_data.enviroment_config.action_scale
 
-            jax.debug.print("motor_targets = {}", motor_targets)
             # para evitar que os limites de junta do robô sejam desrespeitados
-            return state, {**pdata, "motor_targets":jnp.clip(motor_targets, rsd.lowers, rsd.uppers)}
+            return state, {**pdata, "motor_targets":jnp.clip(motor_targets, robot_shared_data.lowers, robot_shared_data.uppers)}
         return StateMonad(fn)
 
     def mujoco_step(pdata):
         def fn(state):
             mjx_data = mjx_base.mjx_step(
-                rsd.mjx_model,
+                robot_shared_data.mjx_model,
                 state["mjx_data"],
                 pdata["motor_targets"],
-                rsd.enviroment_config.n_substeps,
+                robot_shared_data.enviroment_config.n_substeps,
             )
             state = {**state, "mjx_data": mjx_data}
             return state , pdata
@@ -653,10 +647,10 @@ def create_step(rsd: RobotSharedData, actor_params):
         )
 
         # obtem novas observações
-        p = obs_pipeline(rsd, p)
+        p = obs_pipeline(robot_shared_data, p)
 
         # de acordo com as observações obtem a recompensa
-        p = reward_pipeline(rsd, p)
+        p = reward_pipeline(robot_shared_data, p)
 
         # dá a forma final aos valores de retorno
         p = p.bind(shape_return)
