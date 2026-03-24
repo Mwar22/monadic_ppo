@@ -557,12 +557,13 @@ def reward_pipeline(rsd: RobotSharedData, env: StateMonad):
                     state,
                     {
                         **pdata,
-                        # aplica a correção baseado nas recompensas e penalidades combinados
-                        "reward": pdata["reward"]
-                        + pdata["success"] * reward_config.success_reward * (state["step"] < 500)
-                        + pdata["failure"] * reward_config.failure_penalty,
                         # se atingiu o sucesso ou houve uma falha, termina o episódio
                         "done": pdata["success"] | pdata["failure"],
+                        
+                        # aplica a correção baseado nas recompensas e penalidades combinados
+                        "reward": pdata["reward"]
+                        + pdata["success"] * reward_config.success_reward
+                        + pdata["failure"] * reward_config.failure_penalty,
                     },
                 )
             )
@@ -593,12 +594,6 @@ def create_step(network_settings: NetworksSettings, robot_shared_data: RobotShar
             output = cast(jax.Array, output)
             action_value, logprob = cont_sample_beta(output, rng1)
 
-            #ogc = state["goal"]["goal_orientation_coordinates"]
-            #opc = state["goal"]["goal_position_coordinates"]
-
-            #jax.debug.print("goal position coord = {}", opc)
-            #jax.debug.print("goal orientation coord = {}", ogc)
-            #jax.debug.print("action_value = {}", action_value)
             
             new_state = {**state, "rng": rng2, "action": action_value}
             return new_state, {"action": action_value, "logprob": logprob}

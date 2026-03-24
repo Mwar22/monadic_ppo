@@ -73,12 +73,13 @@ def create_training_settings(
 
 @struct.dataclass
 class BatchedBuffer:
-    obs_buffer: jax.Array       # (num_envs, max_steps, *obs_shape)
-    action_buffer: jax.Array    # (num_envs, max_steps, *action_shape)
-    reward_buffer: jax.Array    # (num_envs, max_steps)
-    logprob_buffer: jax.Array   # (num_envs, max_steps)
+    obs_buffer: jax.Array       # (num_envs, max_steps +1, *obs_shape)
+    action_buffer: jax.Array    # (num_envs, max_steps +1, *action_shape)
+    reward_buffer: jax.Array    # (num_envs, max_steps +1)
+    logprob_buffer: jax.Array   # (num_envs, max_steps +1)
     ptr: jax.Array  # (num_envs,)
-    done_flag: jax.Array  # (num_envs,)
+    done_flag: jax.Array # (num_envs,)  se atingiu o alvo ou colidiu/ultrapassou os limites
+    stop_flag: jax.Array # (num_envs,)  para parar com o rollout. True se done_flag estiver true ou o buffer estiver cheio
 
     def __str__(self):
         return f"obs_buffer: {self.obs_buffer}\n \
@@ -86,12 +87,20 @@ class BatchedBuffer:
         reward_buffer: {self.reward_buffer}\n \
         logprob_buffer: {self.logprob_buffer}\n \
         ptr: {self.ptr}\n \
-        done_flag: {self.done_flag}"
-
-
+        done_flag: {self.done_flag} \
+        stop_flag: {self.done_flag}"
+    
+    @property
+    def num_steps(self):
+        return self.reward_buffer.shape[1]
+    
+    @property
+    def is_full(self):
+        return self.ptr >= self.num_steps
+    
 def batched_buffer_create(settings: TrainingSettings):
     num_envs = settings.num_envs
-    max_steps = settings.steps_per_episode
+    max_steps = settings.steps_per_episode +1
   
     return BatchedBuffer(
         jnp.zeros((num_envs, max_steps, settings.network_settings.obs_size)),
@@ -99,6 +108,7 @@ def batched_buffer_create(settings: TrainingSettings):
         jnp.zeros((num_envs, max_steps), dtype=jnp.float32),
         jnp.zeros((num_envs, max_steps), dtype=jnp.float32),
         jnp.zeros((num_envs,), dtype=jnp.int32),
+        jnp.zeros((num_envs,), dtype=jnp.bool),
         jnp.zeros((num_envs,), dtype=jnp.bool),
     )
 
@@ -153,6 +163,7 @@ def rollout_step(
     logprob_buffer: jax.Array,
     ptr: jax.Array,
     done_flag: jax.Array,
+    stop_flag: jax.Array,
 ):
     """
     Dá um step de rollout para um único ambiente
@@ -164,39 +175,41 @@ def rollout_step(
         Pipeline de ajuste de objetivo, tomada de ação pelo agente, coleta de recompensas e formação do espaço de observação.
     """
 
-    # Caso done_flag esteja como False
+    # Caso stop_flag esteja como False
     def do_step(carry):
-        state, obs_buffer, action_buffer, reward_buffer, logprob_buffer, ptr, done_flag = carry
-        rng, step_rng = jax.random.split(state["rng"])
+        _state, _obs_buffer, _action_buffer, _reward_buffer, _logprob_buffer, _ptr, _done_flag, _stop_flag = carry
+        rng, step_rng = jax.random.split(_state["rng"])
 
         # executa o ambiente
-        state = {**state, "rng": step_rng}  #atualiza o rng
-        new_state, data = step_fn(state)
+        _state = {**_state, "rng": step_rng}  #atualiza o rng
+        _state, data = step_fn(_state)
 
         # adiciona o dado no buffer
-        obs_buffer, action_buffer, reward_buffer, logprob_buffer, ptr = push(
-            obs_buffer,
-            action_buffer,
-            reward_buffer,
-            logprob_buffer,
+        _obs_buffer, _action_buffer, _reward_buffer, _logprob_buffer, _ptr = push(
+            _obs_buffer,
+            _action_buffer,
+            _reward_buffer,
+            _logprob_buffer,
             data["obs"],
             data["action"],
             data["reward"],
             data["logprob"],
-            ptr
+            _ptr
         )
 
         # faz o update do rng
-        new_state["rng"] = rng
-        done_flag = data["done"] > 0.5
-        return new_state, obs_buffer, action_buffer, reward_buffer, logprob_buffer, ptr, done_flag
+        _state["rng"] = rng
+        _done_flag = data["done"] > 0.5 
+        _stop_flag =  _done_flag | _state["step"] >= _reward_buffer.shape[1]  # reward_buffer.shape[1] = num_steps
 
-    # Caso done_flag esteja como True
+        return _state, _obs_buffer, _action_buffer, _reward_buffer, _logprob_buffer, _ptr, _done_flag, _stop_flag
+
+    # Caso stop_flag esteja como True
     def no_step(carry):  #
         return carry
 
     return jax.lax.cond(
-        done_flag, no_step, do_step, (state, obs_buffer, action_buffer, reward_buffer, logprob_buffer, ptr, done_flag)
+        stop_flag, no_step, do_step, (state, obs_buffer, action_buffer, reward_buffer, logprob_buffer, ptr, done_flag, stop_flag)
     )
 
 
@@ -229,22 +242,24 @@ def rollout(
             0,               # Arg 3: reward_buffer
             0,               # Arg 4: logprob_buffer
             0,               # Arg 5: ptr
-            0                # Arg 6: done_flag
+            0,               # Arg 6: done_flag
+            0,               # Arg 7: stop_flag
         )
     )
 
     def scan_fn(carry, _):
         state, buffer = carry
-        state, obs_buffer, action_buffer, reward_buffer, logprob_buffer, ptr, done_flag = vmap_rollout_step(
+        state, obs_buffer, action_buffer, reward_buffer, logprob_buffer, ptr, done_flag, stop_flag = vmap_rollout_step(
             state,
             buffer.obs_buffer,
             buffer.action_buffer,
             buffer.reward_buffer,
             buffer.logprob_buffer,
             buffer.ptr,
-            buffer.done_flag
+            buffer.done_flag,
+            buffer.stop_flag
         )
-        buffer = BatchedBuffer(obs_buffer, action_buffer, reward_buffer, logprob_buffer, ptr, done_flag)
+        buffer = BatchedBuffer(obs_buffer, action_buffer, reward_buffer, logprob_buffer, ptr, done_flag, stop_flag)
         return (state, buffer), None
 
     (final_state, final_buffer), _ = jax.lax.scan(
@@ -255,53 +270,42 @@ def rollout(
 
 def general_advantage_estimator(
     settings: TrainingSettings,
-    obs_buffer: jax.Array,    # Shape: (N, *obs)
-    reward_buffer: jax.Array, # Shape: (N,)
-    ptr: jax.Array,                 # Fim dos dados validos
-    done_flag: jax.Array          # True if Goal/Limit reached, False if Max Steps
+    obs_buffer: jax.Array,    # Shape: (N + 1, *obs) 
+    reward_buffer: jax.Array, # Shape: (N + 1,)
+    ptr: jax.Array,           # Valor entre 0 e N
+    done_flag: jax.Array,     # Flag de terminação no passo ptr-1
 ):
     gamma = settings.gamma
     lam = settings.gae_lambda
-    N = obs_buffer.shape[0]
 
-    # 1. Get Critic values for the entire buffer
-    # Note: We need the value at 'ptr' to bootstrap if it wasn't a 'done' state
+    N = reward_buffer.shape[0] -1
+
     values = settings.network_settings.critic.apply(
         settings.network_settings.critic_params, obs_buffer
     )
-    values = cast(jax.Array, values)
+    values = jnp.squeeze(cast(jax.Array, values))
 
-    # 2. Define the Bootstrap Value
-    # If done_flag is True (Goal/Limit), the value of the 'next' state is 0
-    # If done_flag is False (Max steps), we use V(s_ptr)
+    # Se ptr=N, values[ptr] acessa o índice N (o último do buffer N+1)
     bootstrap_value = jnp.where(done_flag, 0.0, values[ptr])
 
     def gae_scan_fn(carry, t):
-        gae_next, next_val = carry
+        gae_next, next_val_from_carry = carry
         
-        # Current step data
-        rew = reward_buffer[t]
-        val = values[t]
+        # Injeta o bootstrap exatamente na borda da pilha de dados
+        is_last_step = t == (ptr - 1)
+        actual_next_val = cast(jax.Array, jnp.where(is_last_step, bootstrap_value, next_val_from_carry))
         
-        # In your case, every step PRIOR to ptr is "not done" 
-        # because the episode only ends at ptr-1.
-        # So for all t < ptr-1, mask is 1.0.
-        # At t = ptr-1, the 'next_val' is our bootstrap_value.
+        # O done_buffer[t_idx] aqui só seria necessário se você tivesse 
+        # múltiplos episódios dentro do mesmo buffer. No seu caso de "stack",
+        # apenas a done_flag no final importa para o bootstrap.
         
-        delta = rew + gamma * next_val - val
+        delta = reward_buffer[t] + gamma * actual_next_val - values[t]
         gae = delta + gamma * lam * gae_next
         
-        return (gae, val), gae
+        return (gae, values[t]), gae
 
-    # 3. Initialize the scan at the boundary
-    # The 'next_val' for the very last step (ptr-1) is our bootstrap_value
-    initial_carry = (0.0, bootstrap_value)
-
-    # 4. Use a mask to ignore indices >= ptr
-    indices = jnp.arange(N)
-    valid_mask = (indices < ptr).astype(jnp.float32)
-
-    # Reverse scan from N-1 down to 0
+    #Scan Reverso sobre os N passos de transição
+    initial_carry = (0.0, 0.0)
     _, advantages = jax.lax.scan(
         gae_scan_fn,
         initial_carry,
@@ -309,9 +313,9 @@ def general_advantage_estimator(
         reverse=True
     )
 
-    # 5. Clean up padding and compute returns
+    valid_mask = (jnp.arange(N) < ptr).astype(jnp.float32)
     advantages = advantages * valid_mask
-    returns = advantages + values
+    returns = (advantages + values[:-1]) * valid_mask
 
     return advantages, returns
 
@@ -334,15 +338,16 @@ def ppo_loss(
     batch_advantages = jax.lax.stop_gradient(batch_advantages)
     batch_returns = jax.lax.stop_gradient(batch_returns)
 
-    # dropa 1 step, por conta que os dados do gae tem o shift de 1 para conseguir valores futuros
-    batch_obs = jax.lax.stop_gradient(batch_obs[:, :-1, :])
-    batch_actions = jax.lax.stop_gradient(batch_actions[:, :-1, :])
-    old_log_probs = jax.lax.stop_gradient(old_log_probs[:, :-1])
+    # elimina a contagem do gradiente nestas variaveis
+    batch_obs = jax.lax.stop_gradient(batch_obs)
+    batch_actions = jax.lax.stop_gradient(batch_actions)
+    old_log_probs = jax.lax.stop_gradient(old_log_probs)
 
     # forward 
     networks = settings.network_settings
     logits = cast(jax.Array, networks.actor.apply(networks.actor_params, batch_obs))
-    values = networks.critic.apply(networks.critic_params, batch_obs)
+    values = cast(jax.Array, networks.critic.apply(networks.critic_params, batch_obs))
+
 
     # parametrização
     alpha_logits, beta_logits = jnp.split(logits, 2, axis=-1)
@@ -428,7 +433,7 @@ def ppo_train(rng: jax.Array,settings: TrainingSettings):
             buffer.obs_buffer,
             buffer.reward_buffer,
             buffer.ptr,
-            buffer.done_flag
+            buffer.done_flag,
         )
 
 
