@@ -330,8 +330,8 @@ def ppo_loss(
     old_log_probs,      #shape: (num_envs, max_steps +1)
     clip_eps=0.2,
     c1=0.2,
-    c2=0.1,
-    min_alpha_beta=0.1,
+    c2=0.3,
+    min_alpha_beta=1.1,
 ):
     """
     Calculates the PPO loss.

@@ -167,10 +167,10 @@ settings = create_training_settings(
     robot_shared_data,
     optimizer_creator  = lambda lr: optax.adam(lr),
     step_fn_creator = create_step,
-    num_envs= 128,
+    num_envs= 500,
     num_episodes=100,
     steps_per_episode=30,
-    learning_rate=1e-3
+    learning_rate=5e-4
 )
 
 

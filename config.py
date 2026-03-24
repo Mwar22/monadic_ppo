@@ -40,26 +40,27 @@ class EnviromentConfig:
 
 @struct.dataclass
 class RewardConfig:
-    # Recompensa por acompanhar a posição do efetuador final (distância Euclidiana)
-    position_error_penalty: float = -0.01  # 20
+    # --- Incentivo de Posição ---
+    # O ganho máximo quando o erro é zero
+    pos_incentive_gain: float = 3.0   
 
-    # Recompensa por acompanhar a orientação do efetuador final
-    orientation_error_penalty: float = -0.01  # 15
+    # 'Largura' da recompensa: se o erro for igual a sigma, a recompensa cai para ~36%
+    pos_incentive_sigma: float = 0.2  
 
-    success_reward: float = 100.0  # Large positive reward for succeeding
-    failure_penalty: float = -1.0  # Large negative penalty for failing
+    # --- Incentivo de Orientação ---
+    rot_incentive_gain: float = 1.5
+    rot_incentive_sigma: float = 0.2
 
-    # Regularização L2 dos torques nas juntas, para evitar torques muito grandes (energia)
-    torques_penalty: float = -0.0005
-
-    # para incentivar o robô a sair do lugar
-    tracking_incentive_gain: float = 10.0
-
-    # valor de tolerância maxima para o erro.
-    start_err_tol = 0.25
-
-    # recompensa exponencialmente decrescente com o erro = exp(-error^2/sigma).
-    tracking_sigma: float = 0.95
+    # --- Sucesso e Falha ---
+    success_reward: float = 500.0
+    failure_penalty: float = -100.0
+    
+    # --- Tolerância ---
+    start_err_tol: float = 0.4
+    min_err_tol: float = 0.03
+    
+    # --- Regularização ---
+    torques_penalty: float = -0.0001
 
 
 @struct.dataclass

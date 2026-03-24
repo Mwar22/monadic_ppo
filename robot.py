@@ -483,98 +483,69 @@ def reward_pipeline(rsd: RobotSharedData, env: StateMonad):
         env.map(
             lambda pdata: {
                 **pdata,
-                "reward": reward_config.position_error_penalty * pdata["position_error"],
-            }
-        )
-        # penalidade (custo) por erro de orientação
-        .map(
-            lambda pdata: {
-                **pdata,
-                "reward": pdata["reward"]
-                + reward_config.orientation_error_penalty * pdata["orientation_error"],
-            }
-        )
-        # penalidade para coibir torques muito elevados
-        .map(
-            lambda pdata: {
-                **pdata,
-                "reward": pdata["reward"]
-                + l1_l2_reward(reward_config.torques_penalty, 0, pdata["torques"]),
-            }
-        )
-        # incentivo para sair do lugar (posição)
-        .map(
-            lambda pdata: {
-                **pdata,
-                "reward": pdata["reward"]
-                + exp_scale_reward(
-                    reward_config.tracking_incentive_gain,
-                    reward_config.tracking_sigma,
-                    pdata["position_error"],
-                ),
-            }
-        )
-        # incentivo para a orientação
-        .map(
-            lambda pdata: {
-                **pdata,
-                "reward": pdata["reward"]
-                + exp_scale_reward(
-                    reward_config.tracking_incentive_gain,  # You can use a different gain
-                    reward_config.tracking_sigma,
-                    pdata["orientation_error"],
-                ),
-            }
-        )
+                "reward": (
+                    # Incentivo de Posição
+                    exp_scale_reward(
+                        reward_config.pos_incentive_gain,
+                        reward_config.pos_incentive_sigma,
+                        pdata["position_error"]
+                    ) + 
 
-        # calcula o valor para a tolerância de erro a ser aceita. Aqui seguindo uma exponencial inversa de acordo com o passo atual
+                    # Incentivo de Orientação
+                    exp_scale_reward(
+                        reward_config.rot_incentive_gain,
+                        reward_config.rot_incentive_sigma,
+                        pdata["orientation_error"]
+                    ) +
+                    # Penalidade L2 de torque para evitar movimentos espasmódicos
+                    jnp.sum(jnp.square(pdata["torques"])) * reward_config.torques_penalty
+                ),
+            }
+        )
+        # Tolerância de Erro Linear
         .bind(
             lambda pdata: StateMonad(
                 lambda state: (
                     state,
                     {
                         **pdata,
-                        "err_tol": exp_scale_reward(reward_config.start_err_tol, reward_config.tracking_sigma, state["step"])
+                        "err_tol": jnp.maximum(
+                            reward_config.min_err_tol, 
+                            reward_config.start_err_tol - (state["step"] * 0.004)
+                        )
                     }
                 )
             )
         )
-        # penalidade por terminação
+        # Verificação de Done e Sucesso
         .map(
             lambda pdata: {
                 **pdata,
-                # checa se houve sucesso (atingiu o alvo)
-                "success": (pdata["position_error"] < pdata["err_tol"]) & (pdata["orientation_error"] < pdata["err_tol"]),
-
-                # checa se atingiu o limite das juntas
-                "failure": jnp.any(pdata["joint_angles"] < rsd.lowers) | jnp.any(pdata["joint_angles"] > rsd.uppers),
+                "success": (pdata["position_error"] < pdata["err_tol"]) & 
+                           (pdata["orientation_error"] < pdata["err_tol"]),
+                "failure": jnp.any(pdata["joint_angles"] < rsd.lowers) | 
+                           jnp.any(pdata["joint_angles"] > rsd.uppers),
             }
         )
         .bind(success_count)
+        # Aplicação das Recompensas de Término
         .bind(
             lambda pdata: StateMonad(
                 lambda state: (
                     state,
                     {
                         **pdata,
-                        # se atingiu o sucesso ou houve uma falha, termina o episódio
                         "done": pdata["success"] | pdata["failure"],
-                        
-                        # aplica a correção baseado nas recompensas e penalidades combinados
+
+                        # Bônus de Sucesso + Bônus de Velocidade
                         "reward": pdata["reward"]
-                        + pdata["success"] * reward_config.success_reward
+                        + pdata["success"] * (reward_config.success_reward + (30 - state["step"]) * 5.0)
                         + pdata["failure"] * reward_config.failure_penalty,
                     },
                 )
             )
         )
-        .map(
-            lambda pdata: {
-                **pdata,
-                "reward": jnp.clip(pdata["reward"], -10000.0, 10000.0),
-            }
-        )
-        #.bind(lambda pdata: debug(pdata, "reward"))
+        .map(lambda pdata: {**pdata, "reward": jnp.clip(pdata["reward"], -1000.0, 1000.0)})
     )
 
 
