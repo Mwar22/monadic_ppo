@@ -649,7 +649,7 @@ def create_step(network_settings: NetworksSettings, robot_shared_data: RobotShar
             )
         )
     
-    def step_fn(state, obs_stats: RunningStats, progress):
+    def step_fn(state, obs_stats: RunningStats):
 
         # obtem uma ação pela observação anterior
         p = (get_action()
