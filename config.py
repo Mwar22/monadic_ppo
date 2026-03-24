@@ -42,10 +42,10 @@ class EnviromentConfig:
 class RewardConfig:
     # --- Incentivo de Posição ---
     # O ganho máximo quando o erro é zero
-    pos_incentive_gain: float = 10.0 
+    pos_incentive_gain: float = 50.0 
 
     # 'Largura' da recompensa: se o erro for igual a sigma, a recompensa cai para ~36%
-    pos_incentive_sigma: float = 0.5  
+    pos_incentive_sigma: float = 0.8  
 
     # --- Incentivo de Orientação ---
     rot_incentive_gain: float = 1.5
@@ -56,8 +56,8 @@ class RewardConfig:
     failure_penalty: float = -100.0
     
     # --- Tolerância ---
-    start_err_tol: float = 0.4
-    min_err_tol: float = 0.03
+    start_err_tol: float = 0.8
+    min_err_tol: float = 0.01
     
     # --- Regularização ---
     torques_penalty: float = -1e-5

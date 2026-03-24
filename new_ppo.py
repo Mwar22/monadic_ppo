@@ -6,7 +6,7 @@ import flax.linen as nn
 from flax import struct
 from functools import partial
 from typing import Dict, Any, cast, Tuple, Callable, Self
-from mathutils import  beta_entropy, cont_sample_beta
+from mathutils import  beta_entropy, cont_sample_beta, ProgressScheduler
 from robot import RobotSharedData, get_goal
 from mujoco import mjx
 
@@ -83,6 +83,7 @@ class TrainingSettings:
     optimizer: optax.GradientTransformationExtraArgs
     optimizer_state: optax.OptState
     step_fn: Callable
+    scheduler_fn: Callable[[Any, Any], jax.Array]
 
     @classmethod
     def init(
@@ -91,6 +92,7 @@ class TrainingSettings:
         robot_shared_settings: RobotSharedData,
         optimizer_creator: Callable[[float], optax.GradientTransformationExtraArgs],
         step_fn_creator:Callable[[NetworksSettings, RobotSharedData], Callable],
+        scheduler_fn: Callable[[Any, Any], jax.Array],
         num_envs: int = 1,
         num_episodes: int = 1,
         steps_per_episode: int = 1,
@@ -112,7 +114,8 @@ class TrainingSettings:
             robot_shared_settings,
             optimizer,
             optimizer_params,
-            step_fn
+            step_fn,
+            scheduler_fn
         )
 
 @struct.dataclass
@@ -200,6 +203,7 @@ def push(
 
 
 def rollout_step(
+    progress,
     step_fn,
     obs_stats: RunningStats,
     state: Dict[str, Any],
@@ -228,7 +232,7 @@ def rollout_step(
 
         # executa o ambiente
         _state = {**_state, "rng": step_rng}  #atualiza o rng
-        _state, data = step_fn(_state, obs_stats)
+        _state, data = step_fn(progress, _state, obs_stats)
 
         # adiciona o dado no buffer
         _obs_buffer, _action_buffer, _reward_buffer, _logprob_buffer, _ptr = push(
@@ -260,6 +264,7 @@ def rollout_step(
 
 
 def rollout(
+    progress,
     settings: TrainingSettings,
     init_state: Dict[str, Any],
     buffer: BatchedBuffer,
@@ -282,7 +287,7 @@ def rollout(
     }
     state_out_axes = {**state_in_axes, 'obs_stats': 0}
     vmap_rollout_step = jax.vmap(
-        partial(rollout_step, settings.step_fn, obs_stats),
+        partial(rollout_step, progress, settings.step_fn, obs_stats),
         in_axes=(
             state_in_axes,  # Arg 0: state (was Arg 1 in your version)
             0,               # Arg 1: obs_buffer
@@ -465,14 +470,14 @@ def ppo_train(rng: jax.Array, settings: TrainingSettings):
         rng, initial_state_rng, rollout_rng = jax.random.split(rng, 3)
 
         #estado inicial 
-        progress = update_idx / settings.num_episodes
+        progress = settings.scheduler_fn(update_idx, settings.num_episodes)
         rng, initial_state = create_initial_state(initial_state_rng, progress, settings)
 
         # cria um buffer
         buffer = BatchedBuffer.init(settings)
 
         # Faz um rollout (usando a função vetorizada)
-        state, buffer= rollout(settings, initial_state,buffer, obs_stats)
+        state, buffer= rollout(progress, settings, initial_state,buffer, obs_stats)
 
         #atualiza as estatisticas considerando as novas observações
         obs_stats = update_running_stats(obs_stats, buffer.obs_buffer)

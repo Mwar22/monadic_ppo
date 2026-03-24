@@ -396,7 +396,7 @@ def get_goal(rsd: RobotSharedData, progress, initial_mjx_data, rng):
     r1, r2, r3, r4 = jax.random.split(rng, 4)
 
     start_pos = sensor_data(rsd, initial_mjx_data, "tool_position")
-    
+
     goals = {
         **sample_config_coordinates_curriculum(rsd, r1, "goal_position", progress, start_pos),
         **sample_config_velocities(rsd, r2, "goal_position"),
@@ -504,7 +504,7 @@ def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningStats, env: StateMonad)
     )
 
 
-def reward_pipeline(rsd: RobotSharedData, env: StateMonad):
+def reward_pipeline(progress, rsd: RobotSharedData,  env: StateMonad):
     reward_config = rsd.reward_config
     return (
         # Penalidade (custo) por erro de posição
@@ -539,7 +539,7 @@ def reward_pipeline(rsd: RobotSharedData, env: StateMonad):
                         **pdata,
                         "err_tol": jnp.maximum(
                             reward_config.min_err_tol, 
-                            reward_config.start_err_tol - (state["step"] * 0.004)
+                            reward_config.start_err_tol - (progress * (reward_config.start_err_tol - 1e-4))
                         )
                     }
                 )
@@ -649,23 +649,23 @@ def create_step(network_settings: NetworksSettings, robot_shared_data: RobotShar
             )
         )
     
-    def step_fn(state, obs_stats: RunningStats):
+    def step_fn(progress, state, obs_stats: RunningStats):
 
         # obtem uma ação pela observação anterior
-        p = (get_action()
+        pl = (get_action()
             .bind(get_motor_targets)    #obtem para os motores segundo a ação
             .bind(mujoco_step)          #movimenta no mujoco
         )
 
         # obtem novas observações
-        p = obs_pipeline(robot_shared_data, obs_stats, p)
+        pl = obs_pipeline(robot_shared_data, obs_stats, pl)
 
         # de acordo com as observações obtem a recompensa
-        p = reward_pipeline(robot_shared_data, p)
+        pl = reward_pipeline(progress, robot_shared_data, pl)
 
         # dá a forma final aos valores de retorno
-        p = p.bind(shape_return)
+        pl = pl.bind(shape_return)
 
-        return p.run(state)
+        return pl.run(state)
 
     return step_fn

@@ -14,6 +14,24 @@ from jax import numpy as jnp
 from jax.scipy.special import gammaln, digamma
 
 
+class ProgressScheduler:
+    @staticmethod
+    def linear(step, total_steps):
+        return jnp.clip(step / total_steps, 0.0, 1.0)
+
+    @staticmethod
+    def power(step, total_steps, p=2.0):
+        # p > 1: demora mais a crescer no início (Warm-up)
+        # p < 1: cresce rápido no início e abranda no fim
+        return jnp.power(jnp.clip(step / total_steps, 0.0, 1.0), p)
+
+    @staticmethod
+    def sigmoid(step, total_steps, center=0.5, sharpness=10.0):
+        # Curva em S: início lento, meio rápido, final lento
+        x = step / total_steps
+        return jax.nn.sigmoid(sharpness * (x - center))
+    
+
 def conv2jax_quat(mujoco_quat: jnp.ndarray) -> jnp.ndarray:
     """Converte quaternion no formato (w, x, y, z) -> (x, y, z, w)"""
     return jnp.array([mujoco_quat[1], mujoco_quat[2], mujoco_quat[3], mujoco_quat[0]])

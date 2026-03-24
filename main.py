@@ -10,7 +10,7 @@ from new_ppo import TrainingSettings, ppo_train
 from etils import epath
 from robot import create_step, create_rsd
 from config import EnviromentConfig, RangeConfig, ResetConfig, RewardConfig
-
+from mathutils import ProgressScheduler
 from new_ppo import NetworksSettings
 
 #######################################################################################
@@ -147,7 +147,7 @@ def create_networks(rng:jax.Array, obs_size:int, action_size:int):
 
 # --- Inicialização ---
 rng = jax.random.PRNGKey(42)
-rng, network_settings = create_networks(rng, obs_size=15*39, action_size=6)
+rng, network_settings = create_networks(rng, obs_size=5*39, action_size=6)
 
 
 robot_shared_data = create_rsd(
@@ -167,10 +167,11 @@ settings = TrainingSettings.init(
     robot_shared_data,
     optimizer_creator  = lambda lr: optax.adam(lr),
     step_fn_creator = create_step,
+    scheduler_fn= lambda i, n: ProgressScheduler.power(i, n, p=1.5),
     num_envs= 500,
     num_episodes=300,
     steps_per_episode=30,
-    learning_rate=5e-4
+    learning_rate=1e-4
 )
 
 
@@ -192,8 +193,8 @@ print(f"min avg reward: {jnp.min(avg_episode_rewards)}")
 print(f"max avg reward: {jnp.max(avg_episode_rewards)}")
 
 grad_norm = metrics["grad_norm"]
-avg_success_count = jnp.mean(metrics["success_count"], axis=1)
-print(f"avg success_count: {avg_success_count}")
+#avg_success_count = jnp.mean(metrics["success_count"], axis=1)
+print(f"nonzero_succes_count: {jnp.count_nonzero(metrics["success_count"])}")
 
 entropy = metrics["entropy"]
 
