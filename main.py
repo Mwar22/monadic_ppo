@@ -30,7 +30,7 @@ class Actor(nn.Module):
         #x = nn.LayerNorm()(x)
         
    
-        x = nn.Dense(256)(obs)
+        x = nn.Dense(256)(x)
         x = activation(x)
        
         # 2 pois é uma distribuição, gerando metade para os parametros alfa e metade para beta
@@ -48,7 +48,7 @@ class Critic(nn.Module):
         x = activation(x)
         #x = nn.LayerNorm()(x)
         
-        x = nn.Dense(256)(obs)
+        x = nn.Dense(256)(x)
         x = activation(x)
         
         value = nn.Dense(1)(x)
@@ -169,7 +169,8 @@ settings = create_training_settings(
     step_fn_creator = create_step,
     num_envs= 128,
     num_episodes=100,
-    steps_per_episode=30
+    steps_per_episode=30,
+    learning_rate=1e-3
 )
 
 
@@ -220,7 +221,7 @@ ax4.set_xlabel("Update Step")
 ax4.set_ylabel("Count")
 
 
-plt.savefig(f"training_plots_{activation_str}.png")
+plt.savefig(f"training_plots.png")
 print("\nTraining plots saved to training_plots.png")
 
 """

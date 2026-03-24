@@ -200,7 +200,7 @@ def rollout_step(
         # faz o update do rng
         _state["rng"] = rng
         _done_flag = data["done"] > 0.5 
-        _stop_flag =  _done_flag | _state["step"] >= _reward_buffer.shape[1]  # reward_buffer.shape[1] = num_steps
+        _stop_flag = _done_flag | (_state["step"] >= _reward_buffer.shape[0])
 
         return _state, _obs_buffer, _action_buffer, _reward_buffer, _logprob_buffer, _ptr, _done_flag, _stop_flag
 
@@ -321,12 +321,13 @@ def general_advantage_estimator(
 
 
 def ppo_loss(
+    params,
     settings: TrainingSettings,
-    batch_obs,          #shape: (num_envs, max_steps, *obs_shape)
-    batch_actions,      #shape: (num_envs, max_steps, *action_shape)
-    batch_advantages,   #shape: (num_envs, max_steps - 1)
-    batch_returns,      #shape: (num_envs, max_steps - 1)
-    old_log_probs,      #shape: (num_envs, max_steps)
+    batch_obs,          #shape: (num_envs, max_steps +1, *obs_shape)
+    batch_actions,      #shape: (num_envs, max_steps +1, *action_shape)
+    batch_advantages,   #shape: (num_envs, max_steps)
+    batch_returns,      #shape: (num_envs, max_steps)
+    old_log_probs,      #shape: (num_envs, max_steps +1)
     clip_eps=0.2,
     c1=0.2,
     c2=0.1,
@@ -339,14 +340,14 @@ def ppo_loss(
     batch_returns = jax.lax.stop_gradient(batch_returns)
 
     # elimina a contagem do gradiente nestas variaveis
-    batch_obs = jax.lax.stop_gradient(batch_obs)
-    batch_actions = jax.lax.stop_gradient(batch_actions)
-    old_log_probs = jax.lax.stop_gradient(old_log_probs)
+    batch_obs = jax.lax.stop_gradient(batch_obs[:, :-1, :])
+    batch_actions = jax.lax.stop_gradient(batch_actions[:, :-1, :])
+    old_log_probs = jax.lax.stop_gradient(old_log_probs[:, :-1])
 
     # forward 
     networks = settings.network_settings
-    logits = cast(jax.Array, networks.actor.apply(networks.actor_params, batch_obs))
-    values = cast(jax.Array, networks.critic.apply(networks.critic_params, batch_obs))
+    logits = cast(jax.Array, networks.actor.apply(params[0], batch_obs))
+    values = cast(jax.Array, networks.critic.apply(params[1], batch_obs))
 
 
     # parametrização
@@ -452,6 +453,7 @@ def ppo_train(rng: jax.Array,settings: TrainingSettings):
 
         def loss_fn(par):
             return ppo_loss(
+                par,
                 settings,
                 buffer.obs_buffer,
                 buffer.action_buffer,
