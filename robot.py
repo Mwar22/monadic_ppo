@@ -252,7 +252,7 @@ def check_done(
 
 #################################################################################################################
 def sample_config_coordinates_curriculum(
-    rsd: RobotSharedData, rng, config_name: str, progress: float
+    rsd: RobotSharedData, rng, config_name: str, progress: float, start_pos:jax.Array
 ):
     """
     Gera alvos que 'expandem' conforme o treino progride.
@@ -260,16 +260,13 @@ def sample_config_coordinates_curriculum(
     """
     config_value = getattr(rsd.range_config, config_name)
     
-    # 1. Pegamos a posição 'padrão' ou central do robô
-    # (Supondo que você tenha isso no rsd, ou use o centro do range)
-    center = (config_value[:, 0] + config_value[:, 1]) / 2.0
     
     # 2. Definimos o 'tamanho' do mundo atual baseado no progresso
     # No início (progress=0), o mundo tem 10% do tamanho. No fim, 100%.
     scale = jnp.maximum(0.1, progress) 
     
-    low = center - (center - config_value[:, 0]) * scale
-    high = center + (config_value[:, 1] - center) * scale
+    low = start_pos - (start_pos - config_value[:, 0]) * scale
+    high = start_pos + (config_value[:, 1] - start_pos) * scale
 
     samples = jax.random.uniform(rng, shape=(3,))
     scaled_coord = low + (high - low) * samples
@@ -395,12 +392,15 @@ def success_count(pdata):
 ###################################################################################################################
 
 
-def get_goal(rsd: RobotSharedData, progress, rng):
+def get_goal(rsd: RobotSharedData, progress, initial_mjx_data, rng):
     r1, r2, r3, r4 = jax.random.split(rng, 4)
+
+    start_pos = sensor_data(rsd, initial_mjx_data, "tool_position")
+    
     goals = {
-        **sample_config_coordinates_curriculum(rsd, r1, "goal_position", progress),
+        **sample_config_coordinates_curriculum(rsd, r1, "goal_position", progress, start_pos),
         **sample_config_velocities(rsd, r2, "goal_position"),
-        **sample_config_coordinates_curriculum(rsd, r3,"goal_orientation", progress),
+        **sample_config_coordinates_curriculum(rsd, r3,"goal_orientation", progress, start_pos),
         **sample_config_velocities(rsd, r4, "goal_orientation"),
     }
     return goals

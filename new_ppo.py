@@ -557,15 +557,14 @@ def create_initial_state(rng: jax.Array, progress, settings: TrainingSettings):
     batched_action = jnp.zeros((num_envs, settings.network_settings.action_size))
     batched_obs = jnp.zeros((num_envs, settings.network_settings.obs_size))
 
-    vmapped_get_goal = jax.vmap(partial(get_goal, settings.robot_shared_data, progress))
-    batched_goal = vmapped_get_goal(batched_rng)
-
     mjx_data = mjx.make_data(settings.robot_shared_data.mjx_model)
     batched_mjx_data = jax.tree_util.tree_map(
         lambda x: jax.numpy.repeat(x[None], num_envs, axis=0),
         mjx_data
     )
 
+    vmapped_get_goal = jax.vmap(partial(get_goal, settings.robot_shared_data, progress, mjx_data))
+    batched_goal = vmapped_get_goal(batched_rng)
     #estado inicial 
     return rng1, {
         "rng":batched_rng,
