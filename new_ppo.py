@@ -355,7 +355,7 @@ def ppo_train(rng: jax.Array, settings: TrainingSettings):
         (new_parameters, new_optim_state), metrics = jax.lax.scan(
             _train_step,
             (parameters, optimizer_state),
-            jnp.arange(settings.epochs),
+            jnp.arange(settings.num_episodes),
         )
 
         return new_parameters, new_optim_state, metrics
@@ -385,7 +385,7 @@ def ppo_train(rng: jax.Array, settings: TrainingSettings):
     final_carry, metrics = jax.lax.scan(
         _new_goal_step,
         (rng, runpar, settings.network_settings.params, settings.optimizer_state),
-        jnp.arange(settings.epochs),
+        jnp.arange(settings.num_episodes),
     )
 
     return final_carry, metrics
@@ -409,8 +409,8 @@ def create_initial_state(rng: jax.Array, progress, settings: TrainingSettings):
         mjx_data
     )
 
-    vmapped_get_goal = jax.vmap(partial(get_goal, settings.robot_shared_data, progress, mjx_data))
-    batched_goal = vmapped_get_goal(batched_rng)
+    vmapped_get_goal = jax.vmap(partial(get_goal, settings.robot_shared_data, progress))
+    batched_rng, batched_goal = vmapped_get_goal(batched_rng)
 
     batched_err = jnp.ones((num_envs, ))*jnp.inf
 

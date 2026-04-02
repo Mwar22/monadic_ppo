@@ -18,7 +18,7 @@ from mujoco import mjx
 from etils import epath
 from flax import struct
 from typing import Any, Dict, Tuple, List, cast
-from config import ResetConfig, RangeConfig, RewardConfig, MujocoSimConfig
+from config import RangeConfig, RewardConfig, MujocoSimConfig
 from enviroment import StateMonad
 from mathutils import l1_l2_reward, exp_scale_reward, conv2jax_quat, cont_sample_beta
 from typing import TYPE_CHECKING
@@ -336,7 +336,6 @@ def concat_obs_as_array(d: Dict[str, Any]) -> StateMonad:
             state["goal"]["goal_position_coordinates"],  # (3,)
             state["goal"]["goal_orientation_coordinates"],  # (3,)
             state["goal"]["goal_position_velocities"], # (3,)
-            state["goal"]["goal_orientation_velocities"], # (3,)
             d["tool_position"],  # (3,)
             d["orientation"],  # (4,)
             d["torques"],  # (6,)
@@ -344,7 +343,7 @@ def concat_obs_as_array(d: Dict[str, Any]) -> StateMonad:
             d["joint_vel"],  # (6,)
         ]
         obs_array = jnp.concatenate(obs_list)
-        # 5 * (3,)  +  3 * (6, ) + (4,)= 37)
+        # 4 * (3,)  +  3 * (6, ) + (4,)= 34)
 
         return state, {**d, "obs_array": obs_array}
 
@@ -361,18 +360,19 @@ def success_count(pdata):
 ###################################################################################################################
 
 
-def get_goal(rsd: RobotSharedData, progress, initial_mjx_data, rng):
-    r1, r2, r3, r4 = jax.random.split(rng, 4)
+def get_goal(rsd: RobotSharedData, progress, rng):
 
-    start_pos = sensor_data(rsd, initial_mjx_data, "tool_position")
+    rng, position = rsd.range_config.position.sample_normal(rng, progress)
+    rng, position_velocities = rsd.range_config.position_velocities.sample_normal(rng, progress)
+    rng, orientation = rsd.range_config.orientation.sample_normal(rng, progress)
+   
 
     goals = {
-        **sample_config_coordinates_curriculum(rsd, r1, "goal_position", progress, start_pos),
-        **sample_config_velocities(rsd, r2, "goal_position"),
-        **sample_config_coordinates_curriculum(rsd, r3,"goal_orientation", progress, start_pos),
-        **sample_config_velocities(rsd, r4, "goal_orientation"),
+        "goal_position_coordinates": position,
+        "goal_position_velocities": position_velocities,
+        "goal_orientation_coordinates": orientation
     }
-    return goals
+    return rng, goals
 
 def debug(pdata, name):
     def func(state):

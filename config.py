@@ -10,7 +10,7 @@ import jax
 import jax.numpy as jnp
 from flax import struct
 from dataclasses import field
-from typing import Callable
+from typing import Callable, Self, List
 
 
 @struct.dataclass
@@ -90,77 +90,57 @@ class RewardConfig:
 
 
 @struct.dataclass
+class VectorRange:
+    num_values: int
+    values: jax.Array
+
+    @classmethod
+    def init(cls, num_values: int, min_values: jax.Array, max_values: jax.Array)->Self:
+        num = max(num_values -1, 1)
+        values = jnp.vstack([jnp.linspace(start, stop, num=num) for start, stop in zip(min_values, max_values)])
+        jax.debug.print("values: {}", values)
+        return cls(num_values, values)
+    
+
+    def sample_normal(self, rng, progress):
+        scale = jnp.maximum(0.1, progress)
+
+        mean = (self.num_values - 1) / 2
+        std = mean * scale
+
+        dim = self.values.shape[0]
+
+        rng, subkey = jax.random.split(rng)
+        z = jax.random.normal(subkey, shape=(dim,))
+
+        indices = jnp.clip(
+            jnp.round(mean + std * z),
+            0,
+            self.num_values - 1
+        ).astype(jnp.int32)
+
+        jax.debug.print("indices: {}", indices)
+
+        return rng, self.values[jnp.arange(dim), indices]
+    
+@struct.dataclass
 class RangeConfig:
-    #position: jax.Array
 
-    goal_position: jax.Array = field(
-        default_factory=lambda: jnp.array(
-            [[-0.6, 0.6, 0.1], [-0.6, 0.6, 0.1], [0, 0.6, 0.1]]
-        )
+    position: VectorRange = VectorRange.init(
+        300,
+        jnp.array([-0.6, -0.6, 1]),
+        jnp.array([0.6, 0.6, 1])
     )
-
-
-    goal_orientation: jax.Array = field(
-        default_factory=lambda: jnp.array([[-2, 2, 0.1], [-2, 2, 0.1], [-2, 2, 0.1]])
+    position_velocities: VectorRange = VectorRange.init(
+        300,
+        jnp.array([0, 0, 0]),
+        jnp.array([0.1, 0.1, 0.1])
     )
+    orientation: VectorRange = VectorRange.init(
+        300,
+        jnp.array([-2, -2, -2]),
+        jnp.array([2, 2, 2])
+    )
+    
 
 
-    @property
-    def x(self):
-        return self.goal_position[0, :]
-
-    @property
-    def y(self):
-        return self.goal_position[1, :]
-
-    @property
-    def z(self):
-        return self.goal_position[2, :]
-
-    @property
-    def row(self):
-        return self.goal_orientation[0, :]
-
-    @property
-    def pitch(self):
-        return self.goal_orientation[1, :]
-
-    @property
-    def yaw(self):
-        return self.goal_orientation[2, :]
-
-
-@struct.dataclass
-class Target:
-    position: jax.Array
-    orientation: jax.Array
-
-    @property
-    def x(self):
-        return self.position[0]
-
-    @property
-    def y(self):
-        return self.position[1]
-
-    @property
-    def z(self):
-        return self.position[2]
-
-    @property
-    def row(self):
-        return self.orientation[0]
-
-    @property
-    def pitch(self):
-        return self.orientation[1]
-
-    @property
-    def yaw(self):
-        return self.orientation[2]
-
-
-@struct.dataclass
-class ResetConfig:
-    rnd_range: float = 0.1  # fator para o range percentual de qpos. Em termos de intervalo percentual: [qpos_rnd_range, 1 - qpos_rnd_range]
-    clip_range: float = 0.1  # qpos fica cravado no intervalo percentual: [qpos_clip_range, 1 - qpos_clip_range]

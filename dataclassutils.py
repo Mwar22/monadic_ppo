@@ -141,7 +141,7 @@ class NetworksSettings:
 @struct.dataclass
 class TrainingSettings:
     network_settings: NetworksSettings
-    epochs: int
+    num_episodes: int
     num_envs: int
     steps_per_episode: int
     gamma: float
@@ -162,7 +162,7 @@ class TrainingSettings:
         step_fn_creator:Callable[[NetworksSettings, RobotSharedData], Callable],
         progress_fn: Callable[[jax.Array, jax.Array], jax.Array],
         num_envs: int = 1,
-        epochs: int = 1,
+        num_episodes: int = 1,
         steps_per_episode: int = 1,
         learning_rate: float = 1e-4,
         gamma: float = 0.99,
@@ -174,7 +174,7 @@ class TrainingSettings:
 
         return cls(
             network_settings,
-            epochs,
+            num_episodes,
             num_envs,
             steps_per_episode,
             gamma,

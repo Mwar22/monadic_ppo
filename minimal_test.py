@@ -1,8 +1,9 @@
-﻿from mujoco import MjModel
-from etils import epath
+﻿import jax
+import jax.numpy as jnp
+from config import VectorRange
 
-xml_path = epath.Path("/home/lucas/Documentos/MLProjects/monadic_ppo/model/thor_robot_collision_only.xml")
-xml_text = xml_path.read_text()
 
-mj_model = MjModel.from_xml_string(xml_text)  # no assets
-print("Model loaded OK:", mj_model.nbody)
+rng = jax.random.PRNGKey(441)
+range = VectorRange.init(5, jnp.array([0, 0, 0]), jnp.array([10, 10, 10]))
+rng , value = range.sample_normal(rng, 0.8)
+print(value)

@@ -9,7 +9,7 @@ from jax import config
 from new_ppo import TrainingSettings, ppo_train
 from etils import epath
 from robot import create_step, create_rsd
-from config import MujocoSimConfig, RangeConfig, ResetConfig, RewardConfig
+from config import MujocoSimConfig, RangeConfig, RewardConfig
 from mathutils import Scheduler
 from dataclassutils import NetworksSettings
 
@@ -175,7 +175,7 @@ settings = TrainingSettings.init(
     step_fn_creator = create_step,
     progress_fn = adaptive_progress,
     num_envs= 500,
-    epochs=600,
+    num_episodes=600,
     steps_per_episode=30,
     learning_rate=5e-4
 )
