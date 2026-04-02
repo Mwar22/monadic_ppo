@@ -24,7 +24,7 @@ from mathutils import l1_l2_reward, exp_scale_reward, conv2jax_quat, cont_sample
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from new_ppo import NetworksSettings, RunningStats, RunningAvg
+    from new_ppo import NetworksSettings, RunningParameters, RunningAvg
 
 
 @struct.dataclass
@@ -625,7 +625,7 @@ def create_step(network_settings: NetworksSettings, robot_shared_data: RobotShar
             )
         )
     
-    def step_fn(progress, state, stats: RunningStats):
+    def step_fn(progress, state, stats: RunningParameters):
 
         # obtem uma ação pela observação anterior
         pl = (get_action()

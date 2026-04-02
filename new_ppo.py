@@ -84,9 +84,9 @@ class RunningProgress:
         return RunningProgress(new_value, self.target_success, self.step_size)
 
 @struct.dataclass
-class RunningStats:
+class RunningParameters:
     obs_stat: RunningAvg
-    ema_success: RunningExponentialAvg
+    ema_success_rate: RunningExponentialAvg
     progress: RunningProgress
 
     @classmethod
@@ -99,10 +99,14 @@ class RunningStats:
         )
     
     def update(self, batch_obs: jax.Array, success_rate: jax.Array):
-        return RunningStats(
-            self.obs_stat.update(batch_obs),
-            self.ema_success.update(success_rate),
-            self.progress.update(success_rate)
+        new_obs_stat = self.obs_stat.update(batch_obs)
+        new_ema_sucess_rate = self.ema_success_rate.update(success_rate)
+        new_progress = self.progress.update(new_ema_sucess_rate)
+
+        return RunningParameters(
+            new_obs_stat,
+            new_ema_sucess_rate,
+            new_progress
         )
 
 @struct.dataclass
@@ -273,7 +277,7 @@ def push(
 def rollout_step(
     progress,
     step_fn,
-    stats: RunningStats,
+    stats: RunningParameters,
     state: Dict[str, Any],
     obs_buffer: jax.Array,
     action_buffer: jax.Array,
@@ -336,7 +340,7 @@ def rollout(
     settings: TrainingSettings,
     init_state: Dict[str, Any],
     buffer: BatchedBuffer,
-    stats: RunningStats,
+    stats: RunningParameters,
 ):
     # Match the structure of your 'state' dictionary exactly
     state_in_axes = {
@@ -533,23 +537,21 @@ def ppo_train(rng: jax.Array, settings: TrainingSettings):
     """The complete, JIT-compiled training function."""
 
 
-    def _update_stats(state, buffer, progress, stats):
-        #atualiza o progresso
+    def _update_running_parameters(state, buffer, runpar: RunningParameters):
+       
         # Transforma qualquer contagem > 0 em 1 (sucesso) ou 0 (falha)
         # A média dará um valor entre  0.0 e 1.0 (0% a 100%)
         success_per_env = state["success_count"] > 0
         success_rate = jnp.mean(success_per_env)
 
         #atualiza as estatisticas considerando as novas observações
-        stats = stats.update(buffer.obs_buffer, success_rate)
-        new_progress = settings.progress_fn(progress, stats.ema_success.ema_value)
+        runpar = runpar.update(buffer.obs_buffer, success_rate)
+        return runpar
 
-        return stats, new_progress
-
-    def _collect_dataset(state, buffer, progress, stats):
+    def _collect_dataset(state, buffer, runpar: RunningParameters):
 
         # Faz um rollout (usando a função vetorizada)
-        state, buffer= rollout(progress, settings, state, buffer, stats)
+        state, buffer = rollout(runpar.progress.value, settings, state, buffer, stats)
 
         # Vetoriza a função GAE
         vmapped_gae = jax.vmap(
@@ -575,34 +577,34 @@ def ppo_train(rng: jax.Array, settings: TrainingSettings):
         return state, buffer, advantages, returns
     
     def _train(
-        obs_buffer: jax.Array,
-        action_buffer: jax.Array,
-        logprob_buffer: jax.Array,
+        parameters,
+        optimizer_state,
+        buffer: BatchedBuffer,
         advantages: jax.Array,
         returns:jax.Array
     ):
 
-        def _train_step(carry):
-            parameters, optim_state = carry
+        def _train_step(carry,_):
+            _parameters, _optimizer_state = carry
     
             def loss_fn(par):
                 return ppo_loss(
                     par,
                     settings,
-                    obs_buffer,
-                    action_buffer,
+                    buffer.obs_buffer,
+                    buffer.action_buffer,
                     advantages,
                     returns,
-                    logprob_buffer,
+                    buffer.logprob_buffer,
                 )
 
             # calcula os gradientes e atualiza os parametros
-            (loss_val, aux_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(parameters)
-            updates, new_optim_state = settings.optimizer.update(grads, optim_state)
-            new_parameters = optax.apply_updates(parameters, updates)
+            (loss_val, aux_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(_parameters)
+            updates, new_optim_state = settings.optimizer.update(grads, _optimizer_state)
+            new_parameters = optax.apply_updates(_parameters, updates)
 
             new_carry = (new_parameters, new_optim_state)
-            grad_info = grad_metrics(grads, parameters)
+            grad_info = grad_metrics(grads, _parameters)
 
             return new_carry, {
                 "loss": loss_val,
@@ -610,33 +612,39 @@ def ppo_train(rng: jax.Array, settings: TrainingSettings):
                 **aux_metrics,
             }
 
-        final_carry, metrics = jax.lax.scan(
-            _update_step,
-            (settings.network_settings.params, settings.optimizer_state),
+        (new_parameters, new_optim_state), metrics = jax.lax.scan(
+            _train_step,
+            (parameters, optimizer_state),
             jnp.arange(settings.epochs),
         )
 
+        return new_parameters, new_optim_state, metrics
+
         
-    def _new_goal_step(carry):
+    def _new_goal_step(carry, _):
         """This is the body of the scan, representing one full update."""
-        rng, progress = carry
+        rng, runpar, params, optim_state = carry
         rng, initial_state_rng = jax.random.split(rng)
 
         #estado inicial 
-        rng, initial_state = create_initial_state(initial_state_rng, progress, settings)
+        rng, initial_state = create_initial_state(initial_state_rng, runpar.progress.value, settings)
 
         # cria um buffer
         buffer = BatchedBuffer.init(settings)
+        state, buffer, advantages, returns = _collect_dataset(initial_state, buffer, runpar)
+        params, optim_state, metrics = _train(params, optim_state, buffer, advantages, returns)
 
+        runpar = _update_running_parameters(state, buffer, runpar)
 
-       
+        return (rng, runpar, params, optim_state),  metrics
+
 
 
     # loop principal de trainamento, executado por lax.scan
-    stats = RunningStats.init((settings.network_settings.obs_size, ))
+    runpar = RunningParameters.init((settings.network_settings.obs_size, ))
     final_carry, metrics = jax.lax.scan(
-        _update_step,
-        (settings.network_settings.params, settings.optimizer_state, stats, rng, 0.0, ema(jnp.array(0), jnp.array(0.12))),
+        _new_goal_step,
+        (rng, runpar, settings.network_settings.params, settings.optimizer_state),
         jnp.arange(settings.epochs),
     )
 
