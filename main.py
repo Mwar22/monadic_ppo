@@ -9,7 +9,7 @@ from jax import config
 from new_ppo import TrainingSettings, ppo_train
 from etils import epath
 from robot import create_step, create_rsd
-from config import EnviromentConfig, RangeConfig, ResetConfig, RewardConfig
+from config import MujocoSimConfig, RangeConfig, ResetConfig, RewardConfig
 from mathutils import Scheduler
 from new_ppo import NetworksSettings
 
@@ -147,29 +147,35 @@ def create_networks(rng:jax.Array, obs_size:int, action_size:int):
 
 # --- Inicialização ---
 rng = jax.random.PRNGKey(42)
-rng, network_settings = create_networks(rng, obs_size=39, action_size=6)
+rng, network_settings = create_networks(rng, obs_size=37, action_size=6)
 
 
 robot_shared_data = create_rsd(
     epath.Path("model/joystick_env.xml"),
     epath.Path("model"),
     epath.Path("model/meshes"),
-    EnviromentConfig(),
+    MujocoSimConfig(),
     RewardConfig(),
     RangeConfig(),
-    ResetConfig(),
     ["junta1", "junta2", "junta3", "junta4","junta5", "junta6"]
 )
 
+def adaptive_progress(current_p, success_rate, target_success = 0.10, step_size=0.005):
+    # Só aumenta a dificuldade se mais de 30% dos robôs estão a ter sucesso
+    # Se o sucesso for baixo, o progresso "congela" ou até recua um pouco
+  
+    delta = jnp.where(success_rate > target_success, 0.002, -0.0001)
+    new_p = jnp.clip(current_p + delta, 0.0, 1.0)
+    return new_p
 
 settings = TrainingSettings.init(
     network_settings,
     robot_shared_data,
     optimizer_creator  = lambda lr: optax.adam(lr),
     step_fn_creator = create_step,
-    scheduler_fn= lambda i, n: jnp.minimum(0.7, Scheduler.power(i, n, p=1.5)),
+    progress_fn = adaptive_progress,
     num_envs= 500,
-    num_episodes=1000,
+    epochs=600,
     steps_per_episode=30,
     learning_rate=5e-4
 )
@@ -180,7 +186,7 @@ settings = TrainingSettings.init(
 #jax.config.update("jax_disable_jit", True)
 
 print("JIT compiling and starting training...")
-(final_params, final_optim_state, final_stats, final_rng), metrics = ppo_train(rng, settings)
+(final_params, final_optim_state, final_stats, final_rng, final_success, final_ema_success), metrics = ppo_train(rng, settings)
 
 
 avg_loss = jnp.mean(metrics["loss"][-20:])
@@ -193,40 +199,49 @@ print(f"min avg reward: {jnp.min(avg_episode_rewards)}")
 print(f"max avg reward: {jnp.max(avg_episode_rewards)}")
 
 grad_norm = metrics["grad_norm"]
-#avg_success_count = jnp.mean(metrics["success_count"], axis=1)
-print(f"nonzero_succes_count: {jnp.count_nonzero(metrics["success_count"])}")
-
 entropy = metrics["entropy"]
 
 avg_ptr = jnp.mean(metrics["ptr"])
 print(f"avg ptr per episode: {avg_ptr}")
 
-fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(10, 8), tight_layout=True)
-ax1.plot(metrics["loss"])
-ax1.set_title("Training Loss")
-ax1.set_xlabel("Update Step")
-ax1.set_ylabel("Loss")
+fig, axs = plt.subplots(3, 2, figsize=(10, 8), tight_layout=True)
+axs[0][0].plot(metrics["loss"])
+axs[0][0].set_title("Training Loss")
+axs[0][0].set_xlabel("Update Step")
+axs[0][0].set_ylabel("Loss")
 
-ax2.plot(avg_episode_rewards)
-ax2.set_title("Average Episode Reward")
-ax2.set_xlabel("Update Step")
-ax2.set_ylabel("Average Reward")
+#-------------------------------------------
+
+axs[0][1].plot(avg_episode_rewards)
+axs[0][1].set_title("Average Episode Reward")
+axs[0][1].set_xlabel("Update Step")
+axs[0][1].set_ylabel("Average Reward")
 
 mean_err = jnp.mean(metrics["err"], axis=1)
-ax3.plot(mean_err)
-ax3.set_title("Mean pos err")
-ax3.set_xlabel("Update Step")
-ax3.set_ylabel("Pos Err")
+axs[1][0].plot(mean_err)
+axs[1][0].set_title("Mean pos err")
+axs[1][0].set_xlabel("Update Step")
+axs[1][0].set_ylabel("Pos Err")
+
 """
-ax3.plot(grad_norm)
-ax3.set_title("Gradient norm (Euclidian, L2)")
-ax3.set_xlabel("Update Step")
-ax3.set_ylabel("Norm")
+axs[1][0].plot(grad_norm)
+axs[1][0].set_title("Gradient norm (Euclidian, L2)")
+axs[1][0].set_xlabel("Update Step")
+axs[1][0].set_ylabel("Norm")
 """
-ax4.plot(entropy)
-ax4.set_title("Entropy")
-ax4.set_xlabel("Update Step")
-ax4.set_ylabel("Entropy value")
+axs[1][1].plot(entropy)
+axs[1][1].set_title("Entropy")
+axs[1][1].set_xlabel("Update Step")
+axs[1][1].set_ylabel("Entropy value")
+
+#print(f"success_rate = {metrics["success_rate"]}")
+axs[2][0].plot(metrics["success_rate"])
+axs[2][0].set_xlabel("Update Step")
+axs[2][0].set_ylabel(" success_rate %")
+
+axs[2][1].plot(metrics["progress"])
+axs[2][1].set_xlabel("Update Step ")
+axs[2][1].set_ylabel(" Progress %")
 
 
 plt.savefig(f"training_plots.png")

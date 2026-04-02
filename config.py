@@ -14,7 +14,7 @@ from typing import Callable
 
 
 @struct.dataclass
-class EnviromentConfig:
+class MujocoSimConfig:
     """
     Configurações base para o treino
     """
@@ -53,21 +53,28 @@ class RewardConfigParameter:
             return start_value - (start_value - end_value)*p
         
         return cls(func)
+    
+    @classmethod
+    def inv_sqrt_tracking(cls, start_value, end_value):
+        def func(p):
+            return start_value - (start_value - end_value)*(p**0.5)
+        
+        return cls(func)
         
 @struct.dataclass
 class RewardConfig:
     # --- Incentivo de Posição ---
     # O ganho máximo quando o erro é zero
-    pos_incentive_gain = RewardConfigParameter.const(100.0)
+    pos_incentive_gain = RewardConfigParameter.const(500.0)
 
     # 'Largura' da recompensa: se o erro for igual a sigma, a recompensa cai para ~36%
     # No início do treino (progress=0), sigma=0.5
     # No fim do treino (progress=1), sigma=0.1
-    pos_incentive_sigma = RewardConfigParameter.linear_tracking(0.5, 0.1)
+    pos_incentive_sigma = RewardConfigParameter.inv_sqrt_tracking(0.8, 0.1)
 
     # --- Incentivo de Orientação ---
-    rot_incentive_gain = RewardConfigParameter.const(10.0)
-    rot_incentive_sigma = RewardConfigParameter.linear_tracking(0.5, 0.1)
+    rot_incentive_gain = RewardConfigParameter.const(100.0)
+    rot_incentive_sigma = RewardConfigParameter.linear_tracking(0.5, 0.2)
 
     # --- Sucesso e Falha ---
     success_reward = RewardConfigParameter.const(1000.0)
@@ -76,7 +83,7 @@ class RewardConfig:
     # --- Tolerância ---
     # No início do treino (progress=0), err_tol=0.6
     # No fim do treino (progress=1), err_tol=0.1
-    err_tol = RewardConfigParameter.linear_tracking(0.6, 0.01)
+    err_tol = RewardConfigParameter.linear_tracking(0.3, 0.05)
     
     # --- Regularização ---
     torques_penalty = RewardConfigParameter.const(-1e-5)
@@ -84,15 +91,19 @@ class RewardConfig:
 
 @struct.dataclass
 class RangeConfig:
+    #position: jax.Array
+
     goal_position: jax.Array = field(
         default_factory=lambda: jnp.array(
             [[-0.6, 0.6, 0.1], [-0.6, 0.6, 0.1], [0, 0.6, 0.1]]
         )
     )
 
+
     goal_orientation: jax.Array = field(
         default_factory=lambda: jnp.array([[-2, 2, 0.1], [-2, 2, 0.1], [-2, 2, 0.1]])
     )
+
 
     @property
     def x(self):

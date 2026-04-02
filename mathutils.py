@@ -171,3 +171,31 @@ def shift_array(array: jax.Array, ptr: jax.Array)-> jax.Array:
     # tal como um array de multiplas dimensões
     broadcast_dims = (steps,) + (1,) * (array.ndim - 1)
     return jnp.where(mask.reshape(broadcast_dims), 0.0, shifted)
+
+
+def ema(ema_success: jax.Array, current_success_rate:jax.Array, alpha=0.9):
+    """ Exponential mooving average
+
+    Parameters
+    ----------
+    ema_success : jax.Array
+        Valor atual para a média móvel exponencial
+
+    current_success_rate : jax.Array
+        Taxa de sucesso atual
+
+    alpha : float, optional
+        Fator de suavização, default = 0.9
+
+    Returns
+    -------
+    jax.Array
+        Nova média móvel exponencial
+    """
+    return (alpha * ema_success) + ((1 - alpha) * current_success_rate)
+
+def stdNormalize(values: jax.Array):
+    mean = jnp.mean(values)
+    std = jnp.std(values)
+    values = (values - mean) / (std + 1e-8)
+    return jnp.maximum(values, 1e-3)

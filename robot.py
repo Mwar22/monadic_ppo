@@ -18,13 +18,13 @@ from mujoco import mjx
 from etils import epath
 from flax import struct
 from typing import Any, Dict, Tuple, List, cast
-from config import ResetConfig, RangeConfig, RewardConfig, EnviromentConfig
+from config import ResetConfig, RangeConfig, RewardConfig, MujocoSimConfig
 from enviroment import StateMonad
 from mathutils import l1_l2_reward, exp_scale_reward, conv2jax_quat, cont_sample_beta
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from new_ppo import NetworksSettings, RunningStats
+    from new_ppo import NetworksSettings, RunningStats, RunningAvg
 
 
 @struct.dataclass
@@ -41,24 +41,17 @@ class RobotSharedData:
     default_pose: jax.Array
     tool_tip_id: int
     tool_base_id: int
-    min_qpos_rnd: float
-    max_qpos_rnd: float
-    min_qpos_clp: float
-    max_qpos_clp: float
-    enviroment_config: EnviromentConfig
+    enviroment_config: MujocoSimConfig
     reward_config: RewardConfig
     range_config: RangeConfig
-    reset_config: ResetConfig
     
-
 def create_rsd(
     xml_path: epath.Path,
     model_path: epath.Path,
     meshes_path: epath.Path,
-    enviroment_config: EnviromentConfig,
+    enviroment_config: MujocoSimConfig,
     reward_config: RewardConfig,
     range_config: RangeConfig,
-    reset_config: ResetConfig,
     arm_joints: List[str]
 ):
     """
@@ -108,32 +101,6 @@ def create_rsd(
     tool_tip_id = mj_model.site("tool_tip").id
     tool_base_id = mj_model.site("tool_base").id
 
-    def calculate_joint_span(p: float = 0.1) -> Tuple[float, float]:
-        """
-        Calcula uma faixa de valores mínimos e maximos em termos de deviação percentual dos mínimos
-        e máximos dos limites de junta. Por exemplo, para p = 0.1, teremos valores que se iniciam em 10%
-        acima do valor mínimo e vão até 10% do valor máximo, considerando o range de valores disponíveis.
-
-        Params
-        ------
-        p: float
-            proporção escolhida.
-
-        Returns
-        -------
-        ret: Tuple[float, float]
-            valor mínimo e máximo respectivamente calculados.
-        """
-        span = uppers - lowers
-        lower = lowers + p * span
-        upper = uppers - p * span
-        return lower, upper
-
-    # para calcular os valores adequados de limites minimos e maximos para gerar incrementos aleatórios
-    min_qpos_rnd, max_qpos_rnd = calculate_joint_span(reset_config.rnd_range)
-    min_qpos_clp, max_qpos_clp = calculate_joint_span(reset_config.clip_range)
-
-
     return RobotSharedData(
         mjx_model,
         mj_model,
@@ -147,14 +114,9 @@ def create_rsd(
         default_pose,
         tool_tip_id,
         tool_base_id,
-        min_qpos_rnd,
-        max_qpos_rnd,
-        min_qpos_clp,
-        max_qpos_clp,
         enviroment_config,
         reward_config,
         range_config,
-        reset_config
     )
 
 
@@ -316,7 +278,7 @@ def sample_config_velocities(
 
 ##################################################################################################################
 
-def normalize_obs(data, obs_stats:RunningStats):
+def normalize_obs(data, obs_stats:RunningAvg):
     def func(state):
         std = jnp.sqrt(obs_stats.var + 1e-8)
         norm_obs = (data["obs"] - obs_stats.mean) / std
@@ -325,7 +287,7 @@ def normalize_obs(data, obs_stats:RunningStats):
         return new_state, {**data, "obs": norm_obs}
     return StateMonad(func)
 
-def update_obs(data, obs_stats:RunningStats, obs_noise=0.0):
+def update_obs(data, obs_noise=0.0):
     def func(state):
         rng, rng1 = jax.random.split(state["rng"])
 
@@ -373,17 +335,16 @@ def concat_obs_as_array(d: Dict[str, Any]) -> StateMonad:
         obs_list = [
             state["goal"]["goal_position_coordinates"],  # (3,)
             state["goal"]["goal_orientation_coordinates"],  # (3,)
+            state["goal"]["goal_position_velocities"], # (3,)
+            state["goal"]["goal_orientation_velocities"], # (3,)
             d["tool_position"],  # (3,)
-            jnp.expand_dims(d["position_error"], axis=0),  # () -> (1,)
             d["orientation"],  # (4,)
-            jnp.expand_dims(d["orientation_error"], axis=0),  # () -> (1,)
             d["torques"],  # (6,)
             d["joint_angles"],  # (6,)
             d["joint_vel"],  # (6,)
-            d["pose_dist"],  # (6,)
         ]
         obs_array = jnp.concatenate(obs_list)
-        # (3+3+3+ 1 + 4 + 1 + 6+6+6+6 = 39)
+        # 5 * (3,)  +  3 * (6, ) + (4,)= 37)
 
         return state, {**d, "obs_array": obs_array}
 
@@ -420,7 +381,7 @@ def debug(pdata, name):
     return StateMonad(func)
 
 
-def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningStats, env: StateMonad):
+def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningAvg, env: StateMonad):
     return (
         env.bind(
             lambda pdata: StateMonad(
@@ -664,7 +625,7 @@ def create_step(network_settings: NetworksSettings, robot_shared_data: RobotShar
             )
         )
     
-    def step_fn(progress, state, obs_stats: RunningStats):
+    def step_fn(progress, state, stats: RunningStats):
 
         # obtem uma ação pela observação anterior
         pl = (get_action()
@@ -673,7 +634,7 @@ def create_step(network_settings: NetworksSettings, robot_shared_data: RobotShar
         )
 
         # obtem novas observações
-        pl = obs_pipeline(robot_shared_data, obs_stats, pl)
+        pl = obs_pipeline(robot_shared_data, stats.obs_stat, pl)
 
         # de acordo com as observações obtem a recompensa
         pl = reward_pipeline(progress, robot_shared_data, pl)
