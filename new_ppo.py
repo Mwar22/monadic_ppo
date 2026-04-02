@@ -86,10 +86,9 @@ def rollout(
     state_in_axes = {
         'action': 0,
         'goal': {
-            'goal_orientation_coordinates': 0, # or 0 if batched
-            'goal_orientation_velocities': 0,
             'goal_position_coordinates': 0,
             'goal_position_velocities': 0,
+            'goal_orientation_coordinates': 0, # or 0 if batched
         },
         'mjx_data': 0, 
         'obs': 0,

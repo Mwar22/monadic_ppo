@@ -98,11 +98,11 @@ class VectorRange:
     def init(cls, num_values: int, min_values: jax.Array, max_values: jax.Array)->Self:
         num = max(num_values -1, 1)
         values = jnp.vstack([jnp.linspace(start, stop, num=num) for start, stop in zip(min_values, max_values)])
-        jax.debug.print("values: {}", values)
         return cls(num_values, values)
     
 
     def sample_normal(self, rng, progress):
+   
         scale = jnp.maximum(0.1, progress)
 
         mean = (self.num_values - 1) / 2
@@ -118,8 +118,6 @@ class VectorRange:
             0,
             self.num_values - 1
         ).astype(jnp.int32)
-
-        jax.debug.print("indices: {}", indices)
 
         return rng, self.values[jnp.arange(dim), indices]
     
@@ -144,7 +142,7 @@ class RangeConfig:
         jnp.array([2, 2, 2])
     )
 
-    
+
     
 
 

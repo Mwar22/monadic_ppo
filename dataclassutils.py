@@ -71,7 +71,7 @@ class RunningProgress:
     step_size: float
 
     @classmethod
-    def init(cls, initial_value: jax.Array = jnp.zeros(0), target_success = 0.1, step_size=0.005) -> Self:
+    def init(cls, initial_value: jax.Array = jnp.array(0), target_success = 0.1, step_size=0.005) -> Self:
         return cls(initial_value, target_success, step_size)
     
     def update(self, success_rate):
