@@ -11,7 +11,7 @@ from etils import epath
 from robot import create_step, create_rsd
 from config import MujocoSimConfig, RangeConfig, ResetConfig, RewardConfig
 from mathutils import Scheduler
-from new_ppo import NetworksSettings
+from dataclassutils import NetworksSettings
 
 #######################################################################################
 # Modelos
@@ -186,7 +186,7 @@ settings = TrainingSettings.init(
 #jax.config.update("jax_disable_jit", True)
 
 print("JIT compiling and starting training...")
-(final_params, final_optim_state, final_stats, final_rng, final_success, final_ema_success), metrics = ppo_train(rng, settings)
+(rng, runpar, params, optimizer_state), metrics = ppo_train(rng, settings)
 
 
 avg_loss = jnp.mean(metrics["loss"][-20:])

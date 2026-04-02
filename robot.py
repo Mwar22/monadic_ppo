@@ -24,7 +24,7 @@ from mathutils import l1_l2_reward, exp_scale_reward, conv2jax_quat, cont_sample
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from new_ppo import NetworksSettings, RunningParameters, RunningAvg
+    from dataclassutils import NetworksSettings, RunningParameters, RunningAvg
 
 
 @struct.dataclass
