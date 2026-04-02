@@ -126,6 +126,8 @@ class VectorRange:
 @struct.dataclass
 class RangeConfig:
 
+    num_values: int = 300
+
     position: VectorRange = VectorRange.init(
         300,
         jnp.array([-0.6, -0.6, 1]),
@@ -141,6 +143,8 @@ class RangeConfig:
         jnp.array([-2, -2, -2]),
         jnp.array([2, 2, 2])
     )
+
+    
     
 
 

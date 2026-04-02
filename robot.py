@@ -625,7 +625,7 @@ def create_step(network_settings: NetworksSettings, robot_shared_data: RobotShar
             )
         )
     
-    def step_fn(progress, state, stats: RunningParameters):
+    def step_fn(progress, state, runpar: RunningParameters):
 
         # obtem uma ação pela observação anterior
         pl = (get_action()
@@ -634,7 +634,7 @@ def create_step(network_settings: NetworksSettings, robot_shared_data: RobotShar
         )
 
         # obtem novas observações
-        pl = obs_pipeline(robot_shared_data, stats.obs_stat, pl)
+        pl = obs_pipeline(robot_shared_data, runpar.obs_stat, pl)
 
         # de acordo com as observações obtem a recompensa
         pl = reward_pipeline(progress, robot_shared_data, pl)

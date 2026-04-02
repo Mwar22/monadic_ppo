@@ -147,7 +147,7 @@ def create_networks(rng:jax.Array, obs_size:int, action_size:int):
 
 # --- Inicialização ---
 rng = jax.random.PRNGKey(42)
-rng, network_settings = create_networks(rng, obs_size=37, action_size=6)
+rng, network_settings = create_networks(rng, obs_size=34, action_size=6)
 
 
 robot_shared_data = create_rsd(

@@ -385,7 +385,7 @@ def ppo_train(rng: jax.Array, settings: TrainingSettings):
     final_carry, metrics = jax.lax.scan(
         _new_goal_step,
         (rng, runpar, settings.network_settings.params, settings.optimizer_state),
-        jnp.arange(settings.num_episodes),
+        jnp.arange(settings.robot_shared_data.range_config.num_values),
     )
 
     return final_carry, metrics
