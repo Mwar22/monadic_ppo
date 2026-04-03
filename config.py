@@ -103,7 +103,7 @@ class VectorRange:
 
     def sample_normal(self, rng, progress):
    
-        scale = jnp.maximum(0.1, progress)
+        scale = jnp.maximum(0.01, progress)
 
         mean = (self.num_values - 1) / 2
         std = mean * scale
@@ -119,7 +119,8 @@ class VectorRange:
             self.num_values - 1
         ).astype(jnp.int32)
 
-        return rng, self.values[jnp.arange(dim), indices]
+        retval = self.values[jnp.arange(dim), indices]
+        return rng, retval
     
 @struct.dataclass
 class RangeConfig:

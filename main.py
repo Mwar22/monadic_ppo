@@ -183,9 +183,14 @@ settings = TrainingSettings.init(
 
 
 # --- Executa o treinamento ---
-#jax.config.update("jax_disable_jit", True)
+disable_jit = False
 
-print("JIT compiling and starting training...")
+if disable_jit:
+    jax.config.update("jax_disable_jit", True)
+    print("Debug: JIT disabled!")
+else:
+    print("JIT compiling and starting training...")
+
 (rng, runpar, params, optimizer_state), metrics = ppo_train(rng, settings)
 
 

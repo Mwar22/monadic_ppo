@@ -57,7 +57,7 @@ class RunningExponentialAvg:
     alpha: float
 
     @classmethod
-    def init(cls, initial_ema_value: jax.Array = jnp.zeros(0), alpha: float =0.9) -> Self:
+    def init(cls, initial_ema_value: jax.Array = jnp.array(0), alpha: float =0.9) -> Self:
         return cls(initial_ema_value, alpha)
     
     def update(self, update_value:jax.Array):
@@ -71,18 +71,18 @@ class RunningProgress:
     step_size: float
 
     @classmethod
-    def init(cls, initial_value: jax.Array = jnp.array(0), target_success = 0.1, step_size=0.005) -> Self:
+    def init(cls, initial_value: jax.Array = jnp.array(0), target_success = 0.6, step_size=0.005) -> Self:
         return cls(initial_value, target_success, step_size)
     
     def update(self, success_rate):
-        delta = jnp.where(success_rate > self.target_success, self.step_size, -self.step_size)
+        delta = jnp.where(success_rate < self.target_success, self.step_size, -self.step_size)
         new_value = jnp.clip(self.value + delta, 0.0, 1.0)
         return RunningProgress(new_value, self.target_success, self.step_size)
 
 @struct.dataclass
 class RunningParameters:
     obs_stat: RunningAvg
-    ema_success_rate: RunningExponentialAvg
+    ema_success: RunningExponentialAvg
     progress: RunningProgress
 
     @classmethod
@@ -96,12 +96,12 @@ class RunningParameters:
     
     def update(self, batch_obs: jax.Array, success_rate: jax.Array):
         new_obs_stat = self.obs_stat.update(batch_obs)
-        new_ema_sucess_rate = self.ema_success_rate.update(success_rate)
-        new_progress = self.progress.update(new_ema_sucess_rate)
+        new_ema_success = self.ema_success.update(success_rate)
+        new_progress = self.progress.update(new_ema_success.ema_value)
 
         return RunningParameters(
             new_obs_stat,
-            new_ema_sucess_rate,
+            new_ema_success,
             new_progress
         )
     
