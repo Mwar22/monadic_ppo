@@ -11,7 +11,7 @@ from etils import epath
 from robot import create_step, create_rsd
 from config import MujocoSimConfig, RangeConfig, RewardConfig
 from mathutils import Scheduler
-from dataclassutils import NetworksSettings
+from dataclassutils import NetworksSettings, NetworkParameters
 
 #######################################################################################
 # Modelos
@@ -138,16 +138,15 @@ def create_networks(rng:jax.Array, obs_size:int, action_size:int):
 
     actor = Actor(action_size, discrete=True)
     critic = Critic()
-    params = (
-        actor.init(rng_actor, dummy_obs),
-        critic.init(rng_critic, dummy_obs),
-    )
-    return rng, NetworksSettings(obs_size, action_size, actor, critic, params)
+    actor_params = actor.init(rng_actor, dummy_obs),
+    critic_params = critic.init(rng_critic, dummy_obs),
+    
+    return rng, NetworksSettings(obs_size, action_size, actor, critic), NetworkParameters.init(actor_params, critic_params)
 
 
 # --- Inicialização ---
 rng = jax.random.PRNGKey(42)
-rng, network_settings = create_networks(rng, obs_size=34, action_size=6)
+rng, network_settings, network_params = create_networks(rng, obs_size=34, action_size=6)
 
 
 robot_shared_data = create_rsd(
@@ -160,23 +159,16 @@ robot_shared_data = create_rsd(
     ["junta1", "junta2", "junta3", "junta4","junta5", "junta6"]
 )
 
-def adaptive_progress(current_p, success_rate, target_success = 0.10, step_size=0.005):
-    # Só aumenta a dificuldade se mais de 30% dos robôs estão a ter sucesso
-    # Se o sucesso for baixo, o progresso "congela" ou até recua um pouco
-  
-    delta = jnp.where(success_rate > target_success, 0.002, -0.0001)
-    new_p = jnp.clip(current_p + delta, 0.0, 1.0)
-    return new_p
-
 settings = TrainingSettings.init(
     network_settings,
+    network_params,
     robot_shared_data,
     optimizer_creator  = lambda lr: optax.adam(lr),
     step_fn_creator = create_step,
-    progress_fn = adaptive_progress,
-    num_envs= 500,
-    num_episodes=600,
-    steps_per_episode=30,
+    num_envs= 250,
+    cycles_per_goal=5,
+    epochs=100,
+    rollout_steps=30,
     learning_rate=5e-4
 )
 
@@ -191,26 +183,32 @@ if disable_jit:
 else:
     print("JIT compiling and starting training...")
 
-(rng, runpar, params, optimizer_state), metrics = ppo_train(rng, settings)
+ (rng, runpar, optim_state, params), metrics = ppo_train(rng, network_params, settings)
+
+def metric_shape(metrics_dict, metric_str):
+    print(f"{metric_str} shape: {metrics_dict[metric_str].shape}")
 
 
-avg_loss = jnp.mean(metrics["loss"][-20:])
+metric_shape(metrics, "loss")
+metric_shape(metrics, "reward")
+metric_shape(metrics, "grad_norm")
+metric_shape(metrics, "entropy")
+
+loss = jnp.mean(metrics["loss"],axis=0)
+avg_episode_rewards = jnp.mean(metrics["reward"],axis=(0, 2, 3))
+grad_norm = jnp.mean(metrics["grad_norm"],axis=0)
+entropy = jnp.mean(metrics["entropy"],axis=0)
+
+avg_loss = jnp.mean(loss[-20:])
 print(f" Training finished! Average loss of last 20 steps: {avg_loss:.4f}")
 
 # plotagem dos dados
-avg_rewards_per_update = metrics["avg_reward"]
-avg_episode_rewards = jnp.mean(avg_rewards_per_update, axis=1)
 print(f"min avg reward: {jnp.min(avg_episode_rewards)}")
 print(f"max avg reward: {jnp.max(avg_episode_rewards)}")
 
-grad_norm = metrics["grad_norm"]
-entropy = metrics["entropy"]
-
-avg_ptr = jnp.mean(metrics["ptr"])
-print(f"avg ptr per episode: {avg_ptr}")
 
 fig, axs = plt.subplots(3, 2, figsize=(10, 8), tight_layout=True)
-axs[0][0].plot(metrics["loss"])
+axs[0][0].plot(loss)
 axs[0][0].set_title("Training Loss")
 axs[0][0].set_xlabel("Update Step")
 axs[0][0].set_ylabel("Loss")
@@ -222,18 +220,12 @@ axs[0][1].set_title("Average Episode Reward")
 axs[0][1].set_xlabel("Update Step")
 axs[0][1].set_ylabel("Average Reward")
 
-mean_err = jnp.mean(metrics["err"], axis=1)
-axs[1][0].plot(mean_err)
-axs[1][0].set_title("Mean pos err")
-axs[1][0].set_xlabel("Update Step")
-axs[1][0].set_ylabel("Pos Err")
 
-"""
 axs[1][0].plot(grad_norm)
 axs[1][0].set_title("Gradient norm (Euclidian, L2)")
 axs[1][0].set_xlabel("Update Step")
 axs[1][0].set_ylabel("Norm")
-"""
+
 axs[1][1].plot(entropy)
 axs[1][1].set_title("Entropy")
 axs[1][1].set_xlabel("Update Step")
@@ -252,9 +244,9 @@ axs[2][1].set_ylabel(" Progress %")
 plt.savefig(f"training_plots.png")
 print("\nTraining plots saved to training_plots.png")
 
-"""
 import pandas as pd
 
+"""
 df = pd.DataFrame({
     "step": range(len(metrics["loss"])),
     "loss": metrics["loss"],

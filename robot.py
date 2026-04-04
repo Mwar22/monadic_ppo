@@ -24,7 +24,7 @@ from mathutils import l1_l2_reward, exp_scale_reward, conv2jax_quat, cont_sample
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from dataclassutils import NetworksSettings, RunningParameters, RunningAvg
+    from dataclassutils import NetworksSettings, NetworkParameters, RunningParameters, RunningAvg
 
 
 @struct.dataclass
@@ -554,7 +554,7 @@ def reward_pipeline(progress, rsd: RobotSharedData,  env: StateMonad):
 
 
 ####################################################################################################################
-def create_step(network_settings: NetworksSettings, robot_shared_data: RobotSharedData):
+def create_step(network_settings: NetworksSettings, network_parameters: NetworkParameters, robot_shared_data: RobotSharedData):
     """
     state.keys() = ["rng", "step", "goal", "obs_history", "action", "mjx_data"]
     """
@@ -565,7 +565,7 @@ def create_step(network_settings: NetworksSettings, robot_shared_data: RobotShar
             last_obs = state["obs"]
             rng1, rng2 = jax.random.split(state["rng"])
 
-            output = network_settings.actor.apply(network_settings.actor_params, last_obs)
+            output = network_settings.actor.apply(network_parameters.actor_params, last_obs)
             output = cast(jax.Array, output)
             action_value, logprob = cont_sample_beta(output, rng1)
 

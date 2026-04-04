@@ -125,20 +125,20 @@ class VectorRange:
 @struct.dataclass
 class RangeConfig:
 
-    num_values: int = 300
+    numberof_goals: int = 50
 
     position: VectorRange = VectorRange.init(
-        300,
+        50,
         jnp.array([-0.6, -0.6, 1]),
         jnp.array([0.6, 0.6, 1])
     )
     position_velocities: VectorRange = VectorRange.init(
-        300,
+        50,
         jnp.array([0, 0, 0]),
         jnp.array([0.1, 0.1, 0.1])
     )
     orientation: VectorRange = VectorRange.init(
-        300,
+        50,
         jnp.array([-2, -2, -2]),
         jnp.array([2, 2, 2])
     )

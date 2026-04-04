@@ -84,14 +84,16 @@ class RunningParameters:
     obs_stat: RunningAvg
     ema_success: RunningExponentialAvg
     progress: RunningProgress
+    success_rate: jax.Array
 
     @classmethod
-    def init(cls, obs_shape, ) -> Self:
+    def init(cls, obs_shape) -> Self:
         # Inicializamos com uma contagem pequena para evitar divisões por zero
         return cls(
             RunningAvg.init(obs_shape),
             RunningExponentialAvg.init(),
-            RunningProgress.init()
+            RunningProgress.init(),
+            jnp.array(0),
         )
     
     def update(self, batch_obs: jax.Array, success_rate: jax.Array):
@@ -102,8 +104,29 @@ class RunningParameters:
         return RunningParameters(
             new_obs_stat,
             new_ema_success,
-            new_progress
+            new_progress,
+            success_rate,
         )
+    
+
+@struct.dataclass
+class NetworkParameters:
+    params: Tuple[Any, Any]
+
+    @classmethod
+    def init(cls, actor_params, critic_params) -> Self:
+        return cls((actor_params, critic_params))
+
+    @property
+    def actor_params(self):
+        return self.params[0]
+    
+    @property
+    def critic_params(self):
+        return self.params[1]
+    
+    def update(self, params: Tuple[Any, Any]):
+        return NetworkParameters(params)
     
 @struct.dataclass
 class NetworksSettings:
@@ -111,7 +134,6 @@ class NetworksSettings:
     action_size: int
     actor: nn.Module
     critic: nn.Module
-    params: Tuple[Any, Any]
 
     @classmethod
     def init(cls, 
@@ -126,72 +148,64 @@ class NetworksSettings:
             action_size,
             actor,
             critic,
-            params,
         )
-    
-    @property
-    def actor_params(self):
-        return self.params[0]
-    
-    @property
-    def critic_params(self):
-        return self.params[1]
     
 
 @struct.dataclass
 class TrainingSettings:
     network_settings: NetworksSettings
-    num_episodes: int
+    cycles_per_goal: int
+    epochs: int
     num_envs: int
-    steps_per_episode: int
+    rollout_steps: int
     gamma: float
     gae_lambda: float
 
     robot_shared_data: RobotSharedData
     optimizer: optax.GradientTransformationExtraArgs
     optimizer_state: optax.OptState
-    step_fn: Callable
-    progress_fn: Callable[[jax.Array, jax.Array], jax.Array]
+    step_fn_creator: Callable
 
     @classmethod
     def init(
         cls,
         network_settings: NetworksSettings,
+        network_params: NetworkParameters,
         robot_shared_settings: RobotSharedData,
         optimizer_creator: Callable[[float], optax.GradientTransformationExtraArgs],
-        step_fn_creator:Callable[[NetworksSettings, RobotSharedData], Callable],
-        progress_fn: Callable[[jax.Array, jax.Array], jax.Array],
+        step_fn_creator:Callable[[NetworksSettings, NetworkParameters, RobotSharedData], Callable],
         num_envs: int = 1,
-        num_episodes: int = 1,
-        steps_per_episode: int = 1,
+        cycles_per_goal = 1,
+        epochs: int = 1,
+        rollout_steps: int = 1,
         learning_rate: float = 1e-4,
         gamma: float = 0.99,
         gae_lambda: float = 0.95,
     ):
         optimizer = optimizer_creator(learning_rate)
-        optimizer_params = optimizer.init(network_settings.params)
-        step_fn = jax.jit(step_fn_creator(network_settings, robot_shared_settings))
-
+        optimizer_params = optimizer.init(network_params.params)
+        
         return cls(
             network_settings,
-            num_episodes,
+            cycles_per_goal,
+            epochs,
             num_envs,
-            steps_per_episode,
+            rollout_steps,
             gamma,
             gae_lambda,
             robot_shared_settings,
             optimizer,
             optimizer_params,
-            step_fn,
-            progress_fn
+            step_fn_creator,
         )
+    
 
 @struct.dataclass
 class BatchedBuffer:
-    obs_buffer: jax.Array       # (num_envs, max_steps +1, *obs_shape)
-    action_buffer: jax.Array    # (num_envs, max_steps +1, *action_shape)
-    reward_buffer: jax.Array    # (num_envs, max_steps +1)
-    logprob_buffer: jax.Array   # (num_envs, max_steps +1)
+    obs_buffer: jax.Array       # (num_envs, rollout_steps +1, *obs_shape)
+    action_buffer: jax.Array    # (num_envs, rollout_steps +1, *action_shape)
+    reward_buffer: jax.Array    # (num_envs, rollout_steps +1)
+    logprob_buffer: jax.Array   # (num_envs, rollout_steps +1)
     ptr: jax.Array  # (num_envs,)
     done_flag: jax.Array # (num_envs,)  se atingiu o alvo ou colidiu/ultrapassou os limites
     stop_flag: jax.Array # (num_envs,)  para parar com o rollout. True se done_flag estiver true ou o buffer estiver cheio
@@ -216,13 +230,13 @@ class BatchedBuffer:
     @classmethod
     def init(cls, settings: TrainingSettings):
         num_envs = settings.num_envs
-        max_steps = settings.steps_per_episode +1
+        rollout_steps = settings.rollout_steps +1
     
         return cls(
-            jnp.zeros((num_envs, max_steps, settings.network_settings.obs_size)),
-            jnp.zeros((num_envs, max_steps, settings.network_settings.action_size)),
-            jnp.zeros((num_envs, max_steps), dtype=jnp.float32),
-            jnp.zeros((num_envs, max_steps), dtype=jnp.float32),
+            jnp.zeros((num_envs, rollout_steps, settings.network_settings.obs_size)),
+            jnp.zeros((num_envs, rollout_steps, settings.network_settings.action_size)),
+            jnp.zeros((num_envs, rollout_steps), dtype=jnp.float32),
+            jnp.zeros((num_envs, rollout_steps), dtype=jnp.float32),
             jnp.zeros((num_envs,), dtype=jnp.int32),
             jnp.zeros((num_envs,), dtype=jnp.bool),
             jnp.zeros((num_envs,), dtype=jnp.bool),
@@ -242,15 +256,15 @@ class BatchedBuffer:
         ptr: jax.Array
     ):
         """
-        Adiciona um dado em um buffer de dimensões (max_steps, *data_shape)
+        Adiciona um dado em um buffer de dimensões (rollout_steps, *data_shape)
 
         Parameters
         ----------
         obs_buffer: jax.Array
-            Buffer considerando apenas um único ambiente, (max_steps, obs_shape)
+            Buffer considerando apenas um único ambiente, (rollout_steps, obs_shape)
 
         reward_buffer: jax.Array
-            Buffer considerando apenas um único ambiente, (max_steps, )
+            Buffer considerando apenas um único ambiente, (rollout_steps, )
 
         ptr: jax.Array
             Ponteiro para a posição atual no buffer
