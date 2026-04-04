@@ -150,7 +150,7 @@ def general_advantage_estimator(
     N = reward_buffer.shape[0] -1
 
     values = settings.network_settings.critic.apply(
-        network_parameters.critic_params, obs_buffer
+        network_parameters.critic, obs_buffer
     )
     values = jnp.squeeze(cast(jax.Array, values))
 
@@ -190,7 +190,7 @@ def general_advantage_estimator(
 
 
 def ppo_loss(
-    params,
+    params:NetworkParameters,
     settings: TrainingSettings,
     batch_obs,          #shape: (num_envs, max_steps +1, *obs_shape)
     batch_actions,      #shape: (num_envs, max_steps +1, *action_shape)
@@ -215,8 +215,8 @@ def ppo_loss(
 
     # forward 
     networks = settings.network_settings
-    logits = cast(jax.Array, networks.actor.apply(params[0], batch_obs))
-    values = cast(jax.Array, networks.critic.apply(params[1], batch_obs))
+    logits = cast(jax.Array, networks.actor.apply(params.actor, batch_obs))
+    values = cast(jax.Array, networks.critic.apply(params.critic, batch_obs))
 
 
     # parametrização
@@ -317,8 +317,8 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
         return state, buffer, advantages, returns
     
     def _train_epochs(
-        parameters,
-        optimizer_state,
+        network_parameters: NetworkParameters,
+        optimizer_state: optax.OptState,
         buffer: BatchedBuffer,
         advantages: jax.Array,
         returns:jax.Array
@@ -341,7 +341,7 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
             # calcula os gradientes e atualiza os parametros
             (loss_val, aux_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(_parameters)
             updates, new_optim_state = settings.optimizer.update(grads, _optimizer_state)
-            new_parameters = cast(Tuple, optax.apply_updates(_parameters, updates))
+            new_parameters = cast(NetworkParameters, optax.apply_updates(_parameters, updates))
 
             new_carry = (new_parameters, new_optim_state)
             grad_info = grad_metrics(grads, _parameters)
@@ -359,7 +359,7 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
         # Ex: reward.shape  = (epochs, num_envs, rollout_step +1)
         (new_parameters, new_optim_state), metrics = jax.lax.scan(
             _single_epoch,
-            (parameters, optimizer_state),
+            (network_parameters, optimizer_state),
             jnp.arange(settings.epochs),
         )
 
@@ -372,6 +372,7 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
         """This is the body of the scan, representing one full update."""
         rng, runpar, optim_state, network_params = carry
         runpar = cast(RunningParameters, runpar)
+        network_params = cast(NetworkParameters, network_params)
 
         #estado inicial 
         rng, initial_state_rng = jax.random.split(rng)
@@ -381,6 +382,8 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
         # treina settings.cycles_per_goal vezes  para um dado estado inicial
         def _train_cycle(carry, _):
             runpar, optim_state, network_params = carry
+            network_params = cast(NetworkParameters, network_params)
+            runpar = cast(RunningParameters, runpar)
 
             # cria um buffer
             buffer = BatchedBuffer.init(settings)
@@ -393,18 +396,19 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
             # metricas tem shape (epochs, *metric_shape)
             network_params, optim_state, training_metrics = _train_epochs(network_params, optim_state, buffer, advantages, returns)
             runpar = runpar.update(buffer.obs_buffer, mean_envs_success_rate)
-
+        
             return (runpar, optim_state, network_params), (training_metrics, mean_envs_success_rate)
 
         
         # após  o scan, teremos o seguinte:
         # training_metrics.shape = (cycles_per_goal, epochs, *metric_shape)
         # mean_envs_success_rate.shape = (cycles_per_goal,)
-        return jax.lax.scan(
+        cycle_carry, cycle_metrics = jax.lax.scan(
             _train_cycle,
             (runpar, optim_state, network_params),
             jnp.arange(settings.cycles_per_goal)
         )
+        return (rng, *cycle_carry), cycle_metrics
 
 
     # loop principal de trainamento, executado por lax.scan
@@ -415,7 +419,7 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
     # mean_envs_success_rate.shape = (numberof_goals, cycles_per_goal,)
     final_carry, (training_metrics, mean_envs_success_rate) = jax.lax.scan(
         _new_goal_step,
-        (rng, runpar, settings.optimizer_state, starting_network_params.params),
+        (rng, runpar, settings.optimizer_state, starting_network_params),
         jnp.arange(settings.robot_shared_data.range_config.numberof_goals),
     )
 
@@ -440,7 +444,7 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
         "sr_cycles": success_rate_around_cycles,
     }
 
-    #final_carry = (rng, runpar, optim_state, network_params)
+    #final_carry = (runpar, optim_state, network_params)
     return final_carry, metrics
 
 

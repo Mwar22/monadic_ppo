@@ -558,14 +558,13 @@ def create_step(network_settings: NetworksSettings, network_parameters: NetworkP
     """
     state.keys() = ["rng", "step", "goal", "obs_history", "action", "mjx_data"]
     """
-
    
     def get_action():
         def fn(state):
             last_obs = state["obs"]
             rng1, rng2 = jax.random.split(state["rng"])
 
-            output = network_settings.actor.apply(network_parameters.actor_params, last_obs)
+            output = network_settings.actor.apply(network_parameters.actor, last_obs)
             output = cast(jax.Array, output)
             action_value, logprob = cont_sample_beta(output, rng1)
 

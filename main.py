@@ -140,7 +140,7 @@ def create_networks(rng:jax.Array, obs_size:int, action_size:int):
     critic = Critic()
     actor_params = actor.init(rng_actor, dummy_obs),
     critic_params = critic.init(rng_critic, dummy_obs),
-    
+
     return rng, NetworksSettings(obs_size, action_size, actor, critic), NetworkParameters.init(actor_params, critic_params)
 
 
@@ -183,7 +183,7 @@ if disable_jit:
 else:
     print("JIT compiling and starting training...")
 
- (rng, runpar, optim_state, params), metrics = ppo_train(rng, network_params, settings)
+(rng, runpar, optim_state, network_params), metrics = ppo_train(rng, network_params, settings)
 
 def metric_shape(metrics_dict, metric_str):
     print(f"{metric_str} shape: {metrics_dict[metric_str].shape}")

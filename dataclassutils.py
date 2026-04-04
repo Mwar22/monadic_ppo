@@ -111,22 +111,22 @@ class RunningParameters:
 
 @struct.dataclass
 class NetworkParameters:
-    params: Tuple[Any, Any]
+    actor: Any
+    critic: Any
 
     @classmethod
     def init(cls, actor_params, critic_params) -> Self:
-        return cls((actor_params, critic_params))
 
-    @property
-    def actor_params(self):
-        return self.params[0]
-    
-    @property
-    def critic_params(self):
-        return self.params[1]
-    
-    def update(self, params: Tuple[Any, Any]):
-        return NetworkParameters(params)
+        if isinstance(actor_params, Tuple):
+            actor_params = actor_params[0]
+
+        if isinstance(critic_params, Tuple):
+            critic_params = critic_params[0]
+
+        return cls(actor_params, critic_params)
+
+    def update(self, actor_params, critic_params):
+        return NetworkParameters(actor_params, critic_params)
     
 @struct.dataclass
 class NetworksSettings:
@@ -183,7 +183,7 @@ class TrainingSettings:
         gae_lambda: float = 0.95,
     ):
         optimizer = optimizer_creator(learning_rate)
-        optimizer_params = optimizer.init(network_params.params)
+        optimizer_params = optimizer.init(cast(optax.Params, network_params))
         
         return cls(
             network_settings,
