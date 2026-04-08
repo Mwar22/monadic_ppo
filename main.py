@@ -27,11 +27,12 @@ class Actor(nn.Module):
     def __call__(self, obs):
         x = nn.Dense(256)(obs)
         x = activation(x)
-        #x = nn.LayerNorm()(x)
+        x = nn.LayerNorm()(x)
         
    
         x = nn.Dense(256)(x)
         x = activation(x)
+        x = nn.LayerNorm()(x)
        
         # 2 pois é uma distribuição, gerando metade para os parametros alfa e metade para beta
         logits = nn.Dense(2 * self.action_dim)(x)
@@ -46,10 +47,11 @@ class Critic(nn.Module):
        
         x = nn.Dense(256)(obs)
         x = activation(x)
-        #x = nn.LayerNorm()(x)
+        x = nn.LayerNorm()(x)
         
         x = nn.Dense(256)(x)
         x = activation(x)
+        x = nn.LayerNorm()(x)
         
         value = nn.Dense(1)(x)
         return value.squeeze(-1)
@@ -163,12 +165,15 @@ settings = TrainingSettings.init(
     network_settings,
     network_params,
     robot_shared_data,
-    optimizer_creator  = lambda lr: optax.adam(lr),
+    optimizer_creator  = lambda lr: optax.chain(
+        optax.clip_by_global_norm(1.0), # Limits the "shock" of big reward changes
+        optax.adam(lr)
+    ),
     step_fn_creator = create_step,
     num_envs= 250,
-    cycles_per_goal=5,
-    epochs=100,
-    rollout_steps=30,
+    cycles_per_goal=20,
+    epochs=30,
+    rollout_steps=128,
     learning_rate=5e-4
 )
 
@@ -189,15 +194,18 @@ def metric_shape(metrics_dict, metric_str):
     print(f"{metric_str} shape: {metrics_dict[metric_str].shape}")
 
 
-metric_shape(metrics, "loss")
-metric_shape(metrics, "reward")
-metric_shape(metrics, "grad_norm")
-metric_shape(metrics, "entropy")
+metric_shape(metrics, "avg_loss")
+metric_shape(metrics, "avg_reward")
+metric_shape(metrics, "avg_gradnorm")
+metric_shape(metrics, "avg_entropy")
+#metric_shape(metrics, "advantages_cycles")
 
-loss = jnp.mean(metrics["loss"],axis=0)
-avg_episode_rewards = jnp.mean(metrics["reward"],axis=(0, 2, 3))
-grad_norm = jnp.mean(metrics["grad_norm"],axis=0)
-entropy = jnp.mean(metrics["entropy"],axis=0)
+loss = metrics["avg_loss"]
+avg_episode_rewards =  metrics["avg_reward"]
+grad_norm =  metrics["avg_gradnorm"]
+entropy =  metrics["avg_entropy"]
+#advantages_cycles = metrics["advantages_cycles"]
+
 
 avg_loss = jnp.mean(loss[-20:])
 print(f" Training finished! Average loss of last 20 steps: {avg_loss:.4f}")
@@ -210,35 +218,35 @@ print(f"max avg reward: {jnp.max(avg_episode_rewards)}")
 fig, axs = plt.subplots(3, 2, figsize=(10, 8), tight_layout=True)
 axs[0][0].plot(loss)
 axs[0][0].set_title("Training Loss")
-axs[0][0].set_xlabel("Update Step")
+axs[0][0].set_xlabel("Epochs")
 axs[0][0].set_ylabel("Loss")
 
 #-------------------------------------------
 
 axs[0][1].plot(avg_episode_rewards)
 axs[0][1].set_title("Average Episode Reward")
-axs[0][1].set_xlabel("Update Step")
+axs[0][1].set_xlabel("Cycles per goal")
 axs[0][1].set_ylabel("Average Reward")
 
 
 axs[1][0].plot(grad_norm)
 axs[1][0].set_title("Gradient norm (Euclidian, L2)")
-axs[1][0].set_xlabel("Update Step")
+axs[1][0].set_xlabel("Epochs")
 axs[1][0].set_ylabel("Norm")
 
 axs[1][1].plot(entropy)
 axs[1][1].set_title("Entropy")
-axs[1][1].set_xlabel("Update Step")
+axs[1][1].set_xlabel("Epochs")
 axs[1][1].set_ylabel("Entropy value")
 
 #print(f"success_rate = {metrics["success_rate"]}")
-axs[2][0].plot(metrics["success_rate"])
-axs[2][0].set_xlabel("Update Step")
+axs[2][0].plot(metrics["sr_cycles"])
+axs[2][0].set_xlabel("Cycles")
 axs[2][0].set_ylabel(" success_rate %")
 
-axs[2][1].plot(metrics["progress"])
-axs[2][1].set_xlabel("Update Step ")
-axs[2][1].set_ylabel(" Progress %")
+axs[2][1].plot(metrics["err"])
+axs[2][1].set_xlabel("Cycles per Goal")
+axs[2][1].set_ylabel("avg err")
 
 
 plt.savefig(f"training_plots.png")

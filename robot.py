@@ -20,7 +20,7 @@ from flax import struct
 from typing import Any, Dict, Tuple, List, cast
 from config import RangeConfig, RewardConfig, MujocoSimConfig
 from enviroment import StateMonad
-from mathutils import l1_l2_reward, exp_scale_reward, conv2jax_quat, cont_sample_beta
+from mathutils import l1_l2_reward, exp_scale_reward, conv2jax_quat, cont_sample_beta, _cost_action_rate
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -509,6 +509,19 @@ def reward_pipeline(progress, rsd: RobotSharedData,  env: StateMonad):
                 ),
             }
         )
+
+        # penalidade por ações muito grandes
+        .bind(
+            lambda pdata: StateMonad(
+                lambda state: (
+                    state,
+                    {
+                        **pdata,
+                        "reward": pdata["reward"] - 0.01 * _cost_action_rate(pdata["action"], state["action"])
+                    }
+                )
+            )
+        )
         # Tolerância de Erro Linear
         .bind(
             lambda pdata: StateMonad(
@@ -549,7 +562,7 @@ def reward_pipeline(progress, rsd: RobotSharedData,  env: StateMonad):
                 )
             )
         )
-        .map(lambda pdata: {**pdata, "reward": jnp.clip(pdata["reward"], -1000.0, 1000.0)})
+        .map(lambda pdata: {**pdata, "reward": jnp.clip(pdata["reward"], -5000.0, 5000.0)})
     )
 
 

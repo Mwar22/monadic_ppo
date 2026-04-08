@@ -75,7 +75,7 @@ class RunningProgress:
         return cls(initial_value, target_success, step_size)
     
     def update(self, success_rate):
-        delta = jnp.where(success_rate < self.target_success, self.step_size, -self.step_size)
+        delta = jnp.where(success_rate > self.target_success, self.step_size, -self.step_size)
         new_value = jnp.clip(self.value + delta, 0.0, 1.0)
         return RunningProgress(new_value, self.target_success, self.step_size)
 

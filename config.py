@@ -81,9 +81,9 @@ class RewardConfig:
     failure_penalty = RewardConfigParameter.const(-100.0)
     
     # --- Tolerância ---
-    # No início do treino (progress=0), err_tol=0.6
-    # No fim do treino (progress=1), err_tol=0.1
-    err_tol = RewardConfigParameter.linear_tracking(0.3, 0.05)
+    # No início do treino (progress=0), err_tol=0.8
+    # No fim do treino (progress=1), err_tol=0.05
+    err_tol = RewardConfigParameter.linear_tracking(0.8, 0.05)
     
     # --- Regularização ---
     torques_penalty = RewardConfigParameter.const(-1e-5)
@@ -125,20 +125,20 @@ class VectorRange:
 @struct.dataclass
 class RangeConfig:
 
-    numberof_goals: int = 50
+    numberof_goals: int = 300
 
     position: VectorRange = VectorRange.init(
-        50,
+        300,
         jnp.array([-0.6, -0.6, 1]),
         jnp.array([0.6, 0.6, 1])
     )
     position_velocities: VectorRange = VectorRange.init(
-        50,
+        300,
         jnp.array([0, 0, 0]),
         jnp.array([0.1, 0.1, 0.1])
     )
     orientation: VectorRange = VectorRange.init(
-        50,
+        300,
         jnp.array([-2, -2, -2]),
         jnp.array([2, 2, 2])
     )

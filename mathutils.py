@@ -198,4 +198,4 @@ def stdNormalize(values: jax.Array):
     mean = jnp.mean(values)
     std = jnp.std(values)
     values = (values - mean) / (std + 1e-8)
-    return jnp.maximum(values, 1e-3)
+    return values

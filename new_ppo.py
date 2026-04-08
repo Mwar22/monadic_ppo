@@ -199,8 +199,8 @@ def ppo_loss(
     old_log_probs,      #shape: (num_envs, max_steps +1)
     clip_eps=0.2,
     c1=0.5,
-    c2=0.05,
-    min_alpha_beta=1.0,
+    c2=0.2,
+    min_alpha_beta=0.1,
 ):
     """
     Calculates the PPO loss.
@@ -348,7 +348,6 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
 
             return new_carry, {
                 "loss": loss_val,
-                "reward": buffer.reward_buffer,
                 **grad_info,
                 **aux_metrics,
             }
@@ -397,12 +396,13 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
             network_params, optim_state, training_metrics = _train_epochs(network_params, optim_state, buffer, advantages, returns)
             runpar = runpar.update(buffer.obs_buffer, mean_envs_success_rate)
         
-            return (runpar, optim_state, network_params), (training_metrics, mean_envs_success_rate)
+            return (runpar, optim_state, network_params), (training_metrics, mean_envs_success_rate, buffer.reward_buffer, state["err"])
 
         
         # após  o scan, teremos o seguinte:
         # training_metrics.shape = (cycles_per_goal, epochs, *metric_shape)
         # mean_envs_success_rate.shape = (cycles_per_goal,)
+        # rewards.shape (cycles_per_goa, num_envs, rollout_steps +1)
         cycle_carry, cycle_metrics = jax.lax.scan(
             _train_cycle,
             (runpar, optim_state, network_params),
@@ -417,7 +417,9 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
     # após  o scan, teremos o seguinte:
     # training_metrics[key].shape = (numberof_goals, cycles_per_goal, epochs, *metric_shape)
     # mean_envs_success_rate.shape = (numberof_goals, cycles_per_goal,)
-    final_carry, (training_metrics, mean_envs_success_rate) = jax.lax.scan(
+    #rewards.shape = (numberof_goals, cycles_per_goal, num_envs, rollout_steps +1)
+    # err.shape = (numberof_goals, num_envs,)
+    final_carry, (training_metrics, mean_envs_success_rate, rewards, err) = jax.lax.scan(
         _new_goal_step,
         (rng, runpar, settings.optimizer_state, starting_network_params),
         jnp.arange(settings.robot_shared_data.range_config.numberof_goals),
@@ -428,13 +430,20 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
     avg_entropy = jnp.mean(training_metrics["entropy"], axis=(0, 1))
     avg_grad_norm = jnp.mean(training_metrics["grad_norm"], axis=(0, 1))
 
-    # shape de recompensas é: (numberof_goals, cycles_per_goal, epochs, num_envs, rollout_step +1).
-    # para exibir no formato (epochs, )
-    avg_reward = jnp.mean(training_metrics["reward"], axis = (0, 1, 3, 4))
+    # shape de recompensas é: (numberof_goals, cycles_per_goal, num_envs, rollout_steps +1)
+    # para exibir no formato (cycles_per_goal, )
+    #jax.debug.print("rewards shape: {}", rewards.shape)
+    reward = jnp.sum(rewards, axis = 3)  #soma as recompensas 
+    avg_reward = jnp.mean(reward, axis = (0, 2))
 
 
     success_rate_around_goals = jnp.mean(mean_envs_success_rate, axis=1)
-    success_rate_around_cycles = jnp.mean(mean_envs_success_rate, axis=1)
+    success_rate_around_cycles = jnp.mean(mean_envs_success_rate, axis=0)
+
+    avg_err = jnp.mean(err, axis=1)
+
+  
+
     metrics = {
         "avg_loss": avg_loss,
         "avg_entropy": avg_entropy,
@@ -442,6 +451,7 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
         "avg_reward": avg_reward,
         "sr_goals": success_rate_around_goals,
         "sr_cycles": success_rate_around_cycles,
+        "avg_err": avg_err,
     }
 
     #final_carry = (runpar, optim_state, network_params)
