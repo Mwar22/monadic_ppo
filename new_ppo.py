@@ -3,11 +3,11 @@ import jax
 import optax
 import jax.numpy as jnp
 import flax.linen as nn
-import mathutils as mu
+import utils as mu
 from flax import struct
 from functools import partial
 from typing import Dict, Any, cast, Tuple, Callable, Self
-from mathutils import  beta_entropy, ema, stdNormalize
+from utils import  beta_entropy, ema, stdNormalize
 from robot import get_goal
 from mujoco import mjx
 from dataclassutils import RunningParameters, TrainingSettings, BatchedBuffer, NetworkParameters
@@ -412,13 +412,12 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
 
 
     # loop principal de trainamento, executado por lax.scan
-    runpar = RunningParameters.init((settings.network_settings.obs_size, ))
+    runpar = RunningParameters.init((settings.network_settings.obs_size, ), settings.target_success)
 
     # após  o scan, teremos o seguinte:
     # training_metrics[key].shape = (numberof_goals, cycles_per_goal, epochs, *metric_shape)
     # mean_envs_success_rate.shape = (numberof_goals, cycles_per_goal,)
     #rewards.shape = (numberof_goals, cycles_per_goal, num_envs, rollout_steps +1)
-    # err.shape = (numberof_goals, num_envs,)
     final_carry, (training_metrics, mean_envs_success_rate, rewards, err) = jax.lax.scan(
         _new_goal_step,
         (rng, runpar, settings.optimizer_state, starting_network_params),
@@ -440,7 +439,10 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
     success_rate_around_goals = jnp.mean(mean_envs_success_rate, axis=1)
     success_rate_around_cycles = jnp.mean(mean_envs_success_rate, axis=0)
 
-    avg_err = jnp.mean(err, axis=1)
+    print(f"err shape: {err.shape}")
+
+    # err.shape = (numberof_goals, cycles_per_goals, num_envs,)
+    avg_err = jnp.mean(err, axis=(0, 2))
 
   
 

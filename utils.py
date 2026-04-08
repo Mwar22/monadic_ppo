@@ -10,6 +10,7 @@ Contem funções auxiliares com operações matemáticas auxiliares.
 """
 
 import jax
+import flax.serialization
 from jax import numpy as jnp
 from jax.scipy.special import gammaln, digamma
 
@@ -199,3 +200,20 @@ def stdNormalize(values: jax.Array):
     std = jnp.std(values)
     values = (values - mean) / (std + 1e-8)
     return values
+
+
+
+def save_params(network_params, filename="trained_params.msgpack"):
+    state_bytes = flax.serialization.to_bytes(network_params)
+
+    with open(filename, "wb") as f:
+        f.write(state_bytes)
+
+    print(f"Model weights saved successfully to: {filename}")
+
+def load_params(empty_params, filename="trained_params.msgpack"):
+    with open(filename, "rb") as f:
+        state_bytes = f.read()
+
+    # restaura os parametros a partir dos dados serializados
+    return flax.serialization.from_bytes(empty_params, state_bytes)

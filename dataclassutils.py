@@ -67,17 +67,16 @@ class RunningExponentialAvg:
 @struct.dataclass   
 class RunningProgress:
     value: jax.Array
-    target_success: float
     step_size: float
 
     @classmethod
-    def init(cls, initial_value: jax.Array = jnp.array(0), target_success = 0.6, step_size=0.005) -> Self:
-        return cls(initial_value, target_success, step_size)
+    def init(cls, initial_value: jax.Array = jnp.array(0), step_size=0.005) -> Self:
+        return cls(initial_value, step_size)
     
-    def update(self, success_rate):
-        delta = jnp.where(success_rate > self.target_success, self.step_size, -self.step_size)
+    def update(self, success_rate, target_success):
+        delta = jnp.where(success_rate > target_success, self.step_size, -self.step_size)
         new_value = jnp.clip(self.value + delta, 0.0, 1.0)
-        return RunningProgress(new_value, self.target_success, self.step_size)
+        return RunningProgress(new_value, self.step_size)
 
 @struct.dataclass
 class RunningParameters:
@@ -85,28 +84,35 @@ class RunningParameters:
     ema_success: RunningExponentialAvg
     progress: RunningProgress
     success_rate: jax.Array
+    target_success: float 
 
     @classmethod
-    def init(cls, obs_shape) -> Self:
+    def init(cls, obs_shape, target_success: float = 0.6) -> Self:
         # Inicializamos com uma contagem pequena para evitar divisões por zero
         return cls(
             RunningAvg.init(obs_shape),
             RunningExponentialAvg.init(),
             RunningProgress.init(),
             jnp.array(0),
+            target_success
         )
     
-    def update(self, batch_obs: jax.Array, success_rate: jax.Array):
+    def update(self, batch_obs: jax.Array, success_rate: jax.Array, target_success: float | None = None):
         new_obs_stat = self.obs_stat.update(batch_obs)
         new_ema_success = self.ema_success.update(success_rate)
-        new_progress = self.progress.update(new_ema_success.ema_value)
 
-        return RunningParameters(
+        new_rp = lambda ts: RunningParameters(
             new_obs_stat,
             new_ema_success,
-            new_progress,
+            self.progress.update(new_ema_success.ema_value, ts),
             success_rate,
+            ts
         )
+        
+        if target_success is not None:
+           return new_rp(target_success)
+        
+        return new_rp(self.target_success)
     
 
 @struct.dataclass
@@ -165,6 +171,7 @@ class TrainingSettings:
     optimizer: optax.GradientTransformationExtraArgs
     optimizer_state: optax.OptState
     step_fn_creator: Callable
+    target_success: float
 
     @classmethod
     def init(
@@ -172,18 +179,22 @@ class TrainingSettings:
         network_settings: NetworksSettings,
         network_params: NetworkParameters,
         robot_shared_settings: RobotSharedData,
-        optimizer_creator: Callable[[float], optax.GradientTransformationExtraArgs],
+        optimizer_creator: Callable[[int], optax.GradientTransformationExtraArgs],
         step_fn_creator:Callable[[NetworksSettings, NetworkParameters, RobotSharedData], Callable],
         num_envs: int = 1,
         cycles_per_goal = 1,
         epochs: int = 1,
         rollout_steps: int = 1,
-        learning_rate: float = 1e-4,
         gamma: float = 0.99,
         gae_lambda: float = 0.95,
+        target_success: float = 0.6,
     ):
-        optimizer = optimizer_creator(learning_rate)
+        # numero de passos para o escalonador de LR baseado na configuração
+        total_steps = robot_shared_settings.range_config.numberof_goals * cycles_per_goal * epochs
+
+        optimizer = optimizer_creator(total_steps)
         optimizer_params = optimizer.init(cast(optax.Params, network_params))
+
         
         return cls(
             network_settings,
@@ -197,6 +208,7 @@ class TrainingSettings:
             optimizer,
             optimizer_params,
             step_fn_creator,
+            target_success
         )
     
 

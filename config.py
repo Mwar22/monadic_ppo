@@ -144,6 +144,24 @@ class RangeConfig:
     )
 
 
+    @classmethod
+    def init(
+        cls,
+        numberof_goals: int,
+        position_min_values: jax.Array,
+        position_max_values: jax.Array,
+        position_velocities_min_values: jax.Array,
+        position_velocities_max_values: jax.Array,
+        orientation_min_values: jax.Array,
+        orientation_max_values: jax.Array,
+    )->Self:
+        return cls(
+            numberof_goals,
+            VectorRange.init(numberof_goals, position_min_values, position_max_values),
+            VectorRange.init(numberof_goals, position_velocities_min_values, position_velocities_max_values),
+            VectorRange.init(numberof_goals, orientation_min_values, orientation_max_values),
+        )
+
     
 
 

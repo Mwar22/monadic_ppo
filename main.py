@@ -10,7 +10,7 @@ from new_ppo import TrainingSettings, ppo_train
 from etils import epath
 from robot import create_step, create_rsd
 from config import MujocoSimConfig, RangeConfig, RewardConfig
-from mathutils import Scheduler
+from utils import save_params
 from dataclassutils import NetworksSettings, NetworkParameters
 
 #######################################################################################
@@ -131,9 +131,10 @@ os.environ['XLA_FLAGS'] = xla_flags
 config.update("jax_enable_x64", False)
 print(f"jax_enable_x64: {jax.config.read('jax_enable_x64')}")    
 
-#env_states = {"rng":rng, "step":0, "goal":None, "obs_history":}
-#######################################################################################
 
+################################################FUNÇÕES AUXILIARES DE CONFIGURAÇÂO #######################################
+
+#cria configuração relacionada as redes (actor/critic)
 def create_networks(rng:jax.Array, obs_size:int, action_size:int):
     rng, rng_actor, rng_critic = jax.random.split(rng, 3)
     dummy_obs= jnp.zeros((1, obs_size)) 
@@ -145,11 +146,36 @@ def create_networks(rng:jax.Array, obs_size:int, action_size:int):
 
     return rng, NetworksSettings(obs_size, action_size, actor, critic), NetworkParameters.init(actor_params, critic_params)
 
+#cria o otimizazor
+def create_optimizer(decay_steps):
+    # Scheduler para a learning rate
+    # Cosine is often smoother for robotics fine-tuning
+    lr_scheduler = optax.cosine_decay_schedule(
+        init_value=2e-4, 
+        decay_steps=decay_steps, 
+        alpha=0.1  # The final LR will be 10% of the initial value (2e-5)
+    )
+
+    return optax.chain(
+        optax.clip_by_global_norm(1.0), # gradient clipping
+        optax.adam(lr_scheduler)
+    )
+
 
 # --- Inicialização ---
 rng = jax.random.PRNGKey(42)
 rng, network_settings, network_params = create_networks(rng, obs_size=34, action_size=6)
 
+
+range_cfg = RangeConfig.init(
+    numberof_goals=300,
+    position_min_values = jnp.array([-0.6, -0.6, 1]),
+    position_max_values = jnp.array([0.6, 0.6, 1]),
+    position_velocities_min_values = jnp.array([0, 0, 0]),
+    position_velocities_max_values = jnp.array([0.1, 0.1, 0.1]),
+    orientation_min_values = jnp.array([-2, -2, -2]),
+    orientation_max_values = jnp.array([2, 2, 2])
+)
 
 robot_shared_data = create_rsd(
     epath.Path("model/joystick_env.xml"),
@@ -157,7 +183,7 @@ robot_shared_data = create_rsd(
     epath.Path("model/meshes"),
     MujocoSimConfig(),
     RewardConfig(),
-    RangeConfig(),
+    range_cfg,
     ["junta1", "junta2", "junta3", "junta4","junta5", "junta6"]
 )
 
@@ -165,18 +191,14 @@ settings = TrainingSettings.init(
     network_settings,
     network_params,
     robot_shared_data,
-    optimizer_creator  = lambda lr: optax.chain(
-        optax.clip_by_global_norm(1.0), # Limits the "shock" of big reward changes
-        optax.adam(lr)
-    ),
+    optimizer_creator  = create_optimizer,
     step_fn_creator = create_step,
-    num_envs= 250,
-    cycles_per_goal=20,
-    epochs=30,
+    num_envs= 512,
+    cycles_per_goal=25,
+    epochs=20,
     rollout_steps=128,
-    learning_rate=5e-4
+    target_success=0.75,
 )
-
 
 
 # --- Executa o treinamento ---
@@ -189,6 +211,10 @@ else:
     print("JIT compiling and starting training...")
 
 (rng, runpar, optim_state, network_params), metrics = ppo_train(rng, network_params, settings)
+
+#salva os parametros treinados da rede
+save_params(network_params)
+
 
 def metric_shape(metrics_dict, metric_str):
     print(f"{metric_str} shape: {metrics_dict[metric_str].shape}")
@@ -241,10 +267,10 @@ axs[1][1].set_ylabel("Entropy value")
 
 #print(f"success_rate = {metrics["success_rate"]}")
 axs[2][0].plot(metrics["sr_cycles"])
-axs[2][0].set_xlabel("Cycles")
+axs[2][0].set_xlabel("Cycles per goal")
 axs[2][0].set_ylabel(" success_rate %")
 
-axs[2][1].plot(metrics["err"])
+axs[2][1].plot(metrics["avg_err"])
 axs[2][1].set_xlabel("Cycles per Goal")
 axs[2][1].set_ylabel("avg err")
 
