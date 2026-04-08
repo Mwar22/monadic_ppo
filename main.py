@@ -1,6 +1,34 @@
-from __future__ import annotations
-import jax
+"""
+Copyright (c) 2025 Lucas de Jesus
+Licensed under CC BY-ND 4.0 with additional commercial use restrictions.
+See the LICENSE file in the project root for full license details.
+------------------------------------------------------------------------
+Arquivo com o código principal de treinamento
+"""
+
 import os
+
+# deve ser configurado antes de importar o jax ou TensorFlow/XLA
+os.environ["TF_GPU_ALLOCATOR"] = "cuda_malloc_async"
+
+# Tell XLA to use Triton GEMM, this improves steps/sec by ~30% on some GPUs
+xla_flags = os.environ.get('XLA_FLAGS', '')
+
+#xla_flags += ' --xla_gpu_triton_gemm_any=True'
+os.environ['XLA_FLAGS'] = xla_flags
+
+# evita do jax prealocar a gpu inteira
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+
+# limite, pois tbm precisamos de um pouco de vram para o sistema
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.90"
+
+import jax
+from jax import config
+config.update("jax_enable_x64", False)
+print(f"jax_enable_x64: {jax.config.read('jax_enable_x64')}")    
+
+
 import optax
 import jax.numpy as jnp
 import flax.linen as nn
@@ -13,9 +41,11 @@ from config import MujocoSimConfig, RangeConfig, RewardConfig
 from utils import save_params
 from dataclassutils import NetworksSettings, NetworkParameters
 
-#######################################################################################
-# Modelos
-#######################################################################################
+
+
+
+
+##################################################### MODELOS #########################################################
 activation_str = "sigmoid"
 activation = lambda x: nn.relu(x)
 
@@ -57,9 +87,6 @@ class Critic(nn.Module):
         return value.squeeze(-1)
 
 
-#######################################################################################
-
-#######################################################################################
 from jax import jit, custom_jvp
 
 @custom_jvp
@@ -114,25 +141,8 @@ class CauchyActivationModule(nn.Module):
         lambda2 = self.param("lambda2", lambda rng: jnp.array(self.init_lambda2))
         return cauchy_activation(x, lambda1, lambda2, self.d)
 
-#######################################################################################
 
-#######################################################################################
-
-
-#######################################################################################
-# deve ser configurado antes de importar o jax ou TensorFlow/XLA
-os.environ["TF_GPU_ALLOCATOR"] = "cuda_malloc_async"
-
-# Tell XLA to use Triton GEMM, this improves steps/sec by ~30% on some GPUs
-xla_flags = os.environ.get('XLA_FLAGS', '')
-#xla_flags += ' --xla_gpu_triton_gemm_any=True'
-os.environ['XLA_FLAGS'] = xla_flags
-
-config.update("jax_enable_x64", False)
-print(f"jax_enable_x64: {jax.config.read('jax_enable_x64')}")    
-
-
-################################################FUNÇÕES AUXILIARES DE CONFIGURAÇÂO #######################################
+################################################FUNÇÕES AUXILIARES DE CONFIGURAÇÂO ####################################
 
 #cria configuração relacionada as redes (actor/critic)
 def create_networks(rng:jax.Array, obs_size:int, action_size:int):
@@ -162,7 +172,7 @@ def create_optimizer(decay_steps):
     )
 
 
-# --- Inicialização ---
+################################################### INICIALIZAÇÂO #####################################################
 rng = jax.random.PRNGKey(42)
 rng, network_settings, network_params = create_networks(rng, obs_size=34, action_size=6)
 
@@ -201,7 +211,7 @@ settings = TrainingSettings.init(
 )
 
 
-# --- Executa o treinamento ---
+################################################### TREINAMENTO #######################################################
 disable_jit = False
 
 if disable_jit:
@@ -212,19 +222,11 @@ else:
 
 (rng, runpar, optim_state, network_params), metrics = ppo_train(rng, network_params, settings)
 
+
+############################################### PLOTAGEM / SALVAMENTOS ###############################################
+
 #salva os parametros treinados da rede
 save_params(network_params)
-
-
-def metric_shape(metrics_dict, metric_str):
-    print(f"{metric_str} shape: {metrics_dict[metric_str].shape}")
-
-
-metric_shape(metrics, "avg_loss")
-metric_shape(metrics, "avg_reward")
-metric_shape(metrics, "avg_gradnorm")
-metric_shape(metrics, "avg_entropy")
-#metric_shape(metrics, "advantages_cycles")
 
 loss = metrics["avg_loss"]
 avg_episode_rewards =  metrics["avg_reward"]
@@ -247,13 +249,10 @@ axs[0][0].set_title("Training Loss")
 axs[0][0].set_xlabel("Epochs")
 axs[0][0].set_ylabel("Loss")
 
-#-------------------------------------------
-
 axs[0][1].plot(avg_episode_rewards)
 axs[0][1].set_title("Average Episode Reward")
 axs[0][1].set_xlabel("Cycles per goal")
 axs[0][1].set_ylabel("Average Reward")
-
 
 axs[1][0].plot(grad_norm)
 axs[1][0].set_title("Gradient norm (Euclidian, L2)")

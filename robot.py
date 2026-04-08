@@ -5,7 +5,6 @@ See the LICENSE file in the project root for full license details.
 ------------------------------------------------------------------------
 Tarefa para o thor alcançar um alvo
 """
-
 from __future__ import annotations
 import mujoco
 import jax
