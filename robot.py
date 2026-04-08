@@ -20,7 +20,7 @@ from flax import struct
 from typing import Any, Dict, Tuple, List, cast
 from config import RangeConfig, RewardConfig, MujocoSimConfig
 from enviroment import StateMonad
-from mathutils import l1_l2_reward, exp_scale_reward, conv2jax_quat, cont_sample_beta, _cost_action_rate
+from utils import l1_l2_reward, exp_scale_reward, conv2jax_quat, cont_sample_beta, _cost_action_rate
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
