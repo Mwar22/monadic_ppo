@@ -566,50 +566,50 @@ def reward_pipeline(progress, rsd: RobotSharedData,  env: StateMonad):
 
 
 ####################################################################################################################
+def get_action(network_settings: NetworksSettings, network_parameters: NetworkParameters):
+    def fn(state):
+        last_obs = state["obs"]
+        rng1, rng2 = jax.random.split(state["rng"])
+
+        output = network_settings.actor.apply(network_parameters.actor, last_obs)
+        output = cast(jax.Array, output)
+        action_value, logprob = cont_sample_beta(output, rng1)
+
+        
+        new_state = {**state, "rng": rng2, "action": action_value}
+        return new_state, {"action": action_value, "logprob": logprob}
+    return StateMonad(fn)
+
+def get_motor_targets(robot_shared_data: RobotSharedData, pdata):
+    def fn(state):
+        # escala ação para de [0, 1] para [-1, 1]
+        action_value_action = 2.0 * pdata["action"]- 1.0
+
+        # configura novos alvos para os motores, de acordo com a ação  selecionada a partir da posição atual
+        current_pos = qpos(robot_shared_data, state["mjx_data"])
+        motor_targets = current_pos + action_value_action * robot_shared_data.enviroment_config.action_scale
+
+        # para evitar que os limites de junta do robô sejam desrespeitados
+        return state, {**pdata, "motor_targets":jnp.clip(motor_targets, robot_shared_data.lowers, robot_shared_data.uppers)}
+    return StateMonad(fn)
+
+def mujoco_step(robot_shared_data: RobotSharedData, pdata):
+    def fn(state):
+        mjx_data = mjx_base.mjx_step(
+            robot_shared_data.mjx_model,
+            state["mjx_data"],
+            pdata["motor_targets"],
+            robot_shared_data.enviroment_config.n_substeps,
+        )
+        state = {**state, "mjx_data": mjx_data}
+        return state , pdata
+    return StateMonad(fn)
+
 def create_step(network_settings: NetworksSettings, network_parameters: NetworkParameters, robot_shared_data: RobotSharedData):
     """
     state.keys() = ["rng", "step", "goal", "obs_history", "action", "mjx_data"]
     """
    
-    def get_action():
-        def fn(state):
-            last_obs = state["obs"]
-            rng1, rng2 = jax.random.split(state["rng"])
-
-            output = network_settings.actor.apply(network_parameters.actor, last_obs)
-            output = cast(jax.Array, output)
-            action_value, logprob = cont_sample_beta(output, rng1)
-
-            
-            new_state = {**state, "rng": rng2, "action": action_value}
-            return new_state, {"action": action_value, "logprob": logprob}
-        return StateMonad(fn)
-
-    def get_motor_targets(pdata):
-        def fn(state):
-            # escala ação para de [0, 1] para [-1, 1]
-            action_value_action = 2.0 * pdata["action"]- 1.0
-
-            # configura novos alvos para os motores, de acordo com a ação  selecionada a partir da posição atual
-            current_pos = qpos(robot_shared_data, state["mjx_data"])
-            motor_targets = current_pos + action_value_action * robot_shared_data.enviroment_config.action_scale
-
-            # para evitar que os limites de junta do robô sejam desrespeitados
-            return state, {**pdata, "motor_targets":jnp.clip(motor_targets, robot_shared_data.lowers, robot_shared_data.uppers)}
-        return StateMonad(fn)
-
-    def mujoco_step(pdata):
-        def fn(state):
-            mjx_data = mjx_base.mjx_step(
-                robot_shared_data.mjx_model,
-                state["mjx_data"],
-                pdata["motor_targets"],
-                robot_shared_data.enviroment_config.n_substeps,
-            )
-            state = {**state, "mjx_data": mjx_data}
-            return state , pdata
-        return StateMonad(fn)
-    
     def shape_return(pdata):
         def fn(state):
             state = {**state, "step": state["step"] + 1}
@@ -623,25 +623,13 @@ def create_step(network_settings: NetworksSettings, network_parameters: NetworkP
             return state, data
         return StateMonad(fn)
     
-    def normalize_obs_step(pdata: dict):
-        return StateMonad(
-            lambda state: (
-                state,
-                {
-                    **pdata,
-                    # 'obs' é o array concatenado que veio dos passos anteriores
-                    "obs": (pdata["obs"] - state["obs_stats"].mean) / 
-                        jnp.sqrt(state["obs_stats"].var + 1e-8)
-                }
-            )
-        )
     
     def step_fn(progress, state, runpar: RunningParameters):
 
         # obtem uma ação pela observação anterior
-        pl = (get_action()
-            .bind(get_motor_targets)    #obtem para os motores segundo a ação
-            .bind(mujoco_step)          #movimenta no mujoco
+        pl = (get_action(network_settings, network_parameters)
+            .bind(lambda pdata: get_motor_targets(robot_shared_data, pdata))    #obtem para os motores segundo a ação
+            .bind(lambda pdata: mujoco_step(robot_shared_data, pdata))          #movimenta no mujoco
         )
 
         # obtem novas observações

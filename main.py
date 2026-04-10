@@ -31,139 +31,23 @@ print(f"jax_enable_x64: {jax.config.read('jax_enable_x64')}")
 
 import optax
 import jax.numpy as jnp
-import flax.linen as nn
 import matplotlib.pyplot as plt
 from jax import config
 from new_ppo import TrainingSettings, ppo_train
 from etils import epath
 from robot import create_step, create_rsd
 from config import MujocoSimConfig, RangeConfig, RewardConfig
-from utils import save_params
-from dataclassutils import NetworksSettings, NetworkParameters
+from networks import save_params, create_networks
 
 
-
-
-
-##################################################### MODELOS #########################################################
-activation_str = "sigmoid"
-activation = lambda x: nn.relu(x)
-
-class Actor(nn.Module):
-    action_dim: int
-    discrete: bool
-
-    @nn.compact
-    def __call__(self, obs):
-        x = nn.Dense(256)(obs)
-        x = activation(x)
-        x = nn.LayerNorm()(x)
-        
-   
-        x = nn.Dense(256)(x)
-        x = activation(x)
-        x = nn.LayerNorm()(x)
-       
-        # 2 pois é uma distribuição, gerando metade para os parametros alfa e metade para beta
-        logits = nn.Dense(2 * self.action_dim)(x)
-        return logits
-
-
-class Critic(nn.Module):
-    activation_name: str = "relu" #default
-
-    @nn.compact
-    def __call__(self, obs):
-       
-        x = nn.Dense(256)(obs)
-        x = activation(x)
-        x = nn.LayerNorm()(x)
-        
-        x = nn.Dense(256)(x)
-        x = activation(x)
-        x = nn.LayerNorm()(x)
-        
-        value = nn.Dense(1)(x)
-        return value.squeeze(-1)
-
-
-from jax import jit, custom_jvp
-
-@custom_jvp
-@jit
-def cauchy_activation(x, lambda1= 0.01, lambda2= 0.01, d=1.0):
-    #para estabilidade numerica
-    eps = 1e-12
-    
-    x2_d2 = x**2 + d**2 + eps
-    return (lambda1 * x + lambda2) / x2_d2
-
-# gradiente customizado
-@cauchy_activation.defjvp
-def cauchy_activation_jvp(primals, tangents):
-    x, lambda1, lambda2, d = primals
-    x_dot, lambda1_dot, lambda2_dot, d_dot = tangents
-
-    #para estabilidade numerica
-    eps = 1e-12
-
-    #cria uma versão "clipada" de d, diferenciavel, e evitando valores muito pequenos (explosão de gradiente)
-    d_safe = jnp.sqrt(d**2 + 1e-6) # se |d|  << 1e-3, d_safe ≃ 1e-3. Caso contrário d_safe ≃ d
-    
-    #calcula valores que se repetem
-    x2 = x**2
-    d2 = d_safe**2
-    x2_d2 = x2 + d2 + eps
-    x2_d2_sq = x2_d2 ** 2
-    inv = 1 / x2_d2_sq
-
-    
-    y = (lambda1 * x + lambda2) / x2_d2
-
-    #derivadas parciais
-    dy_dx = ((d2 - x2) * lambda1  - 2 * x * lambda2)*inv
-    dy_dlambda1 = x / x2_d2
-    dy_dlambda2 = 1 / x2_d2
-    dy_dd = -2 * d_safe * (lambda1 *x + lambda2) * inv * (d / d_safe)
-
-    tangent_out = dy_dx * x_dot + dy_dlambda1 * lambda1_dot + dy_dlambda2 * lambda2_dot + dy_dd * d_dot
-    return y, tangent_out
-
-class CauchyActivationModule(nn.Module):
-    init_lambda1: float = 0.01
-    init_lambda2: float = 0.01
-    d: float = 1.0
-
-    @nn.compact
-    def __call__(self, x):
-        # trainable params
-        lambda1 = self.param("lambda1", lambda rng: jnp.array(self.init_lambda1))
-        lambda2 = self.param("lambda2", lambda rng: jnp.array(self.init_lambda2))
-        return cauchy_activation(x, lambda1, lambda2, self.d)
-
-
-################################################FUNÇÕES AUXILIARES DE CONFIGURAÇÂO ####################################
-
-#cria configuração relacionada as redes (actor/critic)
-def create_networks(rng:jax.Array, obs_size:int, action_size:int):
-    rng, rng_actor, rng_critic = jax.random.split(rng, 3)
-    dummy_obs= jnp.zeros((1, obs_size)) 
-
-    actor = Actor(action_size, discrete=True)
-    critic = Critic()
-    actor_params = actor.init(rng_actor, dummy_obs),
-    critic_params = critic.init(rng_critic, dummy_obs),
-
-    return rng, NetworksSettings(obs_size, action_size, actor, critic), NetworkParameters.init(actor_params, critic_params)
-
+################################################FUNÇÕES AUXILIARES DE CONFIGURAÇÂO ###################################
 #cria o otimizazor
-def create_optimizer(decay_steps):
-    # Scheduler para a learning rate
-    # Cosine is often smoother for robotics fine-tuning
-    lr_scheduler = optax.cosine_decay_schedule(
-        init_value=2e-4, 
-        decay_steps=decay_steps, 
-        alpha=0.1  # The final LR will be 10% of the initial value (2e-5)
+def create_optimizer(steps):
+    
+    lr_scheduler = optax.schedules.linear_schedule(
+        init_value=5e-4,
+        end_value=1e-5,
+        transition_steps=steps
     )
 
     return optax.chain(
@@ -178,13 +62,13 @@ rng, network_settings, network_params = create_networks(rng, obs_size=34, action
 
 
 range_cfg = RangeConfig.init(
-    numberof_goals=300,
-    position_min_values = jnp.array([-0.6, -0.6, 1]),
-    position_max_values = jnp.array([0.6, 0.6, 1]),
-    position_velocities_min_values = jnp.array([0, 0, 0]),
+    numberof_goals=100,
+    position_min_values = jnp.array([-0.468, -0.468, 0]),
+    position_max_values = jnp.array([0.468, 0.468, 0.664]),
+    position_velocities_min_values = jnp.array([1e-2, 1e-2, 1e-2]),
     position_velocities_max_values = jnp.array([0.1, 0.1, 0.1]),
-    orientation_min_values = jnp.array([-2, -2, -2]),
-    orientation_max_values = jnp.array([2, 2, 2])
+    orientation_min_values = jnp.array([-3.14, -3.14, -3.14]),
+    orientation_max_values = jnp.array([3.14, 3.14, 3.14])
 )
 
 robot_shared_data = create_rsd(
@@ -204,8 +88,8 @@ settings = TrainingSettings.init(
     optimizer_creator  = create_optimizer,
     step_fn_creator = create_step,
     num_envs= 512,
-    cycles_per_goal=25,
-    epochs=20,
+    cycles_per_goal=30,
+    epochs=30,
     rollout_steps=128,
     target_success=0.75,
 )

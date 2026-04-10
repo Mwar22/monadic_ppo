@@ -48,32 +48,32 @@
 
       <body name="Art1_3d_link" pos="0 0 0.098">
         <inertial pos="-1e-06 0 0.061834" mass="0.001" diaginertia="1.3e-05 1.3e-05 1e-05" />
-        <joint name="junta1" pos="0 0 0" axis="0 0 1" range="-3.14 3.14" />
+        <joint name="junta1" pos="0 0 0" axis="0 0 1" range="-1.57 1.57" />
         <geom name="Art1_3d_collision" type="mesh" mesh="art1_3d_convexhull" contype="1" conaffinity="0" density="0" group="1" class="visualgeom" />
        
         <body name="art2_3d_link" pos="0 0 0.098" quat="0.707107 -0.707107 0 0">
           <inertial pos="0 -0.08 0" mass="0.001" diaginertia="1.5e-05 1.3e-05 1e-05" />
-          <joint name="junta2" pos="0 0 0" axis="0 0 1" range="-3.14 3.14" />
+          <joint name="junta2" pos="0 0 0" axis="0 0 1" range="-1.57 1.57" />
           <geom name="art2_3d_collision" quat="0.707107 0.707107 0 0" type="mesh" mesh="art2_3d_convexhull" contype="1" conaffinity="0" density="0" group="1" class="visualgeom" />
          
           <body name="art3_3d_link" pos="0 -0.16 0">
             <inertial pos="0 -0.021415 -1e-06" mass="0.001" diaginertia="1.3e-05 1.3e-05 1e-05" />
-            <joint name="junta3" pos="0 0 0" axis="0 0 1" range="-3.14 3.14" />
+            <joint name="junta3" pos="0 0 0" axis="0 0 1" range="-1.57 1.57" />
             <geom name="art3_3d_collision" quat="0.707107 0.707107 0 0" type="mesh" mesh="art3_3d_convexhull" contype="1" conaffinity="0" density="0" group="1" class="visualgeom" />
            
             <body name="art4_3d_link" pos="0 -0.0885 0" quat="0.707107 0.707107 0 0">
               <inertial pos="0 0 0.060781" mass="0.001" diaginertia="1.3e-05 1.3e-05 1e-05" />
-              <joint name="junta4" pos="0 0 0" axis="0 0 1" range="-3.14 3.14" />
+              <joint name="junta4" pos="0 0 0" axis="0 0 1" range="-1.57 1.57" />
               <geom name="art4_3d_collision" type="mesh" mesh="art4_3d_convexhull" contype="1" conaffinity="0" density="0" group="1" class="visualgeom" />
              
               <body name="art5_3d_link" pos="0 0 0.1045" quat="0.707107 -0.707107 0 0">
                 <inertial pos="0 -0.000568 0" quat="0.707107 0 0 0.707107" mass="0.001" diaginertia="1.1e-05 1e-05 1e-05" />
-                <joint name="junta5" pos="0 0 0" axis="0 0 1" range="-3.14 3.14" />
+                <joint name="junta5" pos="0 0 0" axis="0 0 1" range="-1.57 1.57" />
                 <geom name="art5_3d_collision" quat="0.707107 0.707107 0 0" type="mesh" mesh="art5_3d_convexhull" contype="1" conaffinity="0" density="0" group="1" class="visualgeom" />
                 
                 <body name="art6_3d_link" pos="0 -0.05 0" quat="0.707107 0.707107 0 0">
                   <inertial pos="0 0 0.006918" mass="0.001" diaginertia="1e-05 1e-05 1e-05" />
-                  <joint name="junta6" pos="0 0 0" axis="0 0 1" range="-3.14 3.14" />
+                  <joint name="junta6" pos="0 0 0" axis="0 0 1" range="-1.57 1.57" />
                   <geom name="art6_3d_collision" type="mesh" mesh="art6_3d_convexhull" contype="1" conaffinity="0" density="0" group="1" class="visualgeom" />
 
                   <!-- Ferramenta adicionada (poderia ser um mesh, mas optei por um clindro), não se encontra no .urdf inicial-->
@@ -92,13 +92,14 @@
   </worldbody>
 
   <actuator>
-    <motor name="junta1" joint="junta1" ctrllimited="true" ctrlrange="-1 1" gear="1" />
-    <motor name="junta2" joint="junta2" ctrllimited="true" ctrlrange="-1 1" gear="1" />
-    <motor name="junta3" joint="junta3" ctrllimited="true" ctrlrange="-1 1" gear="1" />
-    <motor name="junta4" joint="junta4" ctrllimited="true" ctrlrange="-1 1" gear="1" />
-    <motor name="junta5" joint="junta5" ctrllimited="true" ctrlrange="-1 1" gear="1" />
-    <motor name="junta6" joint="junta6" ctrllimited="true" ctrlrange="-1 1" gear="1" />
+    <position name="junta1" joint="junta1" kp="100" kv="10" ctrlrange="-1.57 1.57"/>
+    <position name="junta2" joint="junta2" kp="100" kv="10" ctrlrange="-1.57 1.57"/>
+    <position name="junta3" joint="junta3" kp="100" kv="10" ctrlrange="-1.57 1.57"/>
+    <position name="junta4" joint="junta4" kp="100" kv="10" ctrlrange="-1.57 1.57"/>
+    <position name="junta5" joint="junta5" kp="100" kv="10" ctrlrange="-1.57 1.57"/>
+    <position name="junta6" joint="junta6" kp="100" kv="10" ctrlrange="-1.57 1.57"/>
   </actuator>
+
 
   <sensor>
     <actuatorpos name="junta1_p" actuator="junta1" />
