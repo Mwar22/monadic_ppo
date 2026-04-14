@@ -1,4 +1,4 @@
-<mujoco model="thor_robot">
+<mujoco model="thor_robot_mjcf">
 <!---
   <option iterations="50" timestep="0.001" solver="auto" gravity="0 0 -9.81" />
 -->
@@ -38,7 +38,7 @@
     -->
     <camera name="fixed" pos="0 -3.0 0.6272880191508667" xyaxes="1 0 0 0 0 1" fovy="30"/>
     <camera name="track" mode="trackcom" pos="0 -3.0 0.6272880191508667" xyaxes="1 0 0 0 0 1" />
-    <body name="root" pos="0 0 0" quat="1 0 0 0">
+    <body name="thor" pos="0 0 0" quat="1 0 0 0">
 
       <!-- Como o braço vai ficar fixo, não precisamos desta junta
       <freejoint name="root" />
