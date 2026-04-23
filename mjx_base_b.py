@@ -7,12 +7,24 @@ Base class for ThorRobot
 """
 
 import jax
+import jax.numpy as jnp
 import mujoco
-import numpy as np
 from etils import epath
 from mujoco import mjx
-from typing import Any, Dict, Optional, Union, Sequence
+from typing import Any, Dict, Optional, Union, Sequence, Protocol
+#faz um casting, para evitar o pylance reclamar de coisas como mjData, que vem do c/c++
 
+from typing import Protocol
+
+class mjtJoint(Protocol):
+    value: int
+
+class MjModel(Protocol):
+    jnt_qposadr: Any
+    jnt_dofadr: Any
+    jnt_type: Any
+
+    def joint(self, name: str)->Any: ...
 
 def update_assets(
     assets: Dict[str, Any],
@@ -53,7 +65,6 @@ def init(
     data = mjx.forward(model, data)
     return data
 
-
 def mjx_step(
     model: mjx.Model,
     data: mjx.Data,
@@ -71,7 +82,7 @@ def mjx_step(
 ###############
 
 
-def dof_width(joint_type: Union[int, mujoco.mjtJoint]) -> int:
+def dof_width(joint_type: Union[int, mjtJoint]) -> int:
     """
     Obtem a dimensionalidade de cada junta em qvel.
 
@@ -88,13 +99,13 @@ def dof_width(joint_type: Union[int, mujoco.mjtJoint]) -> int:
     """
 
     # para obter o valor, caso seja um enum
-    if isinstance(joint_type, mujoco.mjtJoint):
+    if not isinstance(joint_type, int):
         joint_type = joint_type.value
 
     return {0: 6, 1: 3, 2: 1, 3: 1}[joint_type]
 
 
-def qpos_width(joint_type: Union[int, mujoco.mjtJoint]) -> int:
+def qpos_width(joint_type: Union[int, mjtJoint]) -> int:
     """
     Obtem a dimensionalidade de cada junta em qpos.
 
@@ -110,12 +121,12 @@ def qpos_width(joint_type: Union[int, mujoco.mjtJoint]) -> int:
     """
 
     # para obter o valor, caso seja um enum
-    if isinstance(joint_type, mujoco.mjtJoint):
+    if not isinstance(joint_type, int):
         joint_type = joint_type.value
     return {0: 7, 1: 4, 2: 1, 3: 1}[joint_type]
 
 
-def get_qpos_ids(model: mujoco.MjModel, joint_names: Sequence[str]) -> np.ndarray:
+def get_qpos_ids(model: MjModel, joint_names: Sequence[str]) -> jnp.ndarray:
     """
     Obtem os indices com os endereços em qpos cada grau de liberdade de cada junta.
 
@@ -129,21 +140,21 @@ def get_qpos_ids(model: mujoco.MjModel, joint_names: Sequence[str]) -> np.ndarra
 
     Returns
     -------
-    ret: np.ndarray
+    ret: jnp.ndarray
         Array com os endereços  em qpos para cada junta.
     """
     ranges = [
-        np.arange(
+        jnp.arange(
             model.jnt_qposadr[model.joint(name).id],
             model.jnt_qposadr[model.joint(name).id]
             + qpos_width(model.jnt_type[model.joint(name).id]),
         )
         for name in joint_names
     ]
-    return np.concatenate(ranges)
+    return jnp.concatenate(ranges)
 
 
-def get_qvel_ids(model: mujoco.MjModel, joint_names: Sequence[str]) -> np.ndarray:
+def get_qvel_ids(model: MjModel, joint_names: Sequence[str]) -> jnp.ndarray:
     """
     Obtem os indices com os valores de velocidade para cada grau de liberdade de cada junta.
 
@@ -157,16 +168,16 @@ def get_qvel_ids(model: mujoco.MjModel, joint_names: Sequence[str]) -> np.ndarra
 
     Returns
     -------
-    ret: np.ndarray
+    ret: jnp.ndarray
         Array com os endereços  em qvel para cada junta.
     """
     ranges = [
-        np.arange(
+        jnp.arange(
             model.jnt_dofadr[model.joint(name).id],
             model.jnt_dofadr[model.joint(name).id]
             + dof_width(model.jnt_type[model.joint(name).id]),
         )
         for name in joint_names
     ]
-    return np.concatenate(ranges)
+    return jnp.concatenate(ranges)
 

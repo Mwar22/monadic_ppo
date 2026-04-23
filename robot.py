@@ -8,7 +8,6 @@ Tarefa para o thor alcançar um alvo
 from __future__ import annotations
 import mujoco
 import jax
-import mjx_base
 import flax.linen as nn
 from mujoco import MjModel  # type: ignore
 from jax import numpy as jnp
@@ -16,145 +15,470 @@ from jax.scipy.spatial.transform import Rotation
 from mujoco import mjx
 from etils import epath
 from flax import struct
-from typing import Any, Dict, Tuple, List, cast
+from typing import Any, Dict, Tuple, List, cast, Callable, Sequence, Protocol, Self
 from config import RangeConfig, RewardConfig, MujocoSimConfig
 from enviroment import StateMonad
-from utils import l1_l2_reward, exp_scale_reward, conv2jax_quat, cont_sample_beta, _cost_action_rate
-from typing import TYPE_CHECKING
+from utils import l1_l2_reward, exp_scale_reward, conv2jax_quat, cont_sample_beta, _cost_action_rate, update_assets, maybe_filled_list, maybe_joint_id
+from typing import TYPE_CHECKING, runtime_checkable
+from monads import MaybeMonad, ListMonad
 
 if TYPE_CHECKING:
     from dataclassutils import NetworksSettings, NetworkParameters, RunningParameters, RunningAvg
 
+########################################## para o pylance não reclamar #############################################
+mujoco: Any
+
+class SamplingFunction(Protocol):
+    """Define o contrato para funções de recompensa em RL."""
+    def __call__(self, rng: jax.Array, progress: float, shape: Tuple[int])->float:
+        ...
+####################################################################################################################
+
+@struct.dataclass
+class Actuators:
+    ids: Any
+    names: Any
+    joint_ids: Any
+    lowers: jax.Array
+    uppers: jax.Array
+
+    @classmethod
+    def init(cls, mj_model, joint_ids) -> Self:
+        """ Obtem uma lista com um dicionario para cada  atuador de um dado corpo, contendo o id e o nome """
+        actuator_ids = []
+        actuator_names = []
+ 
+        for act_id in range(mj_model.nu):
+            # trntype tells us what this actuator is attached to 
+            # (e.g., mjTRN_JOINT is the standard for motors/servos)
+            target_type = mj_model.actuator_trntype[act_id]
+            target_id = mj_model.actuator_trnid[act_id, 0]
+
+            if target_type == mujoco.mjtTrn.mjTRN_JOINT and target_id in joint_ids:
+                actuator_ids.append(act_id)
+                actuator_names.append(mj_model.actuator(act_id).name)
+
+        lowers = mj_model.actuator_ctrlrange[:, 0]
+        uppers = mj_model.actuator_ctrlrange[:, 1]
+        return cls(actuator_ids, actuator_names, joint_ids, lowers, uppers)
+    
+    @property
+    def number_of(self):
+        return len(self.ids)
+    
+
+    def on_range_by_id(self, value: List[float], id: List[Any]):
+        def on_range_single(val, i, n):
+            eval_value = lambda _id: (val >= self.lowers[_id]) and (val <= self.uppers[_id])
+
+        
+    
+    def on_range(self, value: List[float], id: List[Any], name: List[Any])-> bool | List[bool]:
+        
+        def on_range_single(val, i, n):
+            eval_value = lambda _id: (val >= self.lowers[_id]) and (val <= self.uppers[_id])
+
+            if i in self.ids:
+                return eval_value(i)
+            
+            if n in self.names:
+                i = self.names.index(name)
+                return eval_value(self.ids[i])
+        
+            return False
+        
+        min_len = min(len(value), len(id), len(name))
+        if min_len == 0:
+            return False
+        
+
+
+        return False
+        
+
+        
+        
+        
+@struct.dataclass
+class Joints:
+ 
+    mj_model: MjModel
+    ids: Any
+    names: Any
+    qpos_adr: Any
+    qvel_adr: Any
+
+    @classmethod
+    def init(cls, mj_model, body_name) -> Self:
+        joint_ids, joint_names = Joints._from_body(mj_model, body_name)
+
+        joint_qposadr = Joints._get_qpos_ids(mj_model, joint_names)
+        joint_qveladr = Joints._get_qvel_ids(mj_model, joint_names)
+
+        return cls(mj_model, joint_ids, joint_names, joint_qposadr, joint_qveladr)
+
+    @classmethod
+    def _from_body(cls, mj_model, body_name: str)->tuple[MaybeMonad[list[int]], MaybeMonad[list[str]]]:
+        """ Obtem uma lista com um dicionario para cada junta de um dado corpo, contendo o id e o nome """
+
+        def get_body_id(name: str) -> MaybeMonad[int]:
+            try:
+                return MaybeMonad.just(mj_model.body(name).id)
+            except KeyError:
+                return MaybeMonad.nothing()
+            
+        def extract_joints_ids(body_id: int):
+            start_adr = cast(int, mj_model.body_jntadr[body_id])
+            num_joints = mj_model.body_jntnum[body_id]
+            return [start_adr + i for i in range(num_joints)]
+        
+        def extract_joints_names(ids: List[int]):
+            return [cast(str, mj_model.joint(idx).name) for idx in ids]
+
+
+        m = MaybeMonad[str].just(body_name) if isinstance(body_name, str) else MaybeMonad.nothing()
+        joints_ids = m.bind(get_body_id).map(extract_joints_ids)
+        joints_names = joints_ids.map(extract_joints_names)
+
+        return joints_ids, joints_names
+        
+    
+    @classmethod
+    def _get_qpos_ids(cls, model: MjModel, joint_names: MaybeMonad[List[str]]):
+        """
+        Obtem os indices com os endereços em qpos cada grau de liberdade de cada junta.
+
+        Parameters
+        ----------
+        model: mujoco.MjModel
+            Modelo do mujoco.
+
+        joint_names: Sequence[str]
+            Sequência de strings que compoem os nomes das juntas.
+
+        Returns
+        -------
+        ret: np.ndarray
+            Array com os endereços  em qpos para cada junta.
+        """
+
+        joint_names = maybe_filled_list(joint_names)
+
+        def joint_range(name: str)->MaybeMonad[jax.Array]:
+            id = maybe_joint_id(model, name)
+            id = id.map(lambda id: id.value if not isinstance(id, int) else id)
+            return id.map(lambda id:
+                jnp.arange(model.jnt_qposadr[id], model.jnt_qposadr[id] + Joints.joint_infoby_id(id)["qpos_width"])
+            )
+ 
+        return joint_names.map(
+            lambda names:
+                ListMonad[str].pure(*names).map(
+                    lambda name: joint_range(name)
+                )
+        )
+        
+        
+    @classmethod
+    def _get_qvel_ids(cls, model: MjModel, joint_names: MaybeMonad[List[str]]):
+        """
+        Obtem os indices com os valores de velocidade para cada grau de liberdade de cada junta.
+
+        Parameters
+        ----------
+        model: mujoco.MjModel
+            Modelo do mujoco.
+
+        joint_names: Sequence[str]
+            Sequência de strings que compoem os nomes das juntas.
+
+        Returns
+        -------
+        ret: jnp.ndarray
+            Array com os endereços  em qvel para cada junta.
+        """
+      
+
+        joint_names = maybe_filled_list(joint_names)
+
+        def joint_range(name: str)->MaybeMonad[jax.Array]:
+            id = maybe_joint_id(model, name)
+            id = id.map(lambda id: id.value if not isinstance(id, int) else id)
+            return id.map(lambda id:
+                jnp.arange(model.jnt_dofadr[id], model.jnt_dofadr[id] + Joints.joint_infoby_id(id)["dof_width"])
+            )
+ 
+        return joint_names.map(
+            lambda names:
+                ListMonad[str].pure(*names).map(
+                    lambda name: joint_range(name)
+                )
+        )
+    
+
+    @classmethod
+    def joint_infoby_id(cls, id):
+        _map = {
+            0: {"type": "free", "dof_width": 6, "qpos_width": 7}, # 3 valores de posição + 4 para rotação (quaternion)
+            1: {"type": "ball", "dof_width": 3, "qpos_width": 4}, # 4 valores apenas rotação (quaternion)
+            2: {"type": "slide", "dof_width": 1, "qpos_width": 1}, # 1 grau de liberdade. 1 valor
+            3: {"type": "hinge", "dof_width": 1, "qpos_width": 1}, # 1 grau de liberdade. 1 valor
+        }
+        return _map[id]
+    
+    @property
+    def lowers(self):
+        l, _ = self.mj_model.actuator_ctrlrange.T
+        return l
+
+    @property
+    def uppers(self):
+        _, u= self.mj_model.actuator_ctrlrange.T
+        return u
+    
+    def coordinates_collided(self, joint_coordinates):
+
+        # aplica o modelo para a CPU e checa na física
+        temp_data= mujoco.MjData(self.mj_model)
+        temp_data.qpos[self.qpos_adr] = joint_coordinates
+        mujoco.mj_kinematics(self.mj_model, temp_data) # Calcula as posições
+        mujoco.mj_collision(self.mj_model, temp_data)   # Checa colisões
+        
+        # ncon == 0 means no collision detected
+        return temp_data.ncon == 0
+
+@struct.dataclass
+class Geoms:
+    mj_model: MjModel
+    ids: Any
+    names: Any
+
+    @classmethod
+    def init(cls, mj_model, body_name) -> Self:
+        geom_ids, geom_names = Geoms._get_geoms_from_body(mj_model, body_name)
+
+        return cls(mj_model, geom_ids, geom_names)
+    
+    @classmethod
+    def _get_geoms_from_body(cls, mj_model, body_name) -> Tuple[List[int], List[str]]:
+        """ Obtem uma lista com um dicionario para cada geometria de um dado corpo, contendo o id e o nome """
+        body_id = mj_model.body(body_name).id
+        start_adr = mj_model.body_geomadr[body_id]
+        num_geoms = mj_model.body_geomnum[body_id]
+        
+        geom_ids = []
+        geom_names = []
+        for i in range(num_geoms):
+            id = start_adr + i
+            name = mj_model.joint(id).name
+
+            geom_ids.append(id)
+            geom_names.append(name)
+        
+            
+        return geom_ids, geom_names
+    
+@struct.dataclass
+class SafeActionSpace:
+    pos_buffer: jax.Array   #buffer de posição de juntas, (length, )
+    actuators: Actuators
+
+    @classmethod
+    def init(
+        cls,
+        length, 
+        actuators: Actuators
+    )->Self:
+        
+        return cls(
+            jnp.zeros((length, actuators.number_of)),
+            actuators
+        )
+
+    def sample(self, rng, progress, sampling_fn: SamplingFunction):
+        """ Retorna uma posição/orientação que seja alcançável pelo robô,
+            não havendo colisões consigo mesmo ou com o solo.
+
+        Parameters
+        ----------
+        rng : _type_
+            _description_
+        progress : _type_
+            _description_
+        """
+        rng, rng2 = jax.random.split(rng)
+        p = sampling_fn(rng2, progress, shape=(self.actuators.ids,))
+
+        for id in self.joints.ids:
+
+        rng, pos = range_cfg.position.sample_normal(rng, progress)
+        rng, ori = range_cfg.orientation.sample_normal(rng, progress)
+
 
 @struct.dataclass
 class RobotSharedData:
-    mjx_model: mjx.Model
     mj_model: MjModel
-    init_q: jax.Array
-    init_ctrl: jax.Array
-    lowers: float
-    uppers: float
-    joint_ids: List[Any]
-    joint_qposadr: Any
-    joint_qveladr: Any
-    default_pose: jax.Array
+    mjx_model: mjx.Model
+    joints: Joints
+    geoms: Geoms
     tool_tip_id: int
     tool_base_id: int
+    ground_id: int
     enviroment_config: MujocoSimConfig
     reward_config: RewardConfig
     range_config: RangeConfig
+
+    @classmethod
+    def init(
+        cls,
+        xml_path: epath.Path,
+        model_path: epath.Path,
+        meshes_path: epath.Path,
+        enviroment_config: MujocoSimConfig,
+        reward_config: RewardConfig,
+        range_config: RangeConfig,
+        robot_name: str,
+    ):
+        """
+        Método fábrica para o ambiente
+        """
+
+        # Obtem os assets com base nos caminhos
+        assets = {}
+        update_assets(assets, model_path, "*.xml")
+        update_assets(assets, meshes_path)
+
+        # configura modelos do mujoco e do mujoco mjx_env
+        xml_text = xml_path.read_text(encoding="utf-8").encode("utf-8")
+        mj_model = mujoco.MjModel.from_xml_string(  # type: ignore
+            xml_text, assets=assets
+        )
+
+        # configura o timestep
+        mj_model.opt.timestep = enviroment_config.sim_dt
+
+        # dimensões de altura e largura
+        mj_model.vis.global_.offwidth = 3840
+        mj_model.vis.global_.offheight = 2160
+
+        #cria o modelo mjx na gpu
+        mjx_model = mjx.put_model(mj_model, impl=str(enviroment_config.impl))
+
+        joints = Joints.init(mj_model, robot_name)
+        geoms = Geoms.init(mj_model, robot_name)
+
+
+        # ids para a ponta colocada no robô
+        tool_tip_id = mj_model.site("tool_tip").id
+        tool_base_id = mj_model.site("tool_base").id
+        ground_id = mj_model.geom("ground").id
+
+        return cls(
+            mj_model,
+            mjx_model,
+            joints,
+            geoms,
+            tool_tip_id,
+            tool_base_id,
+            ground_id,
+            enviroment_config,
+            reward_config,
+            range_config,
+        )
     
-def create_rsd(
-    xml_path: epath.Path,
-    model_path: epath.Path,
-    meshes_path: epath.Path,
-    enviroment_config: MujocoSimConfig,
-    reward_config: RewardConfig,
-    range_config: RangeConfig,
-    arm_joints: List[str]
-):
-    """
-    Método fábrica para o ambiente
-    """
+    ####################################### Metodos da classe ################################################
+   
+    
 
-    # Obtem os assets com base nos caminhos
-    assets = {}
-    mjx_base.update_assets(assets, model_path, "*.xml")
-    mjx_base.update_assets(assets, meshes_path)
+    
+    
+    
+    ################################## Propriedades (metodos) ###########################################
+    @property
+    def lowers(self):
+        l, _ = self.mj_model.actuator_ctrlrange.T
+        return l
 
-    # configura modelos do mujoco e do mujoco mjx_env
-    xml_text = xml_path.read_text(encoding="utf-8").encode("utf-8")
-    mj_model = mujoco.MjModel.from_xml_string(  # type: ignore
-        xml_text, assets=assets
-    )
+    @property
+    def uppers(self):
+        _, u= self.mj_model.actuator_ctrlrange.T
+        return u
 
-    # configura o timestep
-    mj_model.opt.timestep = enviroment_config.sim_dt
+    ################################### Metodos de interação externos ##################################
+    def sensor_data(
+        self, mjx_data: mjx.Data, sensor_name: str
+    ) -> jax.Array:
+        """
+        Obtem os dados de um determinado sensor, de acordo com seu nome
 
-    # dimensões de altura e largura
-    mj_model.vis.global_.offwidth = 3840
-    mj_model.vis.global_.offheight = 2160
+        Parameters
+        ----------
+        model: mujoco.MjModel
+            Modelo do mujoco.
 
-    # para rodar com o mjx
-    mjx_model = mjx.put_model(mj_model, impl=str(enviroment_config.impl))
+        data: mjx.Data
+            Estado dinâmico que atualiza a cada step.
 
-    # posiçao inicial, controle, limites e pose inicial
-    keyframe = "home"
-    init_q = jnp.array(mj_model.keyframe(keyframe).qpos)
-    init_ctrl = jnp.array(mj_model.keyframe(keyframe).ctrl)
-    lowers, uppers = mj_model.actuator_ctrlrange.T
+        sensor_name: str
+            nome do sensor que se deseja obter os dados.
 
-    # ids para as juntas
-    joint_ids = [mj_model.joint(j).id for j in arm_joints]
-
-    # mapeia cada joint id para um qpos equivalente.
-    joint_qposadr = mjx_base.get_qpos_ids(mj_model, arm_joints)
-
-    # mapeia uma lista de itens qvel (dim = n° de graus de liberdade da junta) para cada junta
-    joint_qveladr = mjx_base.get_qvel_ids(mj_model, arm_joints)
-
-    # para obter a pose padrão
-    default_pose = init_q[joint_qposadr]
-
-    # ids para a ponta colocada no robô
-    tool_tip_id = mj_model.site("tool_tip").id
-    tool_base_id = mj_model.site("tool_base").id
-
-    return RobotSharedData(
-        mjx_model,
-        mj_model,
-        init_q,
-        init_ctrl,
-        lowers,
-        uppers,
-        joint_ids,
-        joint_qposadr,
-        joint_qveladr,
-        default_pose,
-        tool_tip_id,
-        tool_base_id,
-        enviroment_config,
-        reward_config,
-        range_config,
-    )
+        Returns
+        -------
+        ret: jax.Array
+            Dados obtidos do sensor.
+        """
+        sensor_id = self.mj_model.sensor(sensor_name).id
+        sensor_adr = self.mj_model.sensor_adr[sensor_id]
+        sensor_dim = self.mj_model.sensor_dim[sensor_id]
+        return mjx_data.sensordata[sensor_adr : sensor_adr + sensor_dim]
 
 
-##############################################################################################################3
-def qpos(rsd: RobotSharedData, mjx_data: mjx.Data):
-    return mjx_data.qpos[rsd.joint_qposadr]
+    def detect_collisions(self, mjx_data: mjx.Data):
+        # mjx_data.contact.geom1 and geom2 are arrays of IDs
+        g1 = mjx_data.contact.geom1
+        g2 = mjx_data.contact.geom2
+        dist = mjx_data.contact.dist
+        
+        # só existe colisão se dist <= 0
+        is_collision = dist <= 0
 
-def qvel(rsd:RobotSharedData, mjx_data: mjx.Data):
-    return mjx_data.qvel[rsd.joint_qveladr]
+        # checa se algum contato envolveu o solo
+        hits_ground = is_collision & ((g1 == self.ground_id) | (g2 == self.ground_id))
+        
+        # Checa se auto colidiu
+        g1_is_robot = jnp.isin(g1, self.geoms.ids)
+        g2_is_robot = jnp.isin(g2, self.geoms.ids)
+        is_self_hit = is_collision & g1_is_robot & g2_is_robot
+        
+        return hits_ground, is_self_hit
 
-def qfrc(mjx_data: mjx.Data):
-    return mjx_data.qfrc_actuator
+    
+    def qpos(self, mjx_data: mjx.Data):
+        return mjx_data.qpos[self.joints.qpos_adr]
+    
+    def qvel(self, mjx_data: mjx.Data):
+        return mjx_data.qvel[self.joints.qvel_adr]
 
-def sensor_data(
-    rsd: RobotSharedData, mjx_data: mjx.Data, sensor_name: str
-) -> jax.Array:
-    """
-    Obtem os dados de um determinado sensor, de acordo com seu nome
+    def qfrc(self, mjx_data: mjx.Data):
+        return mjx_data.qfrc_actuator
+    
+    def mjx_step(self, 
+        data: mjx.Data,
+        action: jax.Array,
+    ) -> mjx.Data:
+        def single_step(data, _):
+            data = data.replace(ctrl=action)
+            data = mjx.step(self.mjx_model, data)
+            return data, None
 
-    Parameters
-    ----------
-    model: mujoco.MjModel
-        Modelo do mujoco.
+        return jax.lax.scan(single_step, data, (), self.enviroment_config.n_substeps)[0]
+    
+    
+    
+##############################################################################################################
 
-    data: mjx.Data
-        Estado dinâmico que atualiza a cada step.
 
-    sensor_name: str
-        nome do sensor que se deseja obter os dados.
 
-    Returns
-    -------
-    ret: jax.Array
-        Dados obtidos do sensor.
-    """
-    sensor_id = rsd.mj_model.sensor(sensor_name).id
-    sensor_adr = rsd.mj_model.sensor_adr[sensor_id]
-    sensor_dim = rsd.mj_model.sensor_dim[sensor_id]
-    return mjx_data.sensordata[sensor_adr : sensor_adr + sensor_dim]
 
 
 def position_error(goal_position: jax.Array, tool_position: jax.Array) -> jax.Array:
@@ -373,6 +697,38 @@ def get_goal(rsd: RobotSharedData, progress, rng):
     }
     return rng, goals
 
+def sample_random_pose(rsd, rng):
+    rng, subkey = jax.random.split(rng)
+    # Generates a value between lower and upper limits for each joint
+    random_q = jax.random.uniform(
+        subkey, 
+        shape=(len(rsd.joint_ids),), 
+        minval=rsd.lowers, 
+        maxval=rsd.uppers
+    )
+    return rng, random_q
+
+def training_frame_setup(rsd: RobotSharedData, progress, rng):
+
+    rng, position = rsd.range_config.position.sample_normal(rng, progress)
+    rng, position_velocities = rsd.range_config.position_velocities.sample_normal(rng, progress)
+    rng, orientation = rsd.range_config.orientation.sample_normal(rng, progress)
+   
+
+    goals = {
+        "goal_position_coordinates": position,
+        "goal_position_velocities": position_velocities,
+        "goal_orientation_coordinates": orientation
+    }
+
+    #randomiza as posições de junta, de acordo com os limites
+    rng, subkey = jax.random.split(rng)
+    alpha = jax.random.uniform(subkey)
+    rnd_start_joint_angles = rsd.lowers + (rsd.uppers -rsd.lowers) * alpha
+    return rng, goals
+
+
+
 def debug(pdata, name):
     def func(state):
         jax.debug.print("{} = {}", name, pdata[name])
@@ -386,7 +742,7 @@ def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningAvg, env: StateMonad):
             lambda pdata: StateMonad(
                 lambda state: (
                     state,
-                    {**pdata, "tool_position": sensor_data(rsd, state["mjx_data"], "tool_position")},
+                    {**pdata, "tool_position": rsd.sensor_data(state["mjx_data"], "tool_position")},
                 )
             )
         )
@@ -406,7 +762,7 @@ def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningAvg, env: StateMonad):
             lambda pdata: StateMonad(
                 lambda state: (
                     state,
-                    {**pdata, "orientation": sensor_data(rsd, state["mjx_data"], "tool_orientation")},
+                    {**pdata, "orientation": rsd.sensor_data(state["mjx_data"], "tool_orientation")},
                 )
             )
         )
@@ -431,7 +787,7 @@ def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningAvg, env: StateMonad):
             lambda pdata: StateMonad(
                 lambda state: (
                     state,
-                    {**pdata, "torques": qfrc(state["mjx_data"])},
+                    {**pdata, "torques": rsd.qfrc(state["mjx_data"])},
                 )
             )
         )
@@ -441,7 +797,7 @@ def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningAvg, env: StateMonad):
                     state,
                     {
                         **pdata,
-                        "joint_angles": qpos(rsd, state["mjx_data"]),
+                        "joint_angles": rsd.qpos(state["mjx_data"]),
                     },
                 )
             )
@@ -452,7 +808,7 @@ def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningAvg, env: StateMonad):
                     state,
                     {
                         **pdata,
-                        "joint_vel": qvel(rsd, state["mjx_data"]),
+                        "joint_vel": rsd.qvel(state["mjx_data"]),
                     },
                 )
             )
@@ -460,7 +816,7 @@ def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningAvg, env: StateMonad):
         .map(
             lambda pdata: {
                 **pdata,
-                "pose_dist": pdata["joint_angles"] - rsd.default_pose,
+                "pose_dist": pdata["joint_angles"], ###CHANGE SO IT COUNTS RELATIVE!
             }
         )
         .bind(lambda pdata: concat_obs_as_array(pdata))
@@ -502,21 +858,28 @@ def reward_pipeline(progress, rsd: RobotSharedData,  env: StateMonad):
                         reward_config.rot_incentive_gain.update(progress),
                         reward_config.rot_incentive_sigma.update(progress),
                         pdata["orientation_error"]
-                    ) +
-                    # Penalidade L2 de torque para evitar movimentos espasmódicos
-                    jnp.sum(jnp.square(pdata["torques"])) * reward_config.torques_penalty.update(progress)
+                    )
                 ),
             }
         )
 
-        # penalidade por ações muito grandes
+       
         .bind(
             lambda pdata: StateMonad(
                 lambda state: (
                     state,
                     {
                         **pdata,
-                        "reward": pdata["reward"] - 0.01 * _cost_action_rate(pdata["action"], state["action"])
+                        "reward": (
+                            # penalidade por ações muito grandes
+                            pdata["reward"] - 0.01 * _cost_action_rate(pdata["action"], state["action"]) 
+
+                            # Penalidade de torque para evitar movimentos espasmódicos
+                            + jnp.sum(jnp.square(pdata["torques"])) * reward_config.torques_penalty.update(progress)
+
+                            # Penalidade de velocidade para evitar movimentos espasmódicos
+                            + jnp.sum(jnp.square(pdata["joint_vel"])) * reward_config.velocity_penalty.update(progress)
+                        ),
                     }
                 )
             )
@@ -553,9 +916,9 @@ def reward_pipeline(progress, rsd: RobotSharedData,  env: StateMonad):
                         **pdata,
                         "done": pdata["success"] | pdata["failure"],
 
-                        # Bônus de Sucesso + Bônus de Velocidade
+                        # Bônus de Sucesso
                         "reward": pdata["reward"]
-                        + pdata["success"] * (reward_config.success_reward.update(progress) + (30 - state["step"]) * 5.0)
+                        + pdata["success"] * reward_config.success_reward.update(progress)
                         + pdata["failure"] * reward_config.failure_penalty.update(progress),
                     },
                 )
@@ -580,26 +943,24 @@ def get_action(network_settings: NetworksSettings, network_parameters: NetworkPa
         return new_state, {"action": action_value, "logprob": logprob}
     return StateMonad(fn)
 
-def get_motor_targets(robot_shared_data: RobotSharedData, pdata):
+def get_motor_targets(rsd: RobotSharedData, pdata):
     def fn(state):
         # escala ação para de [0, 1] para [-1, 1]
-        action_value_action = 2.0 * pdata["action"]- 1.0
+        action_value_action = jnp.clip(2.0 * pdata["action"]- 1.0, -1, 1)
 
         # configura novos alvos para os motores, de acordo com a ação  selecionada a partir da posição atual
-        current_pos = qpos(robot_shared_data, state["mjx_data"])
-        motor_targets = current_pos + action_value_action * robot_shared_data.enviroment_config.action_scale
+        current_pos = rsd.qpos(state["mjx_data"])
+        motor_targets = current_pos + action_value_action * rsd.enviroment_config.action_scale
 
         # para evitar que os limites de junta do robô sejam desrespeitados
-        return state, {**pdata, "motor_targets":jnp.clip(motor_targets, robot_shared_data.lowers, robot_shared_data.uppers)}
+        return state, {**pdata, "motor_targets":jnp.clip(motor_targets, rsd.lowers, rsd.uppers)}
     return StateMonad(fn)
 
-def mujoco_step(robot_shared_data: RobotSharedData, pdata):
+def mujoco_step(rsd: RobotSharedData, pdata):
     def fn(state):
-        mjx_data = mjx_base.mjx_step(
-            robot_shared_data.mjx_model,
+        mjx_data = rsd.mjx_step(
             state["mjx_data"],
             pdata["motor_targets"],
-            robot_shared_data.enviroment_config.n_substeps,
         )
         state = {**state, "mjx_data": mjx_data}
         return state , pdata

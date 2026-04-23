@@ -1,12 +1,17 @@
 ﻿
 import jax
 import optax
+import mujoco
 import jax.numpy as jnp
 import flax.linen as nn
 from flax import struct
 from typing import Any, cast, Tuple, Callable, Self
 from robot import RobotSharedData
+from jax.scipy.spatial.transform import Rotation
+from utils import conv2jax_quat
 
+#faz um casting, para evitar o pylance reclamar de coisas como mjData, que vem do c/c++
+mujoco: Any
 
 @struct.dataclass
 class RunningAvg:
@@ -295,3 +300,30 @@ class BatchedBuffer:
         logprob_buffer = logprob_buffer.at[ptr].set(logprob)
 
         return obs_buffer, action_buffer, reward_buffer, logprob_buffer, ptr + 1
+    
+
+
+    @struct.dataclass
+    class SafePositionBuffer:
+        pos_buffer: jax.Array   #buffer de posição
+        rotvec_buffer: jax.Array  #buffer de vetores de rotação
+
+        @classmethod
+        def init(cls, size: int):
+            cls(
+                jnp.zeros((size, 3)),
+                jnp.zeros((size, 3))
+            )
+
+        @classmethod
+        def check_mujoco_safe(cls, rsd: RobotSharedData, joint_coordinates):
+
+            # Apply to CPU data and check physics
+            # aplica o modelo para a CPU e checa na física
+            temp_data= mujoco.MjData(rsd.mj_model)
+            temp_data.qpos[rsd.joint_qposadr] = joint_coordinates
+            mujoco.mj_kinematics(rsd.mj_model, temp_data) # Calcula as posições
+            mujoco.mj_collision(rsd.mj_model, temp_data)   # Checa colisões
+            
+            # ncon == 0 means no collision detected
+            return temp_data.ncon == 0

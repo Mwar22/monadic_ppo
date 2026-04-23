@@ -20,14 +20,12 @@ class MujocoSimConfig:
     """
 
     ctrl_dt: float = 0.02  # time step para o controle (s)
-    sim_dt: float = 0.005  # time step para a simulação (s)
-    episode_length: float = 500  # 5 sec (250*ctrl_dt)
-    action_repeat: float = 1
-    action_scale: float = 0.3
+    sim_dt: float = 0.001  # time step para a simulação (s), 1kHz
+    action_scale: float = 0.02
     obs_noise: float = 0.05
     impl: str = "jax"
-    nconmax: int = 24 * 8192
-    njmax: int = 88
+    #nconmax: int = 24 * 8192
+    #njmax: int = 88
 
     @property
     def dt(self) -> float:
@@ -86,7 +84,8 @@ class RewardConfig:
     err_tol = RewardConfigParameter.linear_tracking(0.8, 0.02)
     
     # --- Regularização ---
-    torques_penalty = RewardConfigParameter.const(-1e-4)
+    torques_penalty = RewardConfigParameter.const(-1e-2)
+    velocity_penalty = RewardConfigParameter.const(-1e-3)
 
 
 @struct.dataclass
@@ -124,42 +123,36 @@ class VectorRange:
     
 @struct.dataclass
 class RangeConfig:
+    position_steps: int
+    orientation_steps: int
 
-    numberof_goals: int = 300
+    position: VectorRange 
+    position_velocities: VectorRange 
+    orientation: VectorRange
 
-    position: VectorRange = VectorRange.init(
-        300,
-        jnp.array([-0.6, -0.6, 1]),
-        jnp.array([0.6, 0.6, 1])
-    )
-    position_velocities: VectorRange = VectorRange.init(
-        300,
-        jnp.array([0, 0, 0]),
-        jnp.array([0.1, 0.1, 0.1])
-    )
-    orientation: VectorRange = VectorRange.init(
-        300,
-        jnp.array([-2, -2, -2]),
-        jnp.array([2, 2, 2])
-    )
-
+    @property
+    def numberof_goals(self):
+        return self.position_steps * self.orientation_steps
 
     @classmethod
     def init(
         cls,
-        numberof_goals: int,
-        position_min_values: jax.Array,
-        position_max_values: jax.Array,
-        position_velocities_min_values: jax.Array,
-        position_velocities_max_values: jax.Array,
-        orientation_min_values: jax.Array,
-        orientation_max_values: jax.Array,
+        pos_min: jax.Array,
+        pos_max: jax.Array,
+        posvel_min: jax.Array,
+        posvel_max: jax.Array,
+        ori_min: jax.Array,
+        ori_max: jax.Array,
+        pos_steps: int,
+        posvel_steps: int,
+        ori_steps: int,
     )->Self:
         return cls(
-            numberof_goals,
-            VectorRange.init(numberof_goals, position_min_values, position_max_values),
-            VectorRange.init(numberof_goals, position_velocities_min_values, position_velocities_max_values),
-            VectorRange.init(numberof_goals, orientation_min_values, orientation_max_values),
+            pos_steps,
+            ori_steps,
+            VectorRange.init(pos_steps, pos_min, pos_max),
+            VectorRange.init(posvel_steps, posvel_min, posvel_max),
+            VectorRange.init(ori_steps, ori_min, ori_max),
         )
 
     

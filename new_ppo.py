@@ -377,57 +377,39 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
         rng, initial_state_rng = jax.random.split(rng)
         rng, initial_state = create_initial_state(initial_state_rng, runpar.progress.value, settings)
 
+        # cria um buffer
+        buffer = BatchedBuffer.init(settings)
 
-        # treina settings.cycles_per_goal vezes  para um dado estado inicial
-        def _train_cycle(carry, _):
-            runpar, optim_state, network_params = carry
-            network_params = cast(NetworkParameters, network_params)
-            runpar = cast(RunningParameters, runpar)
+        #coleta os dados e atualiza os parâmetros correntes 
+        state, buffer, advantages, returns = _collect_dataset(initial_state, buffer, runpar, network_params)
+        mean_envs_success_rate = _get_success_rate(state)
+    
 
-            # cria um buffer
-            buffer = BatchedBuffer.init(settings)
-
-            #coleta os dados e atualiza os parâmetros correntes 
-            state, buffer, advantages, returns = _collect_dataset(initial_state, buffer, runpar, network_params)
-            mean_envs_success_rate = _get_success_rate(state)
-        
-
-            # metricas tem shape (epochs, *metric_shape)
-            network_params, optim_state, training_metrics = _train_epochs(network_params, optim_state, buffer, advantages, returns)
-            runpar = runpar.update(buffer.obs_buffer, mean_envs_success_rate)
-        
-            return (runpar, optim_state, network_params), (training_metrics, mean_envs_success_rate, buffer.reward_buffer, state["err"])
-
-        
-        # após  o scan, teremos o seguinte:
-        # training_metrics.shape = (cycles_per_goal, epochs, *metric_shape)
-        # mean_envs_success_rate.shape = (cycles_per_goal,)
-        # rewards.shape (cycles_per_goa, num_envs, rollout_steps +1)
-        cycle_carry, cycle_metrics = jax.lax.scan(
-            _train_cycle,
-            (runpar, optim_state, network_params),
-            jnp.arange(settings.cycles_per_goal)
-        )
-        return (rng, *cycle_carry), cycle_metrics
+        # metricas tem shape (epochs, *metric_shape)
+        network_params, optim_state, training_metrics = _train_epochs(network_params, optim_state, buffer, advantages, returns)
+        runpar = runpar.update(buffer.obs_buffer, mean_envs_success_rate)
+    
+        newcarry = (rng, runpar, optim_state, network_params)
+        return newcarry, (training_metrics, mean_envs_success_rate, buffer.obs_buffer, state["err"])
 
 
     # loop principal de trainamento, executado por lax.scan
     runpar = RunningParameters.init((settings.network_settings.obs_size, ), settings.target_success)
 
     # após  o scan, teremos o seguinte:
-    # training_metrics[key].shape = (numberof_goals, cycles_per_goal, epochs, *metric_shape)
-    # mean_envs_success_rate.shape = (numberof_goals, cycles_per_goal,)
-    #rewards.shape = (numberof_goals, cycles_per_goal, num_envs, rollout_steps +1)
+    # training_metrics[key].shape = (numberof_goals, epochs, *metric_shape)
+    # mean_envs_success_rate.shape = (numberof_goals,)
+    #rewards.shape = (numberof_goals, num_envs, rollout_steps +1)
     final_carry, (training_metrics, mean_envs_success_rate, rewards, err) = jax.lax.scan(
         _new_goal_step,
         (rng, runpar, settings.optimizer_state, starting_network_params),
         jnp.arange(settings.robot_shared_data.range_config.numberof_goals),
     )
 
-    # shape das perdas é: (numberof_goals, cycles_per_goal, epochs,). Para exibir no formato (epochs, )
-    avg_loss = jnp.mean(training_metrics["loss"], axis=(0, 1))
-    avg_entropy = jnp.mean(training_metrics["entropy"], axis=(0, 1))
-    avg_grad_norm = jnp.mean(training_metrics["grad_norm"], axis=(0, 1))
+    # shape das perdas é: (numberof_goals, epochs,). Para exibir no formato (epochs, )
+    avg_loss = jnp.mean(training_metrics["loss"], axis=0)
+    avg_entropy = jnp.mean(training_metrics["entropy"], axis=0)
+    avg_grad_norm = jnp.mean(training_metrics["grad_norm"], axis=0)
 
     # shape de recompensas é: (numberof_goals, cycles_per_goal, num_envs, rollout_steps +1)
     # para exibir no formato (cycles_per_goal, )

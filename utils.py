@@ -10,10 +10,15 @@ Contem funções auxiliares com operações matemáticas auxiliares.
 """
 
 import jax
-import flax.serialization
+import mujoco
+from mujoco import MjModel  # type: ignore
+from etils import epath
 from jax import numpy as jnp
 from jax.scipy.special import gammaln, digamma
+from typing import Union, Dict, Any, List
+from monads import MaybeMonad
 
+mujoco: Any
 
 class Scheduler:
     @staticmethod
@@ -202,18 +207,25 @@ def stdNormalize(values: jax.Array):
     return values
 
 
+def update_assets(
+    assets: Dict[str, Any],
+    path: Union[str, epath.Path],
+    glob: str = "*",
+    recursive: bool = False,
+):
+    for f in epath.Path(path).glob(glob):
+        if f.is_file():
+            assets[f.name] = f.read_bytes()
+        elif f.is_dir() and recursive:
+            update_assets(assets, f, glob, recursive)
 
-def save_params(network_params, filename="trained_params.msgpack"):
-    state_bytes = flax.serialization.to_bytes(network_params)
 
-    with open(filename, "wb") as f:
-        f.write(state_bytes)
 
-    print(f"Model weights saved successfully to: {filename}")
+def maybe_filled_list(list)-> MaybeMonad:
+    if isinstance(list, List) and len(list) > 0:
+        return MaybeMonad.just(list)
+    return MaybeMonad.nothing()
 
-def load_params(empty_params, filename="trained_params.msgpack"):
-    with open(filename, "rb") as f:
-        state_bytes = f.read()
-
-    # restaura os parametros a partir dos dados serializados
-    return flax.serialization.from_bytes(empty_params, state_bytes)
+def maybe_joint_id(model: MjModel, joint_name)-> MaybeMonad:
+    jnt_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+    return MaybeMonad.nothing() if jnt_id ==-1 else MaybeMonad.just(jnt_id)

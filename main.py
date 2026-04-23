@@ -35,7 +35,7 @@ import matplotlib.pyplot as plt
 from jax import config
 from new_ppo import TrainingSettings, ppo_train
 from etils import epath
-from robot import create_step, create_rsd
+from robot import create_step, RobotSharedData
 from config import MujocoSimConfig, RangeConfig, RewardConfig
 from networks import save_params, create_networks
 
@@ -62,23 +62,25 @@ rng, network_settings, network_params = create_networks(rng, obs_size=34, action
 
 
 range_cfg = RangeConfig.init(
-    numberof_goals=100,
-    position_min_values = jnp.array([-0.468, -0.468, 0]),
-    position_max_values = jnp.array([0.468, 0.468, 0.664]),
-    position_velocities_min_values = jnp.array([1e-2, 1e-2, 1e-2]),
-    position_velocities_max_values = jnp.array([0.1, 0.1, 0.1]),
-    orientation_min_values = jnp.array([-3.14, -3.14, -3.14]),
-    orientation_max_values = jnp.array([3.14, 3.14, 3.14])
+    pos_min = jnp.array([-0.468, -0.468, 0]),
+    pos_max = jnp.array([0.468, 0.468, 0.664]),
+    posvel_min = jnp.array([1e-2, 1e-2, 1e-2]),
+    posvel_max = jnp.array([0.1, 0.1, 0.1]),
+    ori_min = jnp.array([-3.14, -3.14, -3.14]),
+    ori_max = jnp.array([3.14, 3.14, 3.14]),
+    pos_steps=300,
+    posvel_steps=10,
+    ori_steps=100
 )
 
-robot_shared_data = create_rsd(
+robot_shared_data = RobotSharedData.init(
     epath.Path("model/joystick_env.xml"),
     epath.Path("model"),
     epath.Path("model/meshes"),
     MujocoSimConfig(),
     RewardConfig(),
     range_cfg,
-    ["junta1", "junta2", "junta3", "junta4","junta5", "junta6"]
+    robot_name="thor"
 )
 
 settings = TrainingSettings.init(
@@ -89,7 +91,7 @@ settings = TrainingSettings.init(
     step_fn_creator = create_step,
     num_envs= 512,
     cycles_per_goal=30,
-    epochs=30,
+    epochs=100,
     rollout_steps=128,
     target_success=0.75,
 )
