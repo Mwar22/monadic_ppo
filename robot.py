@@ -43,84 +43,63 @@ class Actuators:
     uppers: jax.Array
 
     @classmethod
-    def init(cls, mj_model, joint_ids: MaybeM[list[int]]) -> Self:
+    def init(cls, mj_model, joint_ids: list[int]) -> MaybeM[Self]:
         """ Obtem uma lista com um dicionario para cada  atuador de um dado corpo, contendo o id e o nome """
-        x = Actuators._from_body(mj_model, joint_ids)
+        actuator_ids, actuator_names = Actuators._from_joint_ids(mj_model, joint_ids)
 
-        if x.is_nothing():
-            actuator_ids = MaybeM.nothing()
-            actuator_names = MaybeM.nothing()
-        else:
-            assert x.value is not None
-            actuator_ids, actuator_names = x.value
+        ids = actuator_ids.value
+        names = actuator_names.value
+
+        if ids is None or names is None:
+            return MaybeM.nothing()
 
         lowers = mj_model.actuator_ctrlrange[:, 0]
         uppers = mj_model.actuator_ctrlrange[:, 1]
-        return cls(actuator_ids, actuator_names, joint_ids, lowers, uppers)
+        return MaybeM.just(cls(ids, names, joint_ids, lowers, uppers))
     
     @classmethod
-    def _from_body(cls, mj_model, joint_ids: MaybeM[list[int]]):
+    def _from_joint_ids(cls, mj_model, joint_ids: list[int])->tuple[MaybeM[list[int]], MaybeM[list[str]]]:
         """ Obtem uma lista com um dicionario para cada junta de um dado corpo, contendo o id e o nome """
 
         """ Obtem uma lista com um dicionario para cada  atuador de um dado corpo, contendo o id e o nome """
 
-        def ret_fn(ids)-> Tuple[ListM[MaybeM[int]], ListM[MaybeM[str]]]:
-            actuator_ids: List[MaybeM[int]] = []
-            actuator_names: List[MaybeM[str]] = []
-
-            test = [1, 2, 3]
-    
-            for act_id in range(mj_model.nu):
-                # trntype tells us what this actuator is attached to 
-                # (e.g., mjTRN_JOINT is the standard for motors/servos)
-                target_type = mj_model.actuator_trntype[act_id]
-                target_id = mj_model.actuator_trnid[act_id, 0]
-                
-
-                if target_type == mujoco.mjtTrn.mjTRN_JOINT and target_id in ids:
-                    actuator_ids.append(MaybeM.just(act_id))
-                    actuator_names.append(MaybeM.just(mj_model.actuator(act_id).name))
-                else:
-                    actuator_ids.append(MaybeM.nothing())
-                    actuator_names.append(MaybeM.nothing())
-
-            return ListM.pure(actuator_ids), ListM.pure(actuator_names)
         
-        return joint_ids.map(ret_fn)
-        
+        actuator_ids = []
+        actuator_names = []
+
+        for act_id in range(mj_model.nu):
+            # trntype tells us what this actuator is attached to 
+            # (e.g., mjTRN_JOINT is the standard for motors/servos)
+            target_type = mj_model.actuator_trntype[act_id]
+            target_id = mj_model.actuator_trnid[act_id, 0]
+            
+
+            if target_type != mujoco.mjtTrn.mjTRN_JOINT or target_id not in joint_ids:
+                return MaybeM.nothing(), MaybeM.nothing()
+
+            actuator_ids.append(act_id)
+            actuator_names.append(mj_model.actuator(act_id).name)
+
+        return MaybeM.just(actuator_ids), MaybeM.just(actuator_names)
     
     @property
     def number_of(self):
         return len(self.ids)
     
 
-    def on_range_by_id(self, value: List[float], id: List[Any]):
-        def on_range_single(val, i, n):
-            eval_value = lambda _id: (val >= self.lowers[_id]) and (val <= self.uppers[_id])
+    def on_range_by_id(self, actuator_values: List[float], actuator_ids: List[int]):
+        def on_range_single(carry, _):
+            i, on_range = carry
 
-        
-    
-    def on_range(self, value: List[float], id: List[Any], name: List[Any])-> bool | List[bool]:
-        
-        def on_range_single(val, i, n):
-            eval_value = lambda _id: (val >= self.lowers[_id]) and (val <= self.uppers[_id])
+            val = actuator_values[i]
+            id = actuator_ids[i]
 
-            if i in self.ids:
-                return eval_value(i)
+            on_range &= (val < self.lowers[id]) | (val > self.uppers[id])
             
-            if n in self.names:
-                i = self.names.index(name)
-                return eval_value(self.ids[i])
+            return (i+1, on_range), _
         
-            return False
-        
-        min_len = min(len(value), len(id), len(name))
-        if min_len == 0:
-            return False
-        
-
-
-        return False
+        (_, on_range), _ = jax.lax.scan(on_range_single, (0, True), length=len(actuator_ids))
+        return on_range
         
     
 @struct.dataclass
@@ -258,33 +237,20 @@ class Joints:
         return u
     
     def coordinates_collided(self, joint_coordinates: ListM[jax.Array])->MaybeM[bool]:
-        def list_exists():
+        # aplica o modelo para a CPU e checa na física
+        temp_data= mujoco.MjData(self.mj_model)
 
-            # aplica o modelo para a CPU e checa na física
-            temp_data= mujoco.MjData(self.mj_model)
+        def set_joint_coordinate(idx, _):
+            temp_data.qpos[self.qpos_adr_list[idx]] = joint_coordinates.data[idx]
+            return idx+1, _
 
-            def has_qpos_adr(idx: int, qpos_adr: MaybeM[jax.Array]):
-                temp_data.qpos[qpos_adr.value] = joint_coordinates.data[idx]
-                return True
-                
-            
-            adr_list = self.qpos_adr_list.value
-            assert adr_list is not None
-
-            #usa o mapa indexado para atribuir os qpos q existem na lista
-            adr_list.imap(lambda idx, qpos_adr: False if qpos_adr.is_nothing else has_qpos_adr(idx, qpos_adr))
+        jax.lax.scan(set_joint_coordinate, (0, ), length=len(joint_coordinates.data))
+        
+        mujoco.mj_kinematics(self.mj_model, temp_data) # Calcula as posições
+        mujoco.mj_collision(self.mj_model, temp_data)   # Checa colisões
     
-            mujoco.mj_kinematics(self.mj_model, temp_data) # Calcula as posições
-            mujoco.mj_collision(self.mj_model, temp_data)   # Checa colisões
-        
-            # ncon == 0 means no collision detected
-            return MaybeM.just(temp_data.ncon == 0)
-
-        def list_null():
-            return MaybeM.nothing()
-        
-        return jax.lax.cond(self.qpos_adr_list.is_nothing(), list_null, list_exists)
-
+        # ncon == 0 means no collision detected
+        return temp_data.ncon == 0
 
 @struct.dataclass
 class Geoms:
@@ -357,14 +323,7 @@ class SafeActionSpace:
         progress : _type_
             _description_
         """
-        rng, rng2 = jax.random.split(rng)
-        p = sampling_fn(rng2, progress, shape=(self.actuators.ids,))
-
-        for id in self.joints.ids:
-
-        rng, pos = range_cfg.position.sample_normal(rng, progress)
-        rng, ori = range_cfg.orientation.sample_normal(rng, progress)
-
+        pass
 
 @struct.dataclass
 class RobotSharedData:

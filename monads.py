@@ -5,6 +5,7 @@ from typing import Self, Any, List, Callable, TypeVar, Generic, Tuple, TypeVarTu
 # Definimos T (tipo atual) e U (tipo de destino após uma função)
 T = TypeVar("T")
 U = TypeVar("U")
+E = TypeVar("E")    #enviroment type
 
 Ts = TypeVarTuple("Ts")
 Us = TypeVarTuple("Us")
@@ -170,16 +171,16 @@ class ListM(Generic[T]):
     
 
 @dataclass(frozen=True)
-class WriterM:
-    computation: Any
+class WriterM(Generic[E, T]):
+    computation: Callable[[E, T], Tuple[Any, tuple]]
     
     @classmethod
-    def pure(cls,  computation)->Self:
+    def pure(cls,  value)->Self:
         """
-        computation:: x -> y, extra
+        computation:: e, i -> value, ()
         onde extra é uma tupla
         """
-        return cls(computation)
+        return cls(lambda env, input: (value, ()))
     
     def map(self, func):
         """
@@ -187,27 +188,27 @@ class WriterM:
         func:: x -> y
         """
 
-        def new_computation(input):
-            output, extra = self.computation(input)
-            return func(output), extra
+        def new_computation(env, input):
+            output, log = self.computation(env, input)
+            return func(output), log
         
         return WriterM(new_computation)
 
 
     def bind(self, func):
         """
-        :: WriterMonad v e -> x -> WriterMonad y, f -> Writer Monad w concat(e, f)
+        :: WriterMonad v e -> x -> WriterMonad y, f -> WriterMonad w concat(e, f)
         func:: x -> WriterMonad y, f
         """
 
-        def new_computation(input):
-            output, extra = self.computation(input)
-            output2, extra2 = func(output)
+        def new_computation(env, input):
+            output, log = self.computation(env, input)
 
-            #extra o conteudo extra original e novos e concatena novamente em uma tupla
-            return output2, (*extra, *extra2)
+            value2, log2 = func(output).run(env, input)
+
+            return value2, (*log, *log2)
         
         return WriterM(new_computation)
     
-    def run(self, input):
-        return self.computation(input)
+    def run(self, env, input):
+        return self.computation(env, input)
