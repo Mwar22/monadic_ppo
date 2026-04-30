@@ -16,7 +16,7 @@ from etils import epath
 from jax import numpy as jnp
 from jax.scipy.special import gammaln, digamma
 from typing import Union, Dict, Any, List
-from monads import MaybeMonad
+from monads import MaybeM
 
 mujoco: Any
 
@@ -221,11 +221,12 @@ def update_assets(
 
 
 
-def maybe_filled_list(list)-> MaybeMonad:
+def maybe_filled_list(list)-> MaybeM:
     if isinstance(list, List) and len(list) > 0:
-        return MaybeMonad.just(list)
-    return MaybeMonad.nothing()
+        return MaybeM.just(list)
+    return MaybeM.nothing()
 
-def maybe_joint_id(model: MjModel, joint_name)-> MaybeMonad:
+def maybe_joint_id(model: MjModel, joint_name)-> MaybeM[int]:
+    """ Garante que tenha um id para um dado nome de junta"""
     jnt_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
-    return MaybeMonad.nothing() if jnt_id ==-1 else MaybeMonad.just(jnt_id)
+    return MaybeM.nothing() if jnt_id ==-1 else MaybeM.just(jnt_id)

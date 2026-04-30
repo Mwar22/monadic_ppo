@@ -20,7 +20,7 @@ from config import RangeConfig, RewardConfig, MujocoSimConfig
 from enviroment import StateMonad
 from utils import l1_l2_reward, exp_scale_reward, conv2jax_quat, cont_sample_beta, _cost_action_rate, update_assets, maybe_filled_list, maybe_joint_id
 from typing import TYPE_CHECKING, runtime_checkable
-from monads import MaybeMonad, ListMonad
+from monads import MaybeM, ListM, WriterM
 
 if TYPE_CHECKING:
     from dataclassutils import NetworksSettings, NetworkParameters, RunningParameters, RunningAvg
@@ -43,24 +43,51 @@ class Actuators:
     uppers: jax.Array
 
     @classmethod
-    def init(cls, mj_model, joint_ids) -> Self:
+    def init(cls, mj_model, joint_ids: MaybeM[list[int]]) -> Self:
         """ Obtem uma lista com um dicionario para cada  atuador de um dado corpo, contendo o id e o nome """
-        actuator_ids = []
-        actuator_names = []
- 
-        for act_id in range(mj_model.nu):
-            # trntype tells us what this actuator is attached to 
-            # (e.g., mjTRN_JOINT is the standard for motors/servos)
-            target_type = mj_model.actuator_trntype[act_id]
-            target_id = mj_model.actuator_trnid[act_id, 0]
+        x = Actuators._from_body(mj_model, joint_ids)
 
-            if target_type == mujoco.mjtTrn.mjTRN_JOINT and target_id in joint_ids:
-                actuator_ids.append(act_id)
-                actuator_names.append(mj_model.actuator(act_id).name)
+        if x.is_nothing():
+            actuator_ids = MaybeM.nothing()
+            actuator_names = MaybeM.nothing()
+        else:
+            assert x.value is not None
+            actuator_ids, actuator_names = x.value
 
         lowers = mj_model.actuator_ctrlrange[:, 0]
         uppers = mj_model.actuator_ctrlrange[:, 1]
         return cls(actuator_ids, actuator_names, joint_ids, lowers, uppers)
+    
+    @classmethod
+    def _from_body(cls, mj_model, joint_ids: MaybeM[list[int]]):
+        """ Obtem uma lista com um dicionario para cada junta de um dado corpo, contendo o id e o nome """
+
+        """ Obtem uma lista com um dicionario para cada  atuador de um dado corpo, contendo o id e o nome """
+
+        def ret_fn(ids)-> Tuple[ListM[MaybeM[int]], ListM[MaybeM[str]]]:
+            actuator_ids: List[MaybeM[int]] = []
+            actuator_names: List[MaybeM[str]] = []
+
+            test = [1, 2, 3]
+    
+            for act_id in range(mj_model.nu):
+                # trntype tells us what this actuator is attached to 
+                # (e.g., mjTRN_JOINT is the standard for motors/servos)
+                target_type = mj_model.actuator_trntype[act_id]
+                target_id = mj_model.actuator_trnid[act_id, 0]
+                
+
+                if target_type == mujoco.mjtTrn.mjTRN_JOINT and target_id in ids:
+                    actuator_ids.append(MaybeM.just(act_id))
+                    actuator_names.append(MaybeM.just(mj_model.actuator(act_id).name))
+                else:
+                    actuator_ids.append(MaybeM.nothing())
+                    actuator_names.append(MaybeM.nothing())
+
+            return ListM.pure(actuator_ids), ListM.pure(actuator_names)
+        
+        return joint_ids.map(ret_fn)
+        
     
     @property
     def number_of(self):
@@ -95,56 +122,59 @@ class Actuators:
 
         return False
         
-
-        
-        
-        
+    
 @struct.dataclass
 class Joints:
  
     mj_model: MjModel
-    ids: Any
-    names: Any
-    qpos_adr: Any
-    qvel_adr: Any
+    ids:  list[int]
+    names:  list[str]
+    qpos_adr_list: List[MaybeM[jax.Array]]
+    qvel_adr_list: List[MaybeM[jax.Array]]
 
     @classmethod
-    def init(cls, mj_model, body_name) -> Self:
+    def init(cls, mj_model, body_name: str) -> MaybeM[Self]:
+      
         joint_ids, joint_names = Joints._from_body(mj_model, body_name)
 
-        joint_qposadr = Joints._get_qpos_ids(mj_model, joint_names)
-        joint_qveladr = Joints._get_qvel_ids(mj_model, joint_names)
+        ids = joint_ids.value
+        names = joint_names.value
 
-        return cls(mj_model, joint_ids, joint_names, joint_qposadr, joint_qveladr)
+        if ids is None or names is None:
+            return MaybeM.nothing()
+        
+        joint_qposadr = Joints._get_qpos_ids(mj_model, names)
+        joint_qveladr = Joints._get_qvel_ids(mj_model, names)
+
+        return MaybeM.just(cls(mj_model, ids, names, joint_qposadr, joint_qveladr))
 
     @classmethod
-    def _from_body(cls, mj_model, body_name: str)->tuple[MaybeMonad[list[int]], MaybeMonad[list[str]]]:
+    def _from_body(cls, mj_model, body_name: str)->tuple[MaybeM[list[int]], MaybeM[list[str]]]:
         """ Obtem uma lista com um dicionario para cada junta de um dado corpo, contendo o id e o nome """
 
-        def get_body_id(name: str) -> MaybeMonad[int]:
+        def get_body_id(name: str) -> MaybeM[int]:
             try:
-                return MaybeMonad.just(mj_model.body(name).id)
+                return MaybeM.just(mj_model.body(name).id)
             except KeyError:
-                return MaybeMonad.nothing()
+                return MaybeM.nothing()
             
-        def extract_joints_ids(body_id: int):
-            start_adr = cast(int, mj_model.body_jntadr[body_id])
+        def extract_ids(body_id: int):
+            start_adr = mj_model.body_jntadr[body_id]
             num_joints = mj_model.body_jntnum[body_id]
             return [start_adr + i for i in range(num_joints)]
         
-        def extract_joints_names(ids: List[int]):
+        def extract_names(ids: List[int]):
             return [cast(str, mj_model.joint(idx).name) for idx in ids]
 
 
-        m = MaybeMonad[str].just(body_name) if isinstance(body_name, str) else MaybeMonad.nothing()
-        joints_ids = m.bind(get_body_id).map(extract_joints_ids)
-        joints_names = joints_ids.map(extract_joints_names)
+        ids = get_body_id(body_name).map(extract_ids)
+        names = ids.map(extract_names)
 
-        return joints_ids, joints_names
+        return ids, names
         
     
     @classmethod
-    def _get_qpos_ids(cls, model: MjModel, joint_names: MaybeMonad[List[str]]):
+    def _get_qpos_ids(cls, model: MjModel, joint_names: List[str]):
         """
         Obtem os indices com os endereços em qpos cada grau de liberdade de cada junta.
 
@@ -162,25 +192,21 @@ class Joints:
             Array com os endereços  em qpos para cada junta.
         """
 
-        joint_names = maybe_filled_list(joint_names)
-
-        def joint_range(name: str)->MaybeMonad[jax.Array]:
+        def joint_range(name: str)->MaybeM[jax.Array]:
             id = maybe_joint_id(model, name)
             id = id.map(lambda id: id.value if not isinstance(id, int) else id)
             return id.map(lambda id:
                 jnp.arange(model.jnt_qposadr[id], model.jnt_qposadr[id] + Joints.joint_infoby_id(id)["qpos_width"])
             )
  
-        return joint_names.map(
-            lambda names:
-                ListMonad[str].pure(*names).map(
-                    lambda name: joint_range(name)
-                )
-        )
+        ids_list: List[MaybeM[jax.Array]] = []
+        for name in joint_names:
+            ids_list.append(joint_range(name))
+        return ids_list
         
         
     @classmethod
-    def _get_qvel_ids(cls, model: MjModel, joint_names: MaybeMonad[List[str]]):
+    def _get_qvel_ids(cls, model: MjModel, joint_names: List[str]):
         """
         Obtem os indices com os valores de velocidade para cada grau de liberdade de cada junta.
 
@@ -198,26 +224,21 @@ class Joints:
             Array com os endereços  em qvel para cada junta.
         """
       
-
-        joint_names = maybe_filled_list(joint_names)
-
-        def joint_range(name: str)->MaybeMonad[jax.Array]:
+        def joint_range(name: str)->MaybeM[jax.Array]:
             id = maybe_joint_id(model, name)
             id = id.map(lambda id: id.value if not isinstance(id, int) else id)
             return id.map(lambda id:
                 jnp.arange(model.jnt_dofadr[id], model.jnt_dofadr[id] + Joints.joint_infoby_id(id)["dof_width"])
             )
  
-        return joint_names.map(
-            lambda names:
-                ListMonad[str].pure(*names).map(
-                    lambda name: joint_range(name)
-                )
-        )
+        ids_list: List[MaybeM[jax.Array]] = []
+        for name in joint_names:
+            ids_list.append(joint_range(name))
+        return ids_list
     
 
     @classmethod
-    def joint_infoby_id(cls, id):
+    def joint_infoby_id(cls, id: int):
         _map = {
             0: {"type": "free", "dof_width": 6, "qpos_width": 7}, # 3 valores de posição + 4 para rotação (quaternion)
             1: {"type": "ball", "dof_width": 3, "qpos_width": 4}, # 4 valores apenas rotação (quaternion)
@@ -236,16 +257,34 @@ class Joints:
         _, u= self.mj_model.actuator_ctrlrange.T
         return u
     
-    def coordinates_collided(self, joint_coordinates):
+    def coordinates_collided(self, joint_coordinates: ListM[jax.Array])->MaybeM[bool]:
+        def list_exists():
 
-        # aplica o modelo para a CPU e checa na física
-        temp_data= mujoco.MjData(self.mj_model)
-        temp_data.qpos[self.qpos_adr] = joint_coordinates
-        mujoco.mj_kinematics(self.mj_model, temp_data) # Calcula as posições
-        mujoco.mj_collision(self.mj_model, temp_data)   # Checa colisões
+            # aplica o modelo para a CPU e checa na física
+            temp_data= mujoco.MjData(self.mj_model)
+
+            def has_qpos_adr(idx: int, qpos_adr: MaybeM[jax.Array]):
+                temp_data.qpos[qpos_adr.value] = joint_coordinates.data[idx]
+                return True
+                
+            
+            adr_list = self.qpos_adr_list.value
+            assert adr_list is not None
+
+            #usa o mapa indexado para atribuir os qpos q existem na lista
+            adr_list.imap(lambda idx, qpos_adr: False if qpos_adr.is_nothing else has_qpos_adr(idx, qpos_adr))
+    
+            mujoco.mj_kinematics(self.mj_model, temp_data) # Calcula as posições
+            mujoco.mj_collision(self.mj_model, temp_data)   # Checa colisões
         
-        # ncon == 0 means no collision detected
-        return temp_data.ncon == 0
+            # ncon == 0 means no collision detected
+            return MaybeM.just(temp_data.ncon == 0)
+
+        def list_null():
+            return MaybeM.nothing()
+        
+        return jax.lax.cond(self.qpos_adr_list.is_nothing(), list_null, list_exists)
+
 
 @struct.dataclass
 class Geoms:
@@ -254,29 +293,41 @@ class Geoms:
     names: Any
 
     @classmethod
-    def init(cls, mj_model, body_name) -> Self:
-        geom_ids, geom_names = Geoms._get_geoms_from_body(mj_model, body_name)
+    def init(cls, mj_model, body_name:str) -> MaybeM[Self]:
+        geom_ids, geom_names = Geoms._from_body(mj_model, body_name)
+        
+        ids = geom_ids.value
+        names = geom_names.value
 
-        return cls(mj_model, geom_ids, geom_names)
+        if ids is None or names is None:
+            return MaybeM.nothing()
+
+        return MaybeM.just(cls(mj_model, geom_ids, geom_names))
     
-    @classmethod
-    def _get_geoms_from_body(cls, mj_model, body_name) -> Tuple[List[int], List[str]]:
-        """ Obtem uma lista com um dicionario para cada geometria de um dado corpo, contendo o id e o nome """
-        body_id = mj_model.body(body_name).id
-        start_adr = mj_model.body_geomadr[body_id]
-        num_geoms = mj_model.body_geomnum[body_id]
-        
-        geom_ids = []
-        geom_names = []
-        for i in range(num_geoms):
-            id = start_adr + i
-            name = mj_model.joint(id).name
 
-            geom_ids.append(id)
-            geom_names.append(name)
-        
+    @classmethod
+    def _from_body(cls, mj_model, body_name: str)->tuple[MaybeM[list[int]], MaybeM[list[str]]]:
+        """ Obtem uma lista com um dicionario para cada geometria de um dado corpo, contendo o id e o nome """
+
+        def get_body_id(name: str) -> MaybeM[int]:
+            try:
+                return MaybeM.just(mj_model.body(name).id)
+            except KeyError:
+                return MaybeM.nothing()
             
-        return geom_ids, geom_names
+        def extract_ids(body_id: int):
+            start_adr = mj_model.body_geomadr[body_id]
+            num_geoms = mj_model.body_geomnum[body_id]
+            return [start_adr + i for i in range(num_geoms)]
+        
+        def extract_names(ids: List[int]):
+            return [cast(str, mj_model.joint(idx).name) for idx in ids]
+
+
+        ids = get_body_id(body_name).map(extract_ids)
+        names = ids.map(extract_names)
+
+        return ids, names
     
 @struct.dataclass
 class SafeActionSpace:
@@ -338,7 +389,7 @@ class RobotSharedData:
         reward_config: RewardConfig,
         range_config: RangeConfig,
         robot_name: str,
-    ):
+    )->Tuple[MaybeM[RobotSharedData], Tuple[Any]]:
         """
         Método fábrica para o ambiente
         """
@@ -364,27 +415,31 @@ class RobotSharedData:
         #cria o modelo mjx na gpu
         mjx_model = mjx.put_model(mj_model, impl=str(enviroment_config.impl))
 
-        joints = Joints.init(mj_model, robot_name)
-        geoms = Geoms.init(mj_model, robot_name)
+        m_joints = Joints.init(mj_model, robot_name)
+        if m_joints.value is None:
+            return MaybeM.nothing(), (f"No joints found for robot name: {robot_name}",)
 
+        m_geoms = Geoms.init(mj_model, robot_name)
+        if m_geoms.value is None:
+            return MaybeM.nothing(), (f"No geoms found for robot name: {robot_name}",)
 
         # ids para a ponta colocada no robô
         tool_tip_id = mj_model.site("tool_tip").id
         tool_base_id = mj_model.site("tool_base").id
         ground_id = mj_model.geom("ground").id
 
-        return cls(
+        return MaybeM.just(cls(
             mj_model,
             mjx_model,
-            joints,
-            geoms,
+            m_joints.value,
+            m_geoms.value,
             tool_tip_id,
             tool_base_id,
             ground_id,
             enviroment_config,
             reward_config,
             range_config,
-        )
+        )), ("Robot Shared Data created Successfully!",)
     
     ####################################### Metodos da classe ################################################
    
@@ -454,10 +509,10 @@ class RobotSharedData:
 
     
     def qpos(self, mjx_data: mjx.Data):
-        return mjx_data.qpos[self.joints.qpos_adr]
+        return mjx_data.qpos[self.joints.qpos_adr_list]
     
     def qvel(self, mjx_data: mjx.Data):
-        return mjx_data.qvel[self.joints.qvel_adr]
+        return mjx_data.qvel[self.joints.qvel_adr_list]
 
     def qfrc(self, mjx_data: mjx.Data):
         return mjx_data.qfrc_actuator
