@@ -18,7 +18,7 @@ from flax import struct
 from typing import Any, Dict, Tuple, List, cast, Callable, Sequence, Protocol, Self
 from config import RangeConfig, RewardConfig, MujocoSimConfig
 from enviroment import StateMonad
-from utils import l1_l2_reward, exp_scale_reward, conv2jax_quat, cont_sample_beta, _cost_action_rate, update_assets, maybe_filled_list, maybe_joint_id
+from utils import l1_l2_reward, exp_scale_reward, conv2jax_quat, cont_sample_beta, cost_action_rate, update_assets, maybe_filled_list, maybe_joint_id
 from typing import TYPE_CHECKING, runtime_checkable
 from monads import MaybeM, ListM, ReaderWriterM
 
@@ -405,9 +405,7 @@ class RobotSharedData:
    
     
 
-    
-    
-    
+
     ################################## Propriedades (metodos) ###########################################
     @property
     def lowers(self):
@@ -887,7 +885,7 @@ def reward_pipeline(progress, rsd: RobotSharedData,  env: StateMonad):
                         **pdata,
                         "reward": (
                             # penalidade por ações muito grandes
-                            pdata["reward"] - 0.01 * _cost_action_rate(pdata["action"], state["action"]) 
+                            pdata["reward"] - 0.01 * cost_action_rate(pdata["action"], state["last_action"]) 
 
                             # Penalidade de torque para evitar movimentos espasmódicos
                             + jnp.sum(jnp.square(pdata["torques"])) * reward_config.torques_penalty.update(progress)
@@ -954,7 +952,7 @@ def get_action(network_settings: NetworksSettings, network_parameters: NetworkPa
         action_value, logprob = cont_sample_beta(output, rng1)
 
         
-        new_state = {**state, "rng": rng2, "action": action_value}
+        new_state = {**state, "rng": rng2}
         return new_state, {"action": action_value, "logprob": logprob}
     return StateMonad(fn)
 
@@ -999,6 +997,12 @@ def create_step(network_settings: NetworksSettings, network_parameters: NetworkP
             return state, data
         return StateMonad(fn)
     
+    def last_action_update(pdata):
+        def fn(state):
+            state = {**state, "last_action": pdata["action"]}
+            return state, pdata
+        
+        return StateMonad(fn)
     
     def step_fn(progress, state, runpar: RunningParameters):
 
@@ -1016,6 +1020,7 @@ def create_step(network_settings: NetworksSettings, network_parameters: NetworkP
 
         # dá a forma final aos valores de retorno
         pl = pl.bind(shape_return)
+        pl = pl.bind(last_action_update)
 
         return pl.run(state)
 

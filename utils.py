@@ -53,7 +53,7 @@ def l1_l2_reward(gain_l1, gain_l2, value: jax.Array):
     )
 
 
-def _cost_action_rate(act: jax.Array, last_act: jax.Array) -> jax.Array:
+def cost_action_rate(act: jax.Array, last_act: jax.Array) -> jax.Array:
     """
     Penaliza as diferenças entre os vetores de ações por meio da norma L2
 

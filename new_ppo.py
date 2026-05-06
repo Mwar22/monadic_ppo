@@ -411,7 +411,7 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
     avg_entropy = jnp.mean(training_metrics["entropy"], axis=0)
     avg_grad_norm = jnp.mean(training_metrics["grad_norm"], axis=0)
 
-    # shape de recompensas é: (numberof_goals, cycles_per_goal, num_envs, rollout_steps +1)
+    # shape de recompensas é: (numberof_goals, num_envs, rollout_steps +1)
     # para exibir no formato (cycles_per_goal, )
     #jax.debug.print("rewards shape: {}", rewards.shape)
     reward = jnp.sum(rewards, axis = 3)  #soma as recompensas 
@@ -472,7 +472,7 @@ def create_initial_state(rng: jax.Array, progress, settings: TrainingSettings):
         "step":batched_steps,
         "goal":batched_goal,
         "obs":batched_obs,
-        "action": batched_action,
+        "last_action": batched_action,
         "mjx_data": batched_mjx_data,
         "success_count":batched_success_count, 
         "err": batched_err,
