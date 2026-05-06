@@ -20,7 +20,7 @@ from config import RangeConfig, RewardConfig, MujocoSimConfig
 from enviroment import StateMonad
 from utils import l1_l2_reward, exp_scale_reward, conv2jax_quat, cont_sample_beta, _cost_action_rate, update_assets, maybe_filled_list, maybe_joint_id
 from typing import TYPE_CHECKING, runtime_checkable
-from monads import MaybeM, ListM, WriterM
+from monads import MaybeM, ListM, ReaderWriterM
 
 if TYPE_CHECKING:
     from dataclassutils import NetworksSettings, NetworkParameters, RunningParameters, RunningAvg
@@ -36,14 +36,13 @@ class SamplingFunction(Protocol):
 
 @struct.dataclass
 class Actuators:
-    ids: Any
-    names: Any
-    joint_ids: Any
+    ids: jax.Array
+    names: List[str]
     lowers: jax.Array
     uppers: jax.Array
 
     @classmethod
-    def init(cls, mj_model, joint_ids: list[int]) -> MaybeM[Self]:
+    def init(cls, mj_model, joint_ids: jax.Array) -> MaybeM[Self]:
         """ Obtem uma lista com um dicionario para cada  atuador de um dado corpo, contendo o id e o nome """
         actuator_ids, actuator_names = Actuators._from_joint_ids(mj_model, joint_ids)
 
@@ -55,10 +54,10 @@ class Actuators:
 
         lowers = mj_model.actuator_ctrlrange[:, 0]
         uppers = mj_model.actuator_ctrlrange[:, 1]
-        return MaybeM.just(cls(ids, names, joint_ids, lowers, uppers))
+        return MaybeM.just(cls(jnp.array(ids), names, lowers, uppers))
     
     @classmethod
-    def _from_joint_ids(cls, mj_model, joint_ids: list[int])->tuple[MaybeM[list[int]], MaybeM[list[str]]]:
+    def _from_joint_ids(cls, mj_model, joint_ids: jax.Array)->tuple[MaybeM[list[int]], MaybeM[list[str]]]:
         """ Obtem uma lista com um dicionario para cada junta de um dado corpo, contendo o id e o nome """
 
         """ Obtem uma lista com um dicionario para cada  atuador de um dado corpo, contendo o id e o nome """
@@ -74,7 +73,7 @@ class Actuators:
             target_id = mj_model.actuator_trnid[act_id, 0]
             
 
-            if target_type != mujoco.mjtTrn.mjTRN_JOINT or target_id not in joint_ids:
+            if target_type != mujoco.mjtTrn.mjTRN_JOINT or not jnp.isin(target_id, joint_ids):
                 return MaybeM.nothing(), MaybeM.nothing()
 
             actuator_ids.append(act_id)
@@ -86,19 +85,18 @@ class Actuators:
     def number_of(self):
         return len(self.ids)
     
-
-    def on_range_by_id(self, actuator_values: List[float], actuator_ids: List[int]):
+    def on_range_by_id(self, actuator_values: jax.Array):
         def on_range_single(carry, _):
             i, on_range = carry
 
             val = actuator_values[i]
-            id = actuator_ids[i]
+            id = self.ids[i]
 
             on_range &= (val < self.lowers[id]) | (val > self.uppers[id])
             
             return (i+1, on_range), _
         
-        (_, on_range), _ = jax.lax.scan(on_range_single, (0, True), length=len(actuator_ids))
+        (_, on_range), _ = jax.lax.scan(on_range_single, (0, True), length=self.ids.shape[0])
         return on_range
         
     
@@ -106,7 +104,7 @@ class Actuators:
 class Joints:
  
     mj_model: MjModel
-    ids:  list[int]
+    ids:  jax.Array
     names:  list[str]
     qpos_adr_list: List[MaybeM[jax.Array]]
     qvel_adr_list: List[MaybeM[jax.Array]]
@@ -125,7 +123,7 @@ class Joints:
         joint_qposadr = Joints._get_qpos_ids(mj_model, names)
         joint_qveladr = Joints._get_qvel_ids(mj_model, names)
 
-        return MaybeM.just(cls(mj_model, ids, names, joint_qposadr, joint_qveladr))
+        return MaybeM.just(cls(mj_model, jnp.array(ids), names, joint_qposadr, joint_qveladr))
 
     @classmethod
     def _from_body(cls, mj_model, body_name: str)->tuple[MaybeM[list[int]], MaybeM[list[str]]]:
@@ -151,7 +149,6 @@ class Joints:
 
         return ids, names
         
-    
     @classmethod
     def _get_qpos_ids(cls, model: MjModel, joint_names: List[str]):
         """
@@ -182,7 +179,6 @@ class Joints:
         for name in joint_names:
             ids_list.append(joint_range(name))
         return ids_list
-        
         
     @classmethod
     def _get_qvel_ids(cls, model: MjModel, joint_names: List[str]):
@@ -215,7 +211,6 @@ class Joints:
             ids_list.append(joint_range(name))
         return ids_list
     
-
     @classmethod
     def joint_infoby_id(cls, id: int):
         _map = {
@@ -236,15 +231,15 @@ class Joints:
         _, u= self.mj_model.actuator_ctrlrange.T
         return u
     
-    def coordinates_collided(self, joint_coordinates: ListM[jax.Array])->MaybeM[bool]:
+    def coordinates_collided(self, joint_coordinates: List[jax.Array])->MaybeM[bool]:
         # aplica o modelo para a CPU e checa na física
         temp_data= mujoco.MjData(self.mj_model)
 
         def set_joint_coordinate(idx, _):
-            temp_data.qpos[self.qpos_adr_list[idx]] = joint_coordinates.data[idx]
+            temp_data.qpos[self.qpos_adr_list[idx]] = joint_coordinates[idx]
             return idx+1, _
 
-        jax.lax.scan(set_joint_coordinate, (0, ), length=len(joint_coordinates.data))
+        jax.lax.scan(set_joint_coordinate, (0, ), length=len(joint_coordinates))
         
         mujoco.mj_kinematics(self.mj_model, temp_data) # Calcula as posições
         mujoco.mj_collision(self.mj_model, temp_data)   # Checa colisões
@@ -255,8 +250,8 @@ class Joints:
 @struct.dataclass
 class Geoms:
     mj_model: MjModel
-    ids: Any
-    names: Any
+    ids: jax.Array
+    names: List[str]
 
     @classmethod
     def init(cls, mj_model, body_name:str) -> MaybeM[Self]:
@@ -268,7 +263,7 @@ class Geoms:
         if ids is None or names is None:
             return MaybeM.nothing()
 
-        return MaybeM.just(cls(mj_model, geom_ids, geom_names))
+        return MaybeM.just(cls(mj_model, jnp.array(ids), names))
     
 
     @classmethod
@@ -330,6 +325,7 @@ class RobotSharedData:
     mj_model: MjModel
     mjx_model: mjx.Model
     joints: Joints
+    actuators: Actuators
     geoms: Geoms
     tool_tip_id: int
     tool_base_id: int
@@ -382,6 +378,10 @@ class RobotSharedData:
         if m_geoms.value is None:
             return MaybeM.nothing(), (f"No geoms found for robot name: {robot_name}",)
 
+        m_actuators = Actuators.init(mj_model, m_joints.value.ids)
+        if m_actuators.value is None:
+            return MaybeM.nothing(), (f"No actuators found for robot name: {robot_name}",)
+
         # ids para a ponta colocada no robô
         tool_tip_id = mj_model.site("tool_tip").id
         tool_base_id = mj_model.site("tool_base").id
@@ -391,6 +391,7 @@ class RobotSharedData:
             mj_model,
             mjx_model,
             m_joints.value,
+            m_actuators.value,
             m_geoms.value,
             tool_tip_id,
             tool_base_id,

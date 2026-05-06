@@ -171,7 +171,7 @@ class ListM(Generic[T]):
     
 
 @dataclass(frozen=True)
-class WriterM(Generic[E, T]):
+class ReaderWriterM(Generic[E, T]):
     computation: Callable[[E, T], Tuple[Any, tuple]]
     
     @classmethod
@@ -192,7 +192,7 @@ class WriterM(Generic[E, T]):
             output, log = self.computation(env, input)
             return func(output), log
         
-        return WriterM(new_computation)
+        return ReaderWriterM(new_computation)
 
 
     def bind(self, func):
@@ -208,7 +208,7 @@ class WriterM(Generic[E, T]):
 
             return value2, (*log, *log2)
         
-        return WriterM(new_computation)
+        return ReaderWriterM(new_computation)
     
     def run(self, env, input):
         return self.computation(env, input)
