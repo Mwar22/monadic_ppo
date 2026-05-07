@@ -144,6 +144,7 @@ class Joints:
         print(f"ids: {ids}")
         print(f"qposadr: {qposadr}")
         print(f"qveladr: {qveladr}")
+        print(f"jnt_qposadr")
         
         return MaybeM.just(cls(mj_model, jnp.array(ids), names, qposadr, qveladr))
 
@@ -456,10 +457,10 @@ class RobotSharedData:
 
     
     def qpos(self, mjx_data: mjx.Data):
-        return mjx_data.qpos[self.joints.qpos_adr_list]
+        return mjx_data.qpos
     
     def qvel(self, mjx_data: mjx.Data):
-        return mjx_data.qvel[self.joints.qvel_adr_list]
+        return mjx_data.qvel
 
     def qfrc(self, mjx_data: mjx.Data):
         return mjx_data.qfrc_actuator
@@ -950,12 +951,12 @@ def get_motor_targets(rsd: RobotSharedData, pdata):
         # escala ação para de [0, 1] para [-1, 1]
         action_value_action = jnp.clip(2.0 * pdata["action"]- 1.0, -1, 1)
 
-        # configura novos alvos para os motores, de acordo com a ação  selecionada a partir da posição atual
-        current_pos = rsd.qpos(state["mjx_data"])
-        motor_targets = current_pos + action_value_action * rsd.enviroment_config.action_scale
+        # configura novos alvos para os motores, de acordo com a ação
+        current = rsd.qpos(state["mjx_data"])
+        targets = current + action_value_action * rsd.enviroment_config.action_scale
 
         # para evitar que os limites de junta do robô sejam desrespeitados
-        return state, {**pdata, "motor_targets":jnp.clip(motor_targets, rsd.lowers, rsd.uppers)}
+        return state, {**pdata, "motor_targets":jnp.clip(targets, rsd.lowers, rsd.uppers)}
     return StateMonad(fn)
 
 def mujoco_step(rsd: RobotSharedData, pdata):
