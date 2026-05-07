@@ -18,7 +18,7 @@ from flax import struct
 from typing import Any, Dict, Tuple, List, cast, Callable, Sequence, Protocol, Self
 from config import RangeConfig, RewardConfig, MujocoSimConfig
 from enviroment import StateMonad
-from utils import l1_l2_reward, exp_scale_reward, conv2jax_quat, cont_sample_beta, cost_action_rate, update_assets, maybe_filled_list, maybe_joint_id
+from utils import l1_l2_reward, exp_scale_reward, conv2jax_quat, cont_sample_beta, cost_action_rate, update_assets, maybe_filled_list
 from typing import TYPE_CHECKING, runtime_checkable
 from monads import MaybeM, ListM, ReaderWriterM
 
@@ -146,13 +146,6 @@ class Joints:
         print(f"qveladr: {qveladr}")
         
         return MaybeM.just(cls(mj_model, jnp.array(ids), names, qposadr, qveladr))
-
-    @classmethod
-    def maybe_joint_id(cls, model: MjModel, joint_name)-> MaybeM[int]:
-        """ Garante que tenha um id para um dado nome de junta"""
-        jnt_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
-        return MaybeM.nothing() if jnt_id ==-1 else MaybeM.just(jnt_id)
-
 
     @classmethod
     def _get_subtree_bodies(cls, mj_model, root_id)->List[int]:

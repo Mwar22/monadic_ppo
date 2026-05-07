@@ -225,8 +225,3 @@ def maybe_filled_list(list)-> MaybeM:
     if isinstance(list, List) and len(list) > 0:
         return MaybeM.just(list)
     return MaybeM.nothing()
-
-def maybe_joint_id(model: MjModel, joint_name)-> MaybeM[int]:
-    """ Garante que tenha um id para um dado nome de junta"""
-    jnt_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
-    return MaybeM.nothing() if jnt_id ==-1 else MaybeM.just(jnt_id)
