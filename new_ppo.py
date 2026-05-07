@@ -203,9 +203,9 @@ def ppo_loss(
     batch_returns,      #shape: (num_envs, max_steps)
     old_log_probs,      #shape: (num_envs, max_steps +1)
     clip_eps=0.2,
-    c1=0.5,
-    c2=0.2,
-    min_alpha_beta=0.1,
+    c1=0.8,
+    c2=0.5,
+    min_alpha_beta=1.0,
 ):
     """
     Calculates the PPO loss.
@@ -226,8 +226,8 @@ def ppo_loss(
 
     # parametrização
     alpha_logits, beta_logits = jnp.split(logits, 2, axis=-1)
-    alpha = jax.nn.softplus(alpha_logits) + min_alpha_beta
-    beta  = jax.nn.softplus(beta_logits) + min_alpha_beta
+    alpha = jnp.clip(jax.nn.softplus(alpha_logits) + min_alpha_beta, 1.0, 100.0)
+    beta  = jnp.clip(jax.nn.softplus(beta_logits) + min_alpha_beta, 1.0, 100.0)
 
     # logprobs
     clipped_actions = jnp.clip(batch_actions, 1e-6, 1 - 1e-6)
@@ -292,13 +292,13 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
 
         # normaliza as vantagens, para prevenir problemas com os gradientes, com as recompensas ruidosas
         advantages = mu.stdNormalize(advantages)
+        #returns = mu.stdNormalize(returns)
 
         #bloqueia o calculo de gradientes para as vantagens
         advantages = jax.lax.stop_gradient(advantages)
         returns = jax.lax.stop_gradient(returns)
 
 
-    
         return state, new_buffer, advantages, returns
     
 

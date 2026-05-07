@@ -1016,8 +1016,22 @@ def create_step(network_settings: NetworksSettings, network_parameters: NetworkP
     return step_fn
 
 def create_reset(network_settings: NetworksSettings, network_parameters: NetworkParameters, robot_shared_data: RobotSharedData):
-     def step_fn(progress, state, runpar: RunningParameters):
+     def reset_fn(progress, state, runpar: RunningParameters):
+         # 1. Sorteia o novo alvo
          rng, goal = get_goal(robot_shared_data.range_config, progress, state["rng"])
-         new_state = {**state,"rng":rng, "goal": goal}
+         
+         # 2. Reseta os dados físicos do MuJoCo para a pose inicial
+         # Isso garante que se o robô quebrou/caíu, ele volte a ficar em pé
+         mjx_model = robot_shared_data.mjx_model
+         init_data = mjx.make_data(mjx_model) # Pose padrão do modelo
+         
+         new_state = {
+             **state,
+             "rng": rng, 
+             "goal": goal,
+             "mjx_data": init_data, # Reset físico!
+             "step": 0.0,           # Zera o contador de passos do episódio
+             "success_count": 0.0   # Zera o contador de sucessos
+         }
          return new_state, None
-     return step_fn
+     return reset_fn

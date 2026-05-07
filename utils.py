@@ -97,7 +97,7 @@ def stand_still_reward(
     )
 
 
-def cont_sample_beta(logits: jax.Array, rng: jax.Array, min_alpha_beta=0.1):
+def cont_sample_beta(logits: jax.Array, rng: jax.Array, min_alpha_beta=1.0):
     """
     Sample continuous actions in [0,1] using independent Beta distributions
     parameterized by logits.
