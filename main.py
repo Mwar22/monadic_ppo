@@ -62,7 +62,7 @@ rng, network_settings, network_params = create_networks(rng, obs_size=34, action
 
 
 range_cfg = RangeConfig.init(
-    100,
+    300,
     pos_min = jnp.array([-0.468, -0.468, 0]),
     pos_max = jnp.array([0.468, 0.468, 0.664]),
     posvel_min = jnp.array([1e-2, 1e-2, 1e-2]),
