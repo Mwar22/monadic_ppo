@@ -176,6 +176,7 @@ class TrainingSettings:
     optimizer: optax.GradientTransformationExtraArgs
     optimizer_state: optax.OptState
     step_fn_creator: Callable
+    reset_fn_creator: Callable
     target_success: float
 
     @classmethod
@@ -186,6 +187,7 @@ class TrainingSettings:
         robot_shared_settings: RobotSharedData,
         optimizer_creator: Callable[[int], optax.GradientTransformationExtraArgs],
         step_fn_creator:Callable[[NetworksSettings, NetworkParameters, RobotSharedData], Callable],
+        reset_fn_creator:Callable[[NetworksSettings, NetworkParameters, RobotSharedData], Callable],
         num_envs: int = 1,
         cycles_per_goal = 1,
         epochs: int = 1,
@@ -213,6 +215,7 @@ class TrainingSettings:
             optimizer,
             optimizer_params,
             step_fn_creator,
+            reset_fn_creator,
             target_success
         )
     
@@ -301,29 +304,4 @@ class BatchedBuffer:
 
         return obs_buffer, action_buffer, reward_buffer, logprob_buffer, ptr + 1
     
-
-
-    @struct.dataclass
-    class SafePositionBuffer:
-        pos_buffer: jax.Array   #buffer de posição
-        rotvec_buffer: jax.Array  #buffer de vetores de rotação
-
-        @classmethod
-        def init(cls, size: int):
-            cls(
-                jnp.zeros((size, 3)),
-                jnp.zeros((size, 3))
-            )
-
-        @classmethod
-        def check_mujoco_safe(cls, rsd: RobotSharedData, joint_coordinates):
-
-            # Apply to CPU data and check physics
-            # aplica o modelo para a CPU e checa na física
-            temp_data= mujoco.MjData(rsd.mj_model)
-            temp_data.qpos[rsd.joint_qposadr] = joint_coordinates
-            mujoco.mj_kinematics(rsd.mj_model, temp_data) # Calcula as posições
-            mujoco.mj_collision(rsd.mj_model, temp_data)   # Checa colisões
-            
-            # ncon == 0 means no collision detected
-            return temp_data.ncon == 0
+       

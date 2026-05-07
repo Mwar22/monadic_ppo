@@ -144,7 +144,6 @@ class Joints:
         print(f"ids: {ids}")
         print(f"qposadr: {qposadr}")
         print(f"qveladr: {qveladr}")
-        print(f"jnt_qposadr")
         
         return MaybeM.just(cls(mj_model, jnp.array(ids), names, qposadr, qveladr))
 
@@ -686,11 +685,11 @@ def success_count(pdata):
 ###################################################################################################################
 
 
-def get_goal(rsd: RobotSharedData, progress, rng):
+def get_goal(range_config: RangeConfig, progress, rng):
 
-    rng, position = rsd.range_config.position.sample_normal(rng, progress)
-    rng, position_velocities = rsd.range_config.position_velocities.sample_normal(rng, progress)
-    rng, orientation = rsd.range_config.orientation.sample_normal(rng, progress)
+    rng, position = range_config.position.sample_normal(rng, progress)
+    rng, position_velocities = range_config.position_velocities.sample_normal(rng, progress)
+    rng, orientation = range_config.orientation.sample_normal(rng, progress)
    
 
     goals = {
@@ -1015,3 +1014,10 @@ def create_step(network_settings: NetworksSettings, network_parameters: NetworkP
         return pl.run(state)
 
     return step_fn
+
+def create_reset(network_settings: NetworksSettings, network_parameters: NetworkParameters, robot_shared_data: RobotSharedData):
+     def step_fn(progress, state, runpar: RunningParameters):
+         rng, goal = get_goal(robot_shared_data.range_config, progress, state["rng"])
+         new_state = {**state,"rng":rng, "goal": goal}
+         return new_state, None
+     return step_fn

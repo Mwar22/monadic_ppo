@@ -8,20 +8,20 @@ Arquivo com o código principal de treinamento
 
 import os
 
-# deve ser configurado antes de importar o jax ou TensorFlow/XLA
-os.environ["TF_GPU_ALLOCATOR"] = "cuda_malloc_async"
-
 # Tell XLA to use Triton GEMM, this improves steps/sec by ~30% on some GPUs
 xla_flags = os.environ.get('XLA_FLAGS', '')
 
 #xla_flags += ' --xla_gpu_triton_gemm_any=True'
 os.environ['XLA_FLAGS'] = xla_flags
 
+#alocação dinamica
+os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
+
 # evita do jax prealocar a gpu inteira
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
 # limite, pois tbm precisamos de um pouco de vram para o sistema
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.90"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.60"
 
 import jax
 from jax import config
@@ -35,7 +35,7 @@ import matplotlib.pyplot as plt
 from jax import config
 from new_ppo import TrainingSettings, ppo_train
 from etils import epath
-from robot import create_step, RobotSharedData
+from robot import create_step, create_reset, RobotSharedData
 from config import MujocoSimConfig, RangeConfig, RewardConfig
 from networks import save_params, create_networks
 
@@ -62,15 +62,13 @@ rng, network_settings, network_params = create_networks(rng, obs_size=34, action
 
 
 range_cfg = RangeConfig.init(
+    50,
     pos_min = jnp.array([-0.468, -0.468, 0]),
     pos_max = jnp.array([0.468, 0.468, 0.664]),
     posvel_min = jnp.array([1e-2, 1e-2, 1e-2]),
     posvel_max = jnp.array([0.1, 0.1, 0.1]),
     ori_min = jnp.array([-3.14, -3.14, -3.14]),
     ori_max = jnp.array([3.14, 3.14, 3.14]),
-    pos_steps=100,
-    posvel_steps=10,
-    ori_steps=100
 )
 
 robot_shared_data = RobotSharedData.init(
@@ -92,9 +90,10 @@ settings = TrainingSettings.init(
     robot_shared_data.value,
     optimizer_creator  = create_optimizer,
     step_fn_creator = create_step,
+    reset_fn_creator= create_reset,
     num_envs= 512,
     cycles_per_goal=30,
-    epochs=100,
+    epochs=50,
     rollout_steps=128,
     target_success=0.75,
 )
@@ -109,7 +108,7 @@ if disable_jit:
 else:
     print("JIT compiling and starting training...")
 
-(rng, runpar, optim_state, network_params), metrics = ppo_train(rng, network_params, settings)
+(runpar, optim_state, network_params, state), metrics = ppo_train(rng, network_params, settings)
 
 
 ############################################### PLOTAGEM / SALVAMENTOS ###############################################
@@ -154,9 +153,9 @@ axs[1][1].set_xlabel("Epochs")
 axs[1][1].set_ylabel("Entropy value")
 
 #print(f"success_rate = {metrics["success_rate"]}")
-axs[2][0].plot(metrics["sr_cycles"])
-axs[2][0].set_xlabel("Cycles per goal")
-axs[2][0].set_ylabel(" success_rate %")
+#axs[2][0].plot(metrics["sr_cycles"])
+#axs[2][0].set_xlabel("Cycles per goal")
+#axs[2][0].set_ylabel(" success_rate %")
 
 axs[2][1].plot(metrics["avg_err"])
 axs[2][1].set_xlabel("Cycles per Goal")

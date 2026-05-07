@@ -17,6 +17,7 @@ from dataclassutils import RunningParameters, TrainingSettings, BatchedBuffer, N
 def rollout_step(
     progress,
     step_fn,
+    reset_fn,
     runpar: RunningParameters,
     state: Dict[str, Any],
     obs_buffer: jax.Array,
@@ -68,7 +69,9 @@ def rollout_step(
 
     # Caso stop_flag esteja como True
     def no_step(carry):  #
-        return carry
+        _state, _obs_buffer, _action_buffer, _reward_buffer, _logprob_buffer, _ptr, _done_flag, _stop_flag = carry
+        _state, _ = reset_fn(progress, _state, runpar)
+        return _state, _obs_buffer, _action_buffer, _reward_buffer, _logprob_buffer, _ptr, _done_flag, _stop_flag
 
     return jax.lax.cond(
         stop_flag, no_step, do_step, (state, obs_buffer, action_buffer, reward_buffer, logprob_buffer, ptr, done_flag, stop_flag)
@@ -100,8 +103,10 @@ def rollout(
     state_out_axes = {**state_in_axes, 'obs_stats': 0}
 
     step_fn = jax.jit(settings.step_fn_creator(settings.network_settings, network_params, settings.robot_shared_data))
+    reset_fn = jax.jit(settings.reset_fn_creator(settings.network_settings, network_params, settings.robot_shared_data))
+
     vmap_rollout_step = jax.vmap(
-        partial(rollout_step, runpar.progress.value, step_fn, runpar),
+        partial(rollout_step, runpar.progress.value, step_fn, reset_fn, runpar),
         in_axes=(
             state_in_axes,  # Arg 0: state (was Arg 1 in your version)
             0,               # Arg 1: obs_buffer
@@ -252,33 +257,13 @@ def ppo_loss(
 ##########################################################################
 
 
-def grad_metrics(grads, params):
-    leaves = jax.tree_util.tree_leaves(grads)
-
-    # norma euclidiana (L2) do gradiente
-    grad_norm = jnp.sqrt(sum([jnp.sum(jnp.square(g)) for g in leaves]))
-    mean_abs_grad = jnp.mean(jnp.concatenate([jnp.ravel(jnp.abs(g)) for g in leaves]))
-    max_grad = jnp.max(jnp.concatenate([jnp.ravel(jnp.abs(g)) for g in leaves]))
-
-    num = sum([jnp.sum(jnp.square(g)) for g in leaves])
-    den = sum([jnp.sum(jnp.square(p)) for p in jax.tree_util.tree_leaves(params)])
-    grad_to_param_ratio = jnp.sqrt(num / (den + 1e-12))
-
-    return {
-        "grad_norm": grad_norm,
-        "mean_abs_grad": mean_abs_grad,
-        "max_grad": max_grad,
-        "grad_to_param_ratio": grad_to_param_ratio,
-    }
-
-
 ##########################################################################
 
 
 def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settings: TrainingSettings):
     """The complete, JIT-compiled training function."""
 
-    def _get_success_rate(state):
+    def get_success_rate(state):
         # Transforma qualquer contagem > 0 em 1 (sucesso) ou 0 (falha)
         # A média dará um valor entre  0.0 e 1.0 (0% a 100%)
         # success.shape: (num_envs, )
@@ -286,10 +271,10 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
         return jax.lax.stop_gradient(jnp.mean(success))
 
 
-    def _collect_dataset(state, buffer, runpar: RunningParameters, network_params: NetworkParameters):
+    def collect_dataset(state, buffer, runpar: RunningParameters, network_params: NetworkParameters):
 
         # Faz um rollout (usando a função vetorizada)
-        state, buffer = rollout(settings, network_params,state, buffer, runpar)
+        state, new_buffer = rollout(settings, network_params,state, buffer, runpar)
 
         # Vetoriza a função GAE
         vmapped_gae = jax.vmap(
@@ -299,10 +284,10 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
 
         # calcula as vantagens (usando a função vetorizada)
         advantages, returns = vmapped_gae(
-            buffer.obs_buffer,
-            buffer.reward_buffer,
-            buffer.ptr,
-            buffer.done_flag,
+            new_buffer.obs_buffer,
+            new_buffer.reward_buffer,
+            new_buffer.ptr,
+            new_buffer.done_flag,
         )
 
         # normaliza as vantagens, para prevenir problemas com os gradientes, com as recompensas ruidosas
@@ -314,95 +299,45 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
 
 
     
-        return state, buffer, advantages, returns
-    
-    def _train_epochs(
-        network_parameters: NetworkParameters,
-        optimizer_state: optax.OptState,
-        buffer: BatchedBuffer,
-        advantages: jax.Array,
-        returns:jax.Array
-    ):
-
-        def _single_epoch(carry,_):
-            _parameters, _optimizer_state = carry
-    
-            def loss_fn(par):
-                return ppo_loss(
-                    par,
-                    settings,
-                    buffer.obs_buffer,
-                    buffer.action_buffer,
-                    advantages,
-                    returns,
-                    buffer.logprob_buffer,
-                )
-
-            # calcula os gradientes e atualiza os parametros
-            (loss_val, aux_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(_parameters)
-            updates, new_optim_state = settings.optimizer.update(grads, _optimizer_state)
-            new_parameters = cast(NetworkParameters, optax.apply_updates(_parameters, updates))
-
-            new_carry = (new_parameters, new_optim_state)
-            grad_info = grad_metrics(grads, _parameters)
-
-            return new_carry, {
-                "loss": loss_val,
-                **grad_info,
-                **aux_metrics,
-            }
-
-        # após  o scan, teremos o seguinte:
-        # metric[key].shape  = (epochs, *metric_shape)
-        # Ex: loss.shape  = (epochs, )
-        # Ex: reward.shape  = (epochs, num_envs, rollout_step +1)
-        (new_parameters, new_optim_state), metrics = jax.lax.scan(
-            _single_epoch,
-            (network_parameters, optimizer_state),
-            jnp.arange(settings.epochs),
-        )
-
-        return new_parameters, new_optim_state, metrics
+        return state, new_buffer, advantages, returns
     
 
-
-
-    def _new_goal_step(carry, _):
+    def new_goal_step(carry, _):
         """This is the body of the scan, representing one full update."""
-        rng, runpar, optim_state, network_params = carry
+        runpar, optim_state, network_params, current_state = carry
         runpar = cast(RunningParameters, runpar)
         network_params = cast(NetworkParameters, network_params)
-
-        #estado inicial 
-        rng, initial_state_rng = jax.random.split(rng)
-        rng, initial_state = create_initial_state(initial_state_rng, runpar.progress.value, settings)
 
         # cria um buffer
         buffer = BatchedBuffer.init(settings)
 
+        #cria estado inicial (com novos goals)
+        new_goal_state = update_goal(current_state, runpar.progress.value, settings)
+
         #coleta os dados e atualiza os parâmetros correntes 
-        state, buffer, advantages, returns = _collect_dataset(initial_state, buffer, runpar, network_params)
-        mean_envs_success_rate = _get_success_rate(state)
+        state, buffer, advantages, returns = collect_dataset(new_goal_state, buffer, runpar, network_params)
+        mean_envs_success_rate = get_success_rate(state)
     
 
         # metricas tem shape (epochs, *metric_shape)
-        network_params, optim_state, training_metrics = _train_epochs(network_params, optim_state, buffer, advantages, returns)
+        network_params, optim_state, training_metrics = train_epochs(settings, network_params, optim_state, buffer, advantages, returns)
         runpar = runpar.update(buffer.obs_buffer, mean_envs_success_rate)
     
-        newcarry = (rng, runpar, optim_state, network_params)
+        newcarry = (runpar, optim_state, network_params, state)
         return newcarry, (training_metrics, mean_envs_success_rate, buffer.obs_buffer, state["err"])
 
 
     # loop principal de trainamento, executado por lax.scan
     runpar = RunningParameters.init((settings.network_settings.obs_size, ), settings.target_success)
+    rng1, initial_state = create_initial_state(rng, runpar.progress.value, settings)
 
     # após  o scan, teremos o seguinte:
     # training_metrics[key].shape = (numberof_goals, epochs, *metric_shape)
     # mean_envs_success_rate.shape = (numberof_goals,)
     #rewards.shape = (numberof_goals, num_envs, rollout_steps +1)
     final_carry, (training_metrics, mean_envs_success_rate, rewards, err) = jax.lax.scan(
-        _new_goal_step,
-        (rng, runpar, settings.optimizer_state, starting_network_params),
+        new_goal_step,
+        (runpar, settings.optimizer_state, starting_network_params, initial_state),
         jnp.arange(settings.robot_shared_data.range_config.numberof_goals),
     )
 
@@ -412,19 +347,19 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
     avg_grad_norm = jnp.mean(training_metrics["grad_norm"], axis=0)
 
     # shape de recompensas é: (numberof_goals, num_envs, rollout_steps +1)
-    # para exibir no formato (cycles_per_goal, )
     #jax.debug.print("rewards shape: {}", rewards.shape)
-    reward = jnp.sum(rewards, axis = 3)  #soma as recompensas 
+    reward = jnp.sum(rewards, axis = 2)  #soma as recompensas 
     avg_reward = jnp.mean(reward, axis = (0, 2))
 
 
-    success_rate_around_goals = jnp.mean(mean_envs_success_rate, axis=1)
-    success_rate_around_cycles = jnp.mean(mean_envs_success_rate, axis=0)
+    print(f"mean_envs_success_rate shape: {mean_envs_success_rate.shape}")
+    #success_rate_around_goals = jnp.mean(mean_envs_success_rate, axis=1)
+    #success_rate_around_cycles = jnp.mean(mean_envs_success_rate, axis=0)
 
     print(f"err shape: {err.shape}")
 
-    # err.shape = (numberof_goals, cycles_per_goals, num_envs,)
-    avg_err = jnp.mean(err, axis=(0, 2))
+    # err.shape = (numberof_goals, num_envs,)
+    avg_err = jnp.mean(err, axis=1)
 
   
 
@@ -433,8 +368,8 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
         "avg_entropy": avg_entropy,
         "avg_gradnorm":avg_grad_norm,
         "avg_reward": avg_reward,
-        "sr_goals": success_rate_around_goals,
-        "sr_cycles": success_rate_around_cycles,
+        #"sr_goals": success_rate_around_goals,
+        #"sr_cycles": success_rate_around_cycles,
         "avg_err": avg_err,
     }
 
@@ -442,6 +377,12 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
     return final_carry, metrics
 
 
+
+
+def update_goal(state, progress, settings:TrainingSettings):
+    vmapped_get_goal = jax.vmap(partial(get_goal, settings.robot_shared_data.range_config, progress))
+    batched_rng, batched_goal = vmapped_get_goal(state["rng"])
+    return {**state, "rng": batched_rng, "goal":batched_goal}
 
 def create_initial_state(rng: jax.Array, progress, settings: TrainingSettings):
     rng, rng1 = jax.random.split(rng)
@@ -461,7 +402,7 @@ def create_initial_state(rng: jax.Array, progress, settings: TrainingSettings):
         mjx_data
     )
 
-    vmapped_get_goal = jax.vmap(partial(get_goal, settings.robot_shared_data, progress))
+    vmapped_get_goal = jax.vmap(partial(get_goal, settings.robot_shared_data.range_config, progress))
     batched_rng, batched_goal = vmapped_get_goal(batched_rng)
 
     batched_err = jnp.ones((num_envs, ))*jnp.inf
@@ -479,3 +420,55 @@ def create_initial_state(rng: jax.Array, progress, settings: TrainingSettings):
     }
    
 
+
+def train_epochs(
+        settings: TrainingSettings,
+        network_parameters: NetworkParameters,
+        optimizer_state: optax.OptState,
+        buffer: BatchedBuffer,
+        advantages: jax.Array,
+        returns:jax.Array
+    ):
+        def grad_norm(grads):
+            leaves = jax.tree_util.tree_leaves(grads)
+
+            # norma euclidiana (L2) do gradiente
+            return jnp.sqrt(sum([jnp.sum(jnp.square(g)) for g in leaves]))
+
+        def single_epoch(carry,_):
+            _parameters, _optimizer_state = carry
+    
+            def loss_fn(par):
+                return ppo_loss(
+                    par,
+                    settings,
+                    buffer.obs_buffer,
+                    buffer.action_buffer,
+                    advantages,
+                    returns,
+                    buffer.logprob_buffer,
+                )
+
+            # calcula os gradientes e atualiza os parametros
+            (loss_val, aux_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(_parameters)
+            updates, new_optim_state = settings.optimizer.update(grads, _optimizer_state)
+            new_parameters = cast(NetworkParameters, optax.apply_updates(_parameters, updates))
+
+            new_carry = (new_parameters, new_optim_state)
+        
+            return new_carry, {
+                "loss": loss_val,
+                "grad_norm": grad_norm(grads),
+                **aux_metrics,
+            }
+
+        # após  o scan, teremos o seguinte:
+        # metric[key].shape  = (epochs, *metric_shape)
+        # Ex: loss.shape  = (epochs, )
+        (new_parameters, new_optim_state), metrics = jax.lax.scan(
+            single_epoch,
+            (network_parameters, optimizer_state),
+            jnp.arange(settings.epochs),
+        )
+
+        return new_parameters, new_optim_state, metrics

@@ -90,69 +90,41 @@ class RewardConfig:
 
 @struct.dataclass
 class VectorRange:
-    num_values: int
-    values: jax.Array
-
-    @classmethod
-    def init(cls, num_values: int, min_values: jax.Array, max_values: jax.Array)->Self:
-        num = max(num_values -1, 1)
-        values = jnp.vstack([jnp.linspace(start, stop, num=num) for start, stop in zip(min_values, max_values)])
-        return cls(num_values, values)
-    
+    min_values: jax.Array
+    max_values: jax.Array
 
     def sample_normal(self, rng, progress):
-   
         scale = jnp.maximum(0.01, progress)
 
-        mean = (self.num_values - 1) / 2
-        std = mean * scale
+        dim = self.min_values.shape[0]
 
-        dim = self.values.shape[0]
+        mean = (self.min_values + self.max_values) / 2
+        std = (self.max_values - self.min_values) * scale
 
         rng, subkey = jax.random.split(rng)
         z = jax.random.normal(subkey, shape=(dim,))
 
-        indices = jnp.clip(
-            jnp.round(mean + std * z),
-            0,
-            self.num_values - 1
-        ).astype(jnp.int32)
-
-        retval = self.values[jnp.arange(dim), indices]
-        return rng, retval
+        return rng, mean + std * z
     
 @struct.dataclass
 class RangeConfig:
-    position_steps: int
-    orientation_steps: int
-
+    numberof_goals: int
     position: VectorRange 
     position_velocities: VectorRange 
     orientation: VectorRange
 
-    @property
-    def numberof_goals(self):
-        return self.position_steps * self.orientation_steps
-
     @classmethod
-    def init(
-        cls,
-        pos_min: jax.Array,
-        pos_max: jax.Array,
-        posvel_min: jax.Array,
-        posvel_max: jax.Array,
-        ori_min: jax.Array,
-        ori_max: jax.Array,
-        pos_steps: int,
-        posvel_steps: int,
-        ori_steps: int,
-    )->Self:
+    def init(cls,
+        numberof_goals,
+        pos_min, pos_max,
+        posvel_min, posvel_max,
+        ori_min, ori_max
+    ):
         return cls(
-            pos_steps,
-            ori_steps,
-            VectorRange.init(pos_steps, pos_min, pos_max),
-            VectorRange.init(posvel_steps, posvel_min, posvel_max),
-            VectorRange.init(ori_steps, ori_min, ori_max),
+            numberof_goals,
+            VectorRange(pos_min, pos_max),
+            VectorRange(posvel_min, posvel_max),
+            VectorRange(ori_min, ori_max),
         )
 
     
