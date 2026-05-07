@@ -68,7 +68,7 @@ range_cfg = RangeConfig.init(
     posvel_max = jnp.array([0.1, 0.1, 0.1]),
     ori_min = jnp.array([-3.14, -3.14, -3.14]),
     ori_max = jnp.array([3.14, 3.14, 3.14]),
-    pos_steps=300,
+    pos_steps=100,
     posvel_steps=10,
     ori_steps=100
 )
@@ -83,10 +83,13 @@ robot_shared_data = RobotSharedData.init(
     robot_name="thor"
 )
 
+if robot_shared_data.value is None:
+    raise RuntimeError("RSD is None")
+
 settings = TrainingSettings.init(
     network_settings,
     network_params,
-    robot_shared_data,
+    robot_shared_data.value,
     optimizer_creator  = create_optimizer,
     step_fn_creator = create_step,
     num_envs= 512,

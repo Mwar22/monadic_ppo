@@ -49,6 +49,7 @@
       <body name="Art1_3d_link" pos="0 0 0.098">
         <inertial pos="-1e-06 0 0.061834" mass="0.001" diaginertia="1.3e-05 1.3e-05 1e-05" />
         <joint name="junta1" pos="0 0 0" axis="0 0 1" range="-1.57 1.57" />
+        <joint name="junta_teste" pos="0 0 0" axis="0 0 1" range="-1.57 1.57" />
         <geom name="Art1_3d_collision" type="mesh" mesh="art1_3d_convexhull" contype="1" conaffinity="0" density="0" group="1" class="visualgeom" />
        
         <body name="art2_3d_link" pos="0 0 0.098" quat="0.707107 -0.707107 0 0">

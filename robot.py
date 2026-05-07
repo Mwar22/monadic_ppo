@@ -72,8 +72,10 @@ class Actuators:
             target_type = mj_model.actuator_trntype[act_id]
             target_id = mj_model.actuator_trnid[act_id, 0]
             
+            different_type = target_type != mujoco.mjtTrn.mjTRN_JOINT
+            in_ids = jnp.isin(target_id, joint_ids)
 
-            if target_type != mujoco.mjtTrn.mjTRN_JOINT or not jnp.isin(target_id, joint_ids):
+            if different_type or not in_ids:
                 return MaybeM.nothing(), MaybeM.nothing()
 
             actuator_ids.append(act_id)
@@ -106,8 +108,8 @@ class Joints:
     mj_model: MjModel
     ids:  jax.Array
     names:  list[str]
-    qpos_adr_list: List[MaybeM[jax.Array]]
-    qvel_adr_list: List[MaybeM[jax.Array]]
+    qpos_adr_list: List[jax.Array]
+    qvel_adr_list: List[jax.Array]
 
     @classmethod
     def init(cls, mj_model, body_name: str) -> MaybeM[Self]:
@@ -120,106 +122,97 @@ class Joints:
         if ids is None or names is None:
             return MaybeM.nothing()
         
-        joint_qposadr = Joints._get_qpos_ids(mj_model, names)
-        joint_qveladr = Joints._get_qvel_ids(mj_model, names)
+        
+        qposadr = []
+        qveladr = []
+        for id in ids:
+            qposadr.append(
+                jnp.arange(
+                    mj_model.jnt_qposadr[id],
+                    mj_model.jnt_qposadr[id] + Joints.joint_infoby_typecode(mj_model.jnt_type[id])["qpos_width"]
+                )
+            )
+            qveladr.append(
+                jnp.arange(
+                    mj_model.jnt_dofadr[id],
+                    mj_model.jnt_dofadr[id] + Joints.joint_infoby_typecode(mj_model.jnt_type[id])["dof_width"]
+                )
+            )
+        
 
-        return MaybeM.just(cls(mj_model, jnp.array(ids), names, joint_qposadr, joint_qveladr))
+        print(f"names: {names}")
+        print(f"ids: {ids}")
+        print(f"qposadr: {qposadr}")
+        print(f"qveladr: {qveladr}")
+        
+        return MaybeM.just(cls(mj_model, jnp.array(ids), names, qposadr, qveladr))
+
+    @classmethod
+    def maybe_joint_id(cls, model: MjModel, joint_name)-> MaybeM[int]:
+        """ Garante que tenha um id para um dado nome de junta"""
+        jnt_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+        return MaybeM.nothing() if jnt_id ==-1 else MaybeM.just(jnt_id)
+
+
+    @classmethod
+    def _get_subtree_bodies(cls, mj_model, root_id)->List[int]:
+        children = []
+
+        def dfs(b):
+            for i in range(mj_model.nbody):
+                if mj_model.body_parentid[i] == b:
+                    children.append(i)
+                    dfs(i)
+        dfs(root_id)
+        return children
 
     @classmethod
     def _from_body(cls, mj_model, body_name: str)->tuple[MaybeM[list[int]], MaybeM[list[str]]]:
         """ Obtem uma lista com um dicionario para cada junta de um dado corpo, contendo o id e o nome """
 
-        def get_body_id(name: str) -> MaybeM[int]:
+        def get_root_id(name: str) -> MaybeM[int]:
             try:
                 return MaybeM.just(mj_model.body(name).id)
             except KeyError:
                 return MaybeM.nothing()
             
-        def extract_ids(body_id: int):
-            start_adr = mj_model.body_jntadr[body_id]
-            num_joints = mj_model.body_jntnum[body_id]
-            return [start_adr + i for i in range(num_joints)]
-        
+        def get_joint_ids(root_id: int) -> MaybeM[List[int]]:
+            try:
+                bodies = Joints._get_subtree_bodies(mj_model, root_id)
+
+                joint_ids = []
+                for b in bodies:
+                    jnt_start = mj_model.body_jntadr[b]
+                    jnt_count = mj_model.body_jntnum[b]
+
+                    if jnt_start >= 0:
+                        joint_ids.extend(range(jnt_start, jnt_start+jnt_count))
+
+                return MaybeM.just(joint_ids)
+            
+            except KeyError:
+                return MaybeM.nothing()
+            
+       
         def extract_names(ids: List[int]):
-            return [cast(str, mj_model.joint(idx).name) for idx in ids]
+            return [cast(str, mj_model.joint(id).name) for id in ids]
 
 
-        ids = get_body_id(body_name).map(extract_ids)
-        names = ids.map(extract_names)
+        joint_ids = get_root_id(body_name).bind(get_joint_ids)
+        names = joint_ids.map(extract_names)
 
-        return ids, names
+        return joint_ids, names
         
-    @classmethod
-    def _get_qpos_ids(cls, model: MjModel, joint_names: List[str]):
-        """
-        Obtem os indices com os endereços em qpos cada grau de liberdade de cada junta.
-
-        Parameters
-        ----------
-        model: mujoco.MjModel
-            Modelo do mujoco.
-
-        joint_names: Sequence[str]
-            Sequência de strings que compoem os nomes das juntas.
-
-        Returns
-        -------
-        ret: np.ndarray
-            Array com os endereços  em qpos para cada junta.
-        """
-
-        def joint_range(name: str)->MaybeM[jax.Array]:
-            id = maybe_joint_id(model, name)
-            id = id.map(lambda id: id.value if not isinstance(id, int) else id)
-            return id.map(lambda id:
-                jnp.arange(model.jnt_qposadr[id], model.jnt_qposadr[id] + Joints.joint_infoby_id(id)["qpos_width"])
-            )
- 
-        ids_list: List[MaybeM[jax.Array]] = []
-        for name in joint_names:
-            ids_list.append(joint_range(name))
-        return ids_list
-        
-    @classmethod
-    def _get_qvel_ids(cls, model: MjModel, joint_names: List[str]):
-        """
-        Obtem os indices com os valores de velocidade para cada grau de liberdade de cada junta.
-
-        Parameters
-        ----------
-        model: mujoco.MjModel
-            Modelo do mujoco.
-
-        joint_names: Sequence[str]
-            Sequência de strings que compoem os nomes das juntas.
-
-        Returns
-        -------
-        ret: jnp.ndarray
-            Array com os endereços  em qvel para cada junta.
-        """
-      
-        def joint_range(name: str)->MaybeM[jax.Array]:
-            id = maybe_joint_id(model, name)
-            id = id.map(lambda id: id.value if not isinstance(id, int) else id)
-            return id.map(lambda id:
-                jnp.arange(model.jnt_dofadr[id], model.jnt_dofadr[id] + Joints.joint_infoby_id(id)["dof_width"])
-            )
- 
-        ids_list: List[MaybeM[jax.Array]] = []
-        for name in joint_names:
-            ids_list.append(joint_range(name))
-        return ids_list
     
     @classmethod
-    def joint_infoby_id(cls, id: int):
+    def joint_infoby_typecode(cls, tp: int):
         _map = {
             0: {"type": "free", "dof_width": 6, "qpos_width": 7}, # 3 valores de posição + 4 para rotação (quaternion)
             1: {"type": "ball", "dof_width": 3, "qpos_width": 4}, # 4 valores apenas rotação (quaternion)
             2: {"type": "slide", "dof_width": 1, "qpos_width": 1}, # 1 grau de liberdade. 1 valor
             3: {"type": "hinge", "dof_width": 1, "qpos_width": 1}, # 1 grau de liberdade. 1 valor
         }
-        return _map[id]
+        return _map[tp]
     
     @property
     def lowers(self):
@@ -344,7 +337,7 @@ class RobotSharedData:
         reward_config: RewardConfig,
         range_config: RangeConfig,
         robot_name: str,
-    )->Tuple[MaybeM[RobotSharedData], Tuple[Any]]:
+    )->MaybeM[RobotSharedData]:
         """
         Método fábrica para o ambiente
         """
@@ -372,15 +365,18 @@ class RobotSharedData:
 
         m_joints = Joints.init(mj_model, robot_name)
         if m_joints.value is None:
-            return MaybeM.nothing(), (f"No joints found for robot name: {robot_name}",)
+            jax.debug.print("Could not find joints")
+            return MaybeM.nothing()
 
         m_geoms = Geoms.init(mj_model, robot_name)
         if m_geoms.value is None:
-            return MaybeM.nothing(), (f"No geoms found for robot name: {robot_name}",)
+            jax.debug.print("Could not find geoms")
+            return MaybeM.nothing()
 
         m_actuators = Actuators.init(mj_model, m_joints.value.ids)
         if m_actuators.value is None:
-            return MaybeM.nothing(), (f"No actuators found for robot name: {robot_name}",)
+            jax.debug.print("Could not find actuators")
+            return MaybeM.nothing()
 
         # ids para a ponta colocada no robô
         tool_tip_id = mj_model.site("tool_tip").id
@@ -399,7 +395,7 @@ class RobotSharedData:
             enviroment_config,
             reward_config,
             range_config,
-        )), ("Robot Shared Data created Successfully!",)
+        ))
     
     ####################################### Metodos da classe ################################################
    

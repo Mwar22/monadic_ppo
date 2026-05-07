@@ -84,7 +84,7 @@ def rollout(
 ):
     # Match the structure of your 'state' dictionary exactly
     state_in_axes = {
-        'action': 0,
+        'last_action': 0,
         'goal': {
             'goal_position_coordinates': 0,
             'goal_position_velocities': 0,
