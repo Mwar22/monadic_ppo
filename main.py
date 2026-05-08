@@ -62,7 +62,7 @@ rng, network_settings, network_params = create_networks(rng, obs_size=34, action
 
 
 range_cfg = RangeConfig.init(
-    300,
+    10,
     pos_min = jnp.array([-0.468, -0.468, 0]),
     pos_max = jnp.array([0.468, 0.468, 0.664]),
     posvel_min = jnp.array([1e-2, 1e-2, 1e-2]),
@@ -117,18 +117,17 @@ else:
 save_params(network_params)
 
 loss = metrics["avg_loss"]
-avg_episode_rewards =  metrics["avg_reward"]
+mean_rewards_vs_timestamp =  metrics["mean_rewards_vs_timestamp"]
+mean_rewards_vs_goals = metrics["mean_rewards_vs_goals"]
 grad_norm =  metrics["avg_gradnorm"]
 entropy =  metrics["avg_entropy"]
-#advantages_cycles = metrics["advantages_cycles"]
-
 
 avg_loss = jnp.mean(loss[-20:])
 print(f" Training finished! Average loss of last 20 steps: {avg_loss:.4f}")
 
 # plotagem dos dados
-print(f"min avg reward: {jnp.min(avg_episode_rewards)}")
-print(f"max avg reward: {jnp.max(avg_episode_rewards)}")
+print(f"mean_rewards_vs_goals: min = {jnp.min(mean_rewards_vs_goals)}, max = {jnp.max(mean_rewards_vs_goals)}")
+print(f"mean_rewards_vs_timestamp: min = {jnp.min(mean_rewards_vs_timestamp)}, max = {jnp.max(mean_rewards_vs_timestamp)}")
 
 
 fig, axs = plt.subplots(3, 2, figsize=(10, 8), tight_layout=True)
@@ -137,28 +136,30 @@ axs[0][0].set_title("Training Loss")
 axs[0][0].set_xlabel("Epochs")
 axs[0][0].set_ylabel("Loss")
 
-axs[0][1].plot(avg_episode_rewards)
-axs[0][1].set_title("Average Episode Reward")
-axs[0][1].set_xlabel("Cycles per goal")
-axs[0][1].set_ylabel("Average Reward")
+axs[0][1].plot(grad_norm)
+axs[0][1].set_title("Gradient norm (Euclidian, L2)")
+axs[0][1].set_xlabel("Epochs")
+axs[0][1].set_ylabel("Norm")
 
-axs[1][0].plot(grad_norm)
-axs[1][0].set_title("Gradient norm (Euclidian, L2)")
-axs[1][0].set_xlabel("Epochs")
-axs[1][0].set_ylabel("Norm")
+axs[1][0].plot(mean_rewards_vs_timestamp)
+axs[1][0].set_title("Mean (across envs) sum of rewards (across goals)")
+axs[1][0].set_xlabel("Rollout timestamp")
+axs[1][0].set_ylabel("Average Reward")
 
-axs[1][1].plot(entropy)
-axs[1][1].set_title("Entropy")
-axs[1][1].set_xlabel("Epochs")
-axs[1][1].set_ylabel("Entropy value")
+axs[1][1].plot(mean_rewards_vs_goals)
+axs[1][1].set_title("Mean (across envs) sum of rewards (across rollout timestamps)")
+axs[1][1].set_xlabel("Goal n°")
+axs[1][1].set_ylabel("Average Reward")
 
-#print(f"success_rate = {metrics["success_rate"]}")
-#axs[2][0].plot(metrics["sr_cycles"])
-#axs[2][0].set_xlabel("Cycles per goal")
-#axs[2][0].set_ylabel(" success_rate %")
+axs[2][0].plot(entropy)
+axs[2][0].set_title("Entropy")
+axs[2][0].set_xlabel("Epochs")
+axs[2][0].set_ylabel("Entropy value")
+
 
 axs[2][1].plot(metrics["avg_err"])
-axs[2][1].set_xlabel("Cycles per Goal")
+axs[2][1].set_title("Average err")
+axs[2][1].set_xlabel("Goal n°")
 axs[2][1].set_ylabel("avg err")
 
 
