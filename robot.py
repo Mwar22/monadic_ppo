@@ -671,17 +671,14 @@ def concat_obs_as_array(d: Dict[str, Any]) -> StateMonad:
         # Manually list keys to ensure order and handle scalars
         obs_list = [
             state["goal"]["goal_position_coordinates"],  # (3,)
-            #state["goal"]["goal_orientation_coordinates"],  # (3,)
             state["goal"]["goal_position_velocities"], # (3,)
             state["last_action"],   #(6,)
-            #d["tool_position"],  # (3,)
-            #d["orientation"],  # (4,)
+            d["tool_position"],  # (3,)
             d["torques"],  # (6,)
             d["joint_angles"],  # (6,)
-            d["joint_vel"],  # (6,)
         ]
         obs_array = jnp.concatenate(obs_list)
-        # 4 * (3,)  +  3 * (6, ) + (4,)= 34)
+        # 3 * (3,)  +  3 * (6, ) + (4,)= 27)
 
         return state, {**d, "obs_array": obs_array}
 
@@ -876,6 +873,8 @@ def reward_pipeline(progress, rsd: RobotSharedData,  env: StateMonad):
                         reward_config.pos_incentive_sigma.update(progress),
                         pdata["position_error"]
                     ) 
+
+                    +(1 - pdata["position_error"])*10
                 ),
             }
         )

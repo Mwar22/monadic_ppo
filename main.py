@@ -11,7 +11,7 @@ import os
 # Tell XLA to use Triton GEMM, this improves steps/sec by ~30% on some GPUs
 xla_flags = os.environ.get('XLA_FLAGS', '')
 
-#xla_flags += ' --xla_gpu_triton_gemm_any=True'
+xla_flags += ' --xla_gpu_triton_gemm_any=True'
 os.environ['XLA_FLAGS'] = xla_flags
 
 #alocação dinamica
@@ -46,7 +46,7 @@ def create_optimizer(steps):
     
     lr_scheduler = optax.schedules.linear_schedule(
         init_value=5e-4,
-        end_value=1e-5,
+        end_value=5e-5,
         transition_steps=steps
     )
 
@@ -58,11 +58,11 @@ def create_optimizer(steps):
 
 ################################################### INICIALIZAÇÂO #####################################################
 rng = jax.random.PRNGKey(42)
-rng, network_settings, network_params = create_networks(rng, obs_size=30, action_size=6)
+rng, network_settings, network_params = create_networks(rng, obs_size=27, action_size=6)
 
 
 range_cfg = RangeConfig.init(
-    300,
+    500,
     pos_min = jnp.array([-0.468, -0.468, 0]),
     pos_max = jnp.array([0.468, 0.468, 0.664]),
     posvel_min = jnp.array([1e-2, 1e-2, 1e-2]),
@@ -91,9 +91,9 @@ settings = TrainingSettings.init(
     optimizer_creator  = create_optimizer,
     step_fn_creator = create_step,
     reset_fn_creator= create_reset,
-    num_envs= 512,
-    epochs=100,
-    rollout_steps=50,
+    num_envs= 8192,
+    epochs=10,
+    rollout_steps=64,
     target_success=0.75,
 )
 

@@ -52,19 +52,18 @@ class Actor(nn.Module):
 
     @nn.compact
     def __call__(self, obs):
-        x = nn.Dense(256)(obs)
-        x = nn.LayerNorm()(x)
-        x = activation(x)
+        # Primeira camada com skip connection
+        x1 = nn.Dense(256)(obs)
+        x1 = nn.LayerNorm()(x1)
+        x1 = nn.relu(x1)
+        
+        x2 = nn.Dense(256)(x1)
+        x2 = nn.LayerNorm()(x2)
+        x2 = nn.relu(x2) + x1 # conexão residual
         
         
-   
-        x = nn.Dense(256)(x)
-        x = nn.LayerNorm()(x)
-        x = activation(x)
-        
-       
         # 2 pois é uma distribuição, gerando metade para os parametros alfa e metade para beta
-        logits = nn.Dense(2 * self.action_dim, kernel_init=nn.initializers.variance_scaling(0.01,mode="fan_in", distribution="normal"))(x)
+        logits = nn.Dense(2 * self.action_dim, kernel_init=nn.initializers.variance_scaling(0.01,mode="fan_in", distribution="normal"))(x2)
         return logits
 
 

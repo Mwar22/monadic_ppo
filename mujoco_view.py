@@ -57,9 +57,9 @@ def main():
     
     # 3. Load Trained Model
     rng = jax.random.PRNGKey(0)
-    rng, net_settings, net_params = create_networks(rng, obs_size=34, action_size=6)
+    rng, net_settings, net_params = create_networks(rng, obs_size=27, action_size=6)
     trained_params = load_params(net_params, "trained_params.msgpack")
-    runpar = RunningParameters.init((34,))
+    runpar = RunningParameters.init((27,))
     step_fn = jax.jit(create_step(net_settings, trained_params, rsd))
 
     # 4. Keyboard Control State
@@ -106,7 +106,7 @@ def main():
         "mjx_data": mx_data,
         "goal": goal,
         "rng": rng,
-        "obs": jnp.zeros((34,)),
+        "obs": jnp.zeros((33,)),
         "success_count": 0,
         "step": 0,
         "last_action": jnp.zeros((6,)),
