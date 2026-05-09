@@ -53,16 +53,18 @@ class Actor(nn.Module):
     @nn.compact
     def __call__(self, obs):
         x = nn.Dense(256)(obs)
-        x = activation(x)
         x = nn.LayerNorm()(x)
+        x = activation(x)
+        
         
    
         x = nn.Dense(256)(x)
-        x = activation(x)
         x = nn.LayerNorm()(x)
+        x = activation(x)
+        
        
         # 2 pois é uma distribuição, gerando metade para os parametros alfa e metade para beta
-        logits = nn.Dense(2 * self.action_dim)(x)
+        logits = nn.Dense(2 * self.action_dim, kernel_init=nn.initializers.variance_scaling(0.01,mode="fan_in", distribution="normal"))(x)
         return logits
 
 
@@ -73,12 +75,12 @@ class Critic(nn.Module):
     def __call__(self, obs):
        
         x = nn.Dense(256)(obs)
-        x = activation(x)
         x = nn.LayerNorm()(x)
+        x = activation(x)
         
         x = nn.Dense(256)(x)
-        x = activation(x)
         x = nn.LayerNorm()(x)
+        x = activation(x)
         
         value = nn.Dense(1)(x)
         return value.squeeze(-1)

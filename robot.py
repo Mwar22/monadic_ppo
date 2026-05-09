@@ -139,12 +139,6 @@ class Joints:
                 )
             )
         
-
-        print(f"names: {names}")
-        print(f"ids: {ids}")
-        print(f"qposadr: {qposadr}")
-        print(f"qveladr: {qveladr}")
-        
         return MaybeM.just(cls(mj_model, jnp.array(ids), names, qposadr, qveladr))
 
     @classmethod
@@ -495,7 +489,7 @@ def position_error(goal_position: jax.Array, tool_position: jax.Array) -> jax.Ar
     info: dict[str, Any]
         Dicionario de informações
     """
-    return jnp.linalg.norm(goal_position - tool_position, ord=2)
+    return jnp.linalg.norm(goal_position - tool_position, ord=2, axis=-1)
 
 
 def orientation_error(
@@ -612,7 +606,7 @@ def normalize_obs(data, obs_stats:RunningAvg):
         return new_state, {**data, "obs": norm_obs}
     return StateMonad(func)
 
-def update_obs(data, obs_noise=0.0):
+def update_obs_old(data, obs_noise=0.0):
     def func(state):
         rng, rng1 = jax.random.split(state["rng"])
 
@@ -650,6 +644,24 @@ def update_obs(data, obs_noise=0.0):
     return StateMonad(func)
 
 
+def update_obs(data, obs_noise=0.0):
+    def func(state):
+        rng, rng1 = jax.random.split(state["rng"])
+        obs = data["obs_array"]
+        
+        # Clip direto para estabilidade
+        obs_processed = jnp.clip(obs, -5.0, 5.0)
+
+        # Use jnp.where ou simplesmente multiplique pelo ruído para evitar o 'if'
+        noise = jax.random.uniform(rng, obs_processed.shape, minval=-1.0, maxval=1.0)
+        obs_processed = obs_processed + (obs_noise * noise)
+
+        # Se for remover o histórico em favor de um estado markoviano mais simples:
+        new_state = {**state, "rng": rng1, "obs": obs_processed}
+        return new_state, {**data, "obs": obs_processed}
+    return StateMonad(func)
+
+
 def concat_obs_as_array(d: Dict[str, Any]) -> StateMonad:
     """
     :: d -> StateMonad s c
@@ -659,10 +671,11 @@ def concat_obs_as_array(d: Dict[str, Any]) -> StateMonad:
         # Manually list keys to ensure order and handle scalars
         obs_list = [
             state["goal"]["goal_position_coordinates"],  # (3,)
-            state["goal"]["goal_orientation_coordinates"],  # (3,)
+            #state["goal"]["goal_orientation_coordinates"],  # (3,)
             state["goal"]["goal_position_velocities"], # (3,)
-            d["tool_position"],  # (3,)
-            d["orientation"],  # (4,)
+            state["last_action"],   #(6,)
+            #d["tool_position"],  # (3,)
+            #d["orientation"],  # (4,)
             d["torques"],  # (6,)
             d["joint_angles"],  # (6,)
             d["joint_vel"],  # (6,)
@@ -738,28 +751,7 @@ def debug(pdata, name):
     return StateMonad(func)
 
 
-def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningAvg, env: StateMonad):
-    return (
-        env.bind(
-            lambda pdata: StateMonad(
-                lambda state: (
-                    state,
-                    {**pdata, "tool_position": rsd.sensor_data(state["mjx_data"], "tool_position")},
-                )
-            )
-        )
-        .bind(lambda pdata: StateMonad(
-            lambda state:(
-                state,
-                {
-                    **pdata,
-                    "position_error": position_error(
-                        state["goal"]["goal_position_coordinates"], pdata["tool_position"]
-                    ),
-                }
-            )
-        ))
-
+"""
         .bind(
             lambda pdata: StateMonad(
                 lambda state: (
@@ -784,7 +776,29 @@ def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningAvg, env: StateMonad):
                 }
             )
         ))
+        """
 
+def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningAvg, env: StateMonad):
+    return (
+        env.bind(
+            lambda pdata: StateMonad(
+                lambda state: (
+                    state,
+                    {**pdata, "tool_position": rsd.sensor_data(state["mjx_data"], "tool_position")},
+                )
+            )
+        )
+        .bind(lambda pdata: StateMonad(
+            lambda state:(
+                state,
+                {
+                    **pdata,
+                    "position_error": position_error(
+                        state["goal"]["goal_position_coordinates"], pdata["tool_position"]
+                    ),
+                }
+            )
+        ))
         .bind(
             lambda pdata: StateMonad(
                 lambda state: (
@@ -839,6 +853,14 @@ def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningAvg, env: StateMonad):
         )
     )
 
+"""
+                    # Incentivo de Orientação
+                    exp_scale_reward(
+                        reward_config.rot_incentive_gain.update(progress),
+                        reward_config.rot_incentive_sigma.update(progress),
+                        pdata["orientation_error"]
+                    )
+"""
 
 def reward_pipeline(progress, rsd: RobotSharedData,  env: StateMonad):
     reward_config = rsd.reward_config
@@ -853,14 +875,7 @@ def reward_pipeline(progress, rsd: RobotSharedData,  env: StateMonad):
                         reward_config.pos_incentive_gain.update(progress),
                         reward_config.pos_incentive_sigma.update(progress),
                         pdata["position_error"]
-                    ) + 
-
-                    # Incentivo de Orientação
-                    exp_scale_reward(
-                        reward_config.rot_incentive_gain.update(progress),
-                        reward_config.rot_incentive_sigma.update(progress),
-                        pdata["orientation_error"]
-                    )
+                    ) 
                 ),
             }
         )
@@ -874,7 +889,7 @@ def reward_pipeline(progress, rsd: RobotSharedData,  env: StateMonad):
                         **pdata,
                         "reward": (
                             # penalidade por ações muito grandes
-                            pdata["reward"] - 0.01 * cost_action_rate(pdata["action"], state["last_action"]) 
+                            pdata["reward"] - 0.1 * cost_action_rate(pdata["action"], state["last_action"]) 
 
                             # Penalidade de torque para evitar movimentos espasmódicos
                             + jnp.sum(jnp.square(pdata["torques"])) * reward_config.torques_penalty.update(progress)
@@ -902,8 +917,8 @@ def reward_pipeline(progress, rsd: RobotSharedData,  env: StateMonad):
         .map(
             lambda pdata: {
                 **pdata,
-                "success": (pdata["position_error"] < pdata["err_tol"]) & 
-                           (pdata["orientation_error"] < pdata["err_tol"]),
+                "success": (pdata["position_error"] < pdata["err_tol"] #& (pdata["orientation_error"] < pdata["err_tol"]
+                            ),
                 "failure": jnp.any(pdata["joint_angles"] < rsd.lowers) | 
                            jnp.any(pdata["joint_angles"] > rsd.uppers),
             }

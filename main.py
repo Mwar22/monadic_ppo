@@ -58,11 +58,11 @@ def create_optimizer(steps):
 
 ################################################### INICIALIZAÇÂO #####################################################
 rng = jax.random.PRNGKey(42)
-rng, network_settings, network_params = create_networks(rng, obs_size=34, action_size=6)
+rng, network_settings, network_params = create_networks(rng, obs_size=30, action_size=6)
 
 
 range_cfg = RangeConfig.init(
-    10,
+    300,
     pos_min = jnp.array([-0.468, -0.468, 0]),
     pos_max = jnp.array([0.468, 0.468, 0.664]),
     posvel_min = jnp.array([1e-2, 1e-2, 1e-2]),
@@ -92,9 +92,8 @@ settings = TrainingSettings.init(
     step_fn_creator = create_step,
     reset_fn_creator= create_reset,
     num_envs= 512,
-    cycles_per_goal=30,
-    epochs=50,
-    rollout_steps=128,
+    epochs=100,
+    rollout_steps=50,
     target_success=0.75,
 )
 

@@ -8,10 +8,10 @@ from flax import struct
 from functools import partial
 from typing import Dict, Any, cast, Tuple, Callable, Self
 from utils import  beta_entropy, ema, stdNormalize
-from robot import get_goal
+from robot import get_goal, obs_pipeline
 from mujoco import mjx
 from dataclassutils import RunningParameters, TrainingSettings, BatchedBuffer, NetworkParameters
-
+from enviroment import StateMonad
 
 
 def rollout_step(
@@ -204,7 +204,7 @@ def ppo_loss(
     old_log_probs,      #shape: (num_envs, max_steps +1)
     clip_eps=0.2,
     c1=0.8,
-    c2=0.5,
+    c2=0.2,
     min_alpha_beta=1.0,
 ):
     """
@@ -442,11 +442,7 @@ def create_initial_state(rng: jax.Array, progress, settings: TrainingSettings):
     # Inicializa os estados para os ambientes em paralelo
     # (num_envs, features_dim)
     num_envs = settings.num_envs
-    batched_steps = jnp.zeros((num_envs,))
-    batched_success_count = jnp.zeros((num_envs,))
     batched_rng = jax.random.split(rng, num_envs)
-    batched_action = jnp.zeros((num_envs, settings.network_settings.action_size))
-    batched_obs = jnp.zeros((num_envs, settings.network_settings.obs_size))
 
     mjx_data = mjx.make_data(settings.robot_shared_data.mjx_model)
     batched_mjx_data = jax.tree_util.tree_map(
@@ -457,20 +453,37 @@ def create_initial_state(rng: jax.Array, progress, settings: TrainingSettings):
     vmapped_get_goal = jax.vmap(partial(get_goal, settings.robot_shared_data.range_config, progress))
     batched_rng, batched_goal = vmapped_get_goal(batched_rng)
 
-    batched_err = jnp.ones((num_envs, ))*jnp.inf
 
-    #estado inicial 
-    return rng1, {
-        "rng":batched_rng,
-        "step":batched_steps,
-        "goal":batched_goal,
-        "obs":batched_obs,
-        "last_action": batched_action,
+    # Crie um estado temporário para rodar o pipeline
+    temp_state = {
+        "rng": batched_rng,
+        "goal": batched_goal,
         "mjx_data": batched_mjx_data,
-        "success_count":batched_success_count, 
-        "err": batched_err,
+        "obs": jnp.zeros((num_envs, settings.network_settings.obs_size)), # placeholder
+        "last_action": jnp.zeros((num_envs, settings.network_settings.action_size)),
+        "err": jnp.ones((num_envs,)) * jnp.inf,
+        "step": jnp.zeros((num_envs,)),
+        "success_count": jnp.zeros((num_envs,)),
     }
-   
+
+    # Rode apenas o pipeline de observação para obter o estado REAL inicial
+    # Isso garante que a primeira obs que o agente vê não seja zero
+    runpar_init = RunningParameters.init((settings.network_settings.obs_size,), settings.target_success)
+    
+    def get_single_obs(s):
+        # s é um único 'state' (scalars/unbatched arrays)
+        # StateMonad.pure({}) inicia o pdata como um dict vazio
+        pipe = obs_pipeline(settings.robot_shared_data, runpar_init.obs_stat, StateMonad.pure({}))
+        _, out_data = pipe.run(s)
+        return out_data["obs"]
+
+    # vmap mapeia 'get_single_obs' sobre a primeira dimensão de todos os arrays no temp_state
+    initial_obs = jax.vmap(get_single_obs)(temp_state)
+
+    return rng1, {
+        **temp_state,
+        "obs": initial_obs, # Agora contém dados reais do MuJoCo
+    }
 
 
 

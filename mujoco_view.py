@@ -21,32 +21,36 @@ from mujoco import mjx
 from etils import epath
 
 # Custom imports from your project files
-from robot import create_rsd, create_step, get_goal
+from robot import RobotSharedData, create_step, get_goal
 from networks import create_networks, load_params
 from dataclassutils import RunningParameters
 from config import MujocoSimConfig, RewardConfig, RangeConfig
 
 def main():
-    # 2. Setup Models and Config
     range_cfg = RangeConfig.init(
-        numberof_goals=1, # We only need one target for manual control
-        pos_min = jnp.array([-0.468, -0.468, 0]),
-        pos_max = jnp.array([0.468, 0.468, 0.664]),
-        posvel_min = jnp.array([0, 0, 0]),
-        posvel_max = jnp.array([0, 0, 0]),
-        ori_min = jnp.array([-3.14, -3.14, -3.14]),
-        ori_max = jnp.array([3.14, 3.14, 3.14])
-    )
+    300,
+    pos_min = jnp.array([-0.468, -0.468, 0]),
+    pos_max = jnp.array([0.468, 0.468, 0.664]),
+    posvel_min = jnp.array([1e-2, 1e-2, 1e-2]),
+    posvel_max = jnp.array([0.1, 0.1, 0.1]),
+    ori_min = jnp.array([-3.14, -3.14, -3.14]),
+    ori_max = jnp.array([3.14, 3.14, 3.14]),
+)
 
-    rsd = create_rsd(
+    robot_shared_data = RobotSharedData.init(
         epath.Path("model/joystick_env.xml"),
         epath.Path("model"),
         epath.Path("model/meshes"),
         MujocoSimConfig(),
         RewardConfig(),
         range_cfg,
-        ["junta1", "junta2", "junta3", "junta4","junta5", "junta6"]
+        robot_name="thor"
     )
+
+    if robot_shared_data.value is None:
+        raise RuntimeError("RSD is None")
+    
+    rsd = robot_shared_data.value
     
     m_cpu = rsd.mj_model
     d_cpu = mujoco.MjData(m_cpu)
@@ -95,7 +99,7 @@ def main():
 
     # Initial Goal setup
     progress = 1.0
-    rng, goal = get_goal(rsd, progress, rng)
+    rng, goal = get_goal(rsd.range_config, progress, rng)
     mx_data = mjx.put_data(m_cpu, d_cpu)
     
     current_state = {
@@ -105,7 +109,7 @@ def main():
         "obs": jnp.zeros((34,)),
         "success_count": 0,
         "step": 0,
-        "action": jnp.zeros((6,)),
+        "last_action": jnp.zeros((6,)),
         "err": 1.0
     }
 

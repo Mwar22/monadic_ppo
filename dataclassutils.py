@@ -165,7 +165,6 @@ class NetworksSettings:
 @struct.dataclass
 class TrainingSettings:
     network_settings: NetworksSettings
-    cycles_per_goal: int
     epochs: int
     num_envs: int
     rollout_steps: int
@@ -189,7 +188,6 @@ class TrainingSettings:
         step_fn_creator:Callable[[NetworksSettings, NetworkParameters, RobotSharedData], Callable],
         reset_fn_creator:Callable[[NetworksSettings, NetworkParameters, RobotSharedData], Callable],
         num_envs: int = 1,
-        cycles_per_goal = 1,
         epochs: int = 1,
         rollout_steps: int = 1,
         gamma: float = 0.99,
@@ -197,7 +195,7 @@ class TrainingSettings:
         target_success: float = 0.6,
     ):
         # numero de passos para o escalonador de LR baseado na configuração
-        total_steps = robot_shared_settings.range_config.numberof_goals * cycles_per_goal * epochs
+        total_steps = robot_shared_settings.range_config.numberof_goals * epochs
 
         optimizer = optimizer_creator(total_steps)
         optimizer_params = optimizer.init(cast(optax.Params, network_params))
@@ -205,7 +203,6 @@ class TrainingSettings:
         
         return cls(
             network_settings,
-            cycles_per_goal,
             epochs,
             num_envs,
             rollout_steps,

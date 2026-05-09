@@ -63,12 +63,12 @@ class RewardConfigParameter:
 class RewardConfig:
     # --- Incentivo de Posição ---
     # O ganho máximo quando o erro é zero
-    pos_incentive_gain = RewardConfigParameter.const(200.0)
+    pos_incentive_gain = RewardConfigParameter.const(400.0)
 
     # 'Largura' da recompensa: se o erro for igual a sigma, a recompensa cai para ~36%
     # No início do treino (progress=0), sigma=0.5
     # No fim do treino (progress=1), sigma=0.1
-    pos_incentive_sigma = RewardConfigParameter.inv_sqrt_tracking(0.8, 0.02)
+    pos_incentive_sigma = RewardConfigParameter.linear_tracking(0.8, 0.1)
 
     # --- Incentivo de Orientação ---
     rot_incentive_gain = RewardConfigParameter.const(100.0)
@@ -80,8 +80,8 @@ class RewardConfig:
     
     # --- Tolerância ---
     # No início do treino (progress=0), err_tol=0.8
-    # No fim do treino (progress=1), err_tol=0.05
-    err_tol = RewardConfigParameter.linear_tracking(0.8, 0.02)
+    # No fim do treino (progress=1), err_tol=0.1
+    err_tol = RewardConfigParameter.linear_tracking(0.8, 0.1)
     
     # --- Regularização ---
     torques_penalty = RewardConfigParameter.const(-1e-2)
