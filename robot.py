@@ -952,31 +952,32 @@ def get_action(network_settings: NetworksSettings, network_parameters: NetworkPa
 
         output = network_settings.actor.apply(network_parameters.actor, last_obs)
         output = cast(jax.Array, output)
-        action_value, logprob = cont_sample_beta(output, rng1)
+        action, logprob = cont_sample_beta(output, rng1)
 
+        # escala ação para de [0, 1] para [-1, 1]
+        action = jnp.clip(2.0 * action - 1.0, -1, 1)
         
         new_state = {**state, "rng": rng2}
-        return new_state, {"action": action_value, "logprob": logprob}
+        return new_state, {"action": action, "logprob": logprob}
     return StateMonad(fn)
 
-def get_motor_targets(rsd: RobotSharedData, pdata):
+
+def get_motor_targets(rsd: RobotSharedData, pdata, alpha=0.8):
     def fn(state):
-        # escala ação para de [0, 1] para [-1, 1]
-        action_value_action = jnp.clip(2.0 * pdata["action"]- 1.0, -1, 1)
+        smoothed_action = alpha*state["last_action"] + (1 - alpha)*pdata["action"]
+        mid = 0.5 * (rsd.uppers + rsd.lowers)
+        half = 0.5 * rsd.enviroment_config.action_scale * (rsd.uppers - rsd.lowers)
+        ctrl = mid + half*smoothed_action
 
-        # configura novos alvos para os motores, de acordo com a ação
-        current = rsd.qpos(state["mjx_data"])
-        targets = current + action_value_action * rsd.enviroment_config.action_scale
-
-        # para evitar que os limites de junta do robô sejam desrespeitados
-        return state, {**pdata, "motor_targets":jnp.clip(targets, rsd.lowers, rsd.uppers)}
+        new_state = {**state,"last_action": smoothed_action}
+        return new_state, {**pdata, "ctrl":jnp.clip(ctrl, rsd.lowers, rsd.uppers)}
     return StateMonad(fn)
 
 def mujoco_step(rsd: RobotSharedData, pdata):
     def fn(state):
         mjx_data = rsd.mjx_step(
             state["mjx_data"],
-            pdata["motor_targets"],
+            pdata["ctrl"],
         )
         state = {**state, "mjx_data": mjx_data}
         return state , pdata
@@ -1000,12 +1001,6 @@ def create_step(network_settings: NetworksSettings, network_parameters: NetworkP
             return state, data
         return StateMonad(fn)
     
-    def last_action_update(pdata):
-        def fn(state):
-            state = {**state, "last_action": pdata["action"]}
-            return state, pdata
-        
-        return StateMonad(fn)
     
     def step_fn(progress, state, runpar: RunningParameters):
 
@@ -1023,8 +1018,7 @@ def create_step(network_settings: NetworksSettings, network_parameters: NetworkP
 
         # dá a forma final aos valores de retorno
         pl = pl.bind(shape_return)
-        pl = pl.bind(last_action_update)
-
+      
         return pl.run(state)
 
     return step_fn
@@ -1045,7 +1039,8 @@ def create_reset(network_settings: NetworksSettings, network_parameters: Network
              "goal": goal,
              "mjx_data": init_data, # Reset físico!
              "step": 0.0,           # Zera o contador de passos do episódio
-             "success_count": 0.0   # Zera o contador de sucessos
+             "success_count": 0.0,   # Zera o contador de sucessos
+             "last_action":0.0
          }
          return new_state, None
      return reset_fn

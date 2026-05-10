@@ -62,7 +62,7 @@ rng, network_settings, network_params = create_networks(rng, obs_size=27, action
 
 
 range_cfg = RangeConfig.init(
-    500,
+    300,
     pos_min = jnp.array([-0.468, -0.468, 0]),
     pos_max = jnp.array([0.468, 0.468, 0.664]),
     posvel_min = jnp.array([1e-2, 1e-2, 1e-2]),
@@ -91,7 +91,7 @@ settings = TrainingSettings.init(
     optimizer_creator  = create_optimizer,
     step_fn_creator = create_step,
     reset_fn_creator= create_reset,
-    num_envs= 8192,
+    num_envs= 4096,
     epochs=10,
     rollout_steps=64,
     target_success=0.75,
@@ -140,7 +140,7 @@ axs[0][1].set_title("Gradient norm (Euclidian, L2)")
 axs[0][1].set_xlabel("Epochs")
 axs[0][1].set_ylabel("Norm")
 
-axs[1][0].plot(mean_rewards_vs_timestamp)
+axs[1][0].semilogy(mean_rewards_vs_timestamp)
 axs[1][0].set_title("Mean (across envs) sum of rewards (across goals)")
 axs[1][0].set_xlabel("Rollout timestamp")
 axs[1][0].set_ylabel("Average Reward")
@@ -161,7 +161,7 @@ axs[2][1].set_title("Average err")
 axs[2][1].set_xlabel("Goal n°")
 axs[2][1].set_ylabel("avg err")
 
-
+plt.grid(True)
 plt.savefig(f"training_plots.png")
 print("\nTraining plots saved to training_plots.png")
 

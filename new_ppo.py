@@ -41,10 +41,8 @@ def rollout_step(
     # Caso stop_flag esteja como False
     def do_step(carry):
         _state, _obs_buffer, _action_buffer, _reward_buffer, _logprob_buffer, _ptr, _done_flag, _stop_flag = carry
-        rng, step_rng = jax.random.split(_state["rng"])
 
         # executa o ambiente
-        _state = {**_state, "rng": step_rng}  #atualiza o rng
         _state, data = step_fn(progress, _state, runpar)
 
         # adiciona o dado no buffer
@@ -60,8 +58,6 @@ def rollout_step(
             _ptr
         )
 
-        # faz o update do rng
-        _state["rng"] = rng
         _done_flag = data["done"] > 0.5 
         _stop_flag = _done_flag | (_state["step"] >= _reward_buffer.shape[0])
 
@@ -69,14 +65,13 @@ def rollout_step(
 
     # Caso stop_flag esteja como True
     def no_step(carry):  #
-        _state, _obs_buffer, _action_buffer, _reward_buffer, _logprob_buffer, _ptr, _done_flag, _stop_flag = carry
-        _state, _ = reset_fn(progress, _state, runpar)
-        return _state, _obs_buffer, _action_buffer, _reward_buffer, _logprob_buffer, _ptr, _done_flag, _stop_flag
+        return carry
+
+    #return do_step((state, obs_buffer, action_buffer, reward_buffer, logprob_buffer, ptr, done_flag, stop_flag))
 
     return jax.lax.cond(
         stop_flag, no_step, do_step, (state, obs_buffer, action_buffer, reward_buffer, logprob_buffer, ptr, done_flag, stop_flag)
     )
-
 
 def rollout(
     settings: TrainingSettings,
@@ -204,7 +199,7 @@ def ppo_loss(
     old_log_probs,      #shape: (num_envs, max_steps +1)
     clip_eps=0.2,
     c1=0.8,
-    c2=0.05,
+    c2=0.01,
     min_alpha_beta=1.0,
 ):
     """
