@@ -888,7 +888,7 @@ def reward_pipeline(progress, rsd: RobotSharedData,  env: StateMonad):
                         **pdata,
                         "reward": (
                             # penalidade por ações muito grandes
-                            pdata["reward"] - 0.1 * cost_action_rate(pdata["action"], state["last_action"]) 
+                            pdata["reward"] - 0.01 * cost_action_rate(pdata["action"], state["last_action"]) 
 
                             # Penalidade de torque para evitar movimentos espasmódicos
                             + jnp.sum(jnp.square(pdata["torques"])) * reward_config.torques_penalty.update(progress)
