@@ -10,15 +10,17 @@ Contem funções auxiliares com operações matemáticas auxiliares.
 """
 
 import jax
+import flax.serialization
 import mujoco
 from mujoco import MjModel  # type: ignore
 from etils import epath
 from jax import numpy as jnp
 from jax.scipy.special import gammaln, digamma
-from typing import Union, Dict, Any, List
+from typing import Union, Dict, Any, List, TypeVar, cast
 from monads import MaybeM
 
 mujoco: Any
+T = TypeVar("T")
 
 class Scheduler:
     @staticmethod
@@ -225,3 +227,19 @@ def maybe_filled_list(list)-> MaybeM:
     if isinstance(list, List) and len(list) > 0:
         return MaybeM.just(list)
     return MaybeM.nothing()
+
+
+def save(data, filename="data.msgpack"):
+    state_bytes = flax.serialization.to_bytes(data)
+
+    with open(filename, "wb") as f:
+        f.write(state_bytes)
+
+    print(f"Data saved successfully to: {filename}")
+
+def load(empty_params: T, filename="data.msgpack")->T:
+    with open(filename, "rb") as f:
+        state_bytes = f.read()
+
+    # restaura os parametros a partir dos dados serializados
+    return cast(T, flax.serialization.from_bytes(empty_params, state_bytes))

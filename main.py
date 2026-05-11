@@ -37,7 +37,8 @@ from new_ppo import TrainingSettings, ppo_train
 from etils import epath
 from robot import create_step, create_reset, RobotSharedData
 from config import MujocoSimConfig, RangeConfig, RewardConfig
-from networks import save_params, create_networks
+from networks import create_networks
+from utils import save
 
 
 ################################################FUNÇÕES AUXILIARES DE CONFIGURAÇÂO ###################################
@@ -62,7 +63,7 @@ rng, network_settings, network_params = create_networks(rng, obs_size=27, action
 
 
 range_cfg = RangeConfig.init(
-    100,
+    500,
     pos_min = jnp.array([-0.468, -0.468, 0]),
     pos_max = jnp.array([0.468, 0.468, 0.664]),
     posvel_min = jnp.array([1e-2, 1e-2, 1e-2]),
@@ -113,7 +114,10 @@ else:
 ############################################### PLOTAGEM / SALVAMENTOS ###############################################
 
 #salva os parametros treinados da rede
-save_params(network_params)
+save(network_params, "trained_params.msgpack")
+
+# salva as estatísticas de observação acumuladas
+save(runpar, "trained_runpar.msgpack")
 
 loss = metrics["avg_loss"]
 mean_rewards_vs_timestamp =  metrics["mean_rewards_vs_timestamp"]

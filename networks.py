@@ -10,25 +10,11 @@ import jax
 import flax.serialization
 import jax.numpy as jnp
 import flax.linen as nn
-from dataclassutils import NetworksSettings, NetworkParameters
+from dataclassutils import NetworksSettings, NetworkParameters, RunningParameters
 from typing import cast
 
 
 ##################################################### FUNÇÕES #########################################################
-def save_params(network_params: NetworkParameters, filename="trained_params.msgpack"):
-    state_bytes = flax.serialization.to_bytes(network_params)
-
-    with open(filename, "wb") as f:
-        f.write(state_bytes)
-
-    print(f"Model weights saved successfully to: {filename}")
-
-def load_params(empty_params: NetworkParameters, filename="trained_params.msgpack"):
-    with open(filename, "rb") as f:
-        state_bytes = f.read()
-
-    # restaura os parametros a partir dos dados serializados
-    return cast(NetworkParameters, flax.serialization.from_bytes(empty_params, state_bytes))
 
 #cria configuração relacionada as redes (actor/critic)
 def create_networks(rng:jax.Array, obs_size:int, action_size:int):

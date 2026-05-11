@@ -22,10 +22,12 @@ from etils import epath
 
 # Custom imports from your project files
 from robot import RobotSharedData, create_step, get_goal
-from networks import create_networks, load_params
+from networks import create_networks
 from dataclassutils import RunningParameters
 from config import MujocoSimConfig, RewardConfig, RangeConfig
+from utils import load
 
+OBS_SZ = 27
 def main():
     range_cfg = RangeConfig.init(
     300,
@@ -57,9 +59,12 @@ def main():
     
     # 3. Load Trained Model
     rng = jax.random.PRNGKey(0)
-    rng, net_settings, net_params = create_networks(rng, obs_size=27, action_size=6)
-    trained_params = load_params(net_params, "trained_params.msgpack")
-    runpar = RunningParameters.init((27,))
+    rng, net_settings, net_params = create_networks(rng, obs_size=OBS_SZ, action_size=6)
+    trained_params = load(net_params, "trained_params.msgpack")
+
+    runpar = RunningParameters.init((OBS_SZ,))
+    trained_runpar = load(runpar, "trained_runpar.msgpack")
+
     step_fn = jax.jit(create_step(net_settings, trained_params, rsd))
 
     # 4. Keyboard Control State
@@ -106,7 +111,7 @@ def main():
         "mjx_data": mx_data,
         "goal": goal,
         "rng": rng,
-        "obs": jnp.zeros((33,)),
+        "obs": jnp.zeros((OBS_SZ,)),
         "success_count": 0,
         "step": 0,
         "last_action": jnp.zeros((6,)),
@@ -140,7 +145,7 @@ def main():
             
 
             # B. Run the "Brain" (The PPO policy follows the goal)
-            current_state, pdata = step_fn(progress, current_state, runpar)
+            current_state, pdata = step_fn(progress, current_state, trained_runpar)
             
             # C. Sync MJX -> Viewer
             d_gpu_to_cpu = mjx.get_data(m_cpu, current_state["mjx_data"])

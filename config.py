@@ -21,7 +21,7 @@ class MujocoSimConfig:
 
     ctrl_dt: float = 1.0/5e1  # time step para o controle (s), 50Hz
     sim_dt: float = 1.0/1e3  # time step para a simulação (s), 1kHz
-    action_scale: float = 0.01
+    action_scale: float = 0.007
     obs_noise: float = 0.05
     impl: str = "jax"
     #nconmax: int = 24 * 8192
@@ -63,12 +63,12 @@ class RewardConfigParameter:
 class RewardConfig:
     # --- Incentivo de Posição ---
     # O ganho máximo quando o erro é zero
-    pos_incentive_gain = RewardConfigParameter.const(500.0)
+    pos_incentive_gain = RewardConfigParameter.const(1000.0)
 
     # 'Largura' da recompensa: se o erro for igual a sigma, a recompensa cai para ~36%
     # No início do treino (progress=0), sigma=0.5
     # No fim do treino (progress=1), sigma=0.1
-    pos_incentive_sigma = RewardConfigParameter.linear_tracking(0.8, 0.1)
+    pos_incentive_sigma = RewardConfigParameter.linear_tracking(0.8, 0.01)
 
     # --- Incentivo de Orientação ---
     rot_incentive_gain = RewardConfigParameter.const(100.0)
@@ -81,7 +81,7 @@ class RewardConfig:
     # --- Tolerância ---
     # No início do treino (progress=0), err_tol=0.8
     # No fim do treino (progress=1), err_tol=0.1
-    err_tol = RewardConfigParameter.linear_tracking(0.2, 0.01)
+    err_tol = RewardConfigParameter.linear_tracking(0.4, 0.01)
     
     # --- Regularização ---
     torques_penalty = RewardConfigParameter.const(-1e-6)
