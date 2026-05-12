@@ -94,7 +94,7 @@ settings = TrainingSettings.init(
     reset_fn_creator= create_reset,
     num_envs= 4096,
     epochs=10,
-    rollout_steps=50,
+    rollout_steps=128,
     target_success=0.75,
 )
 
