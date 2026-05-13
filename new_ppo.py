@@ -17,7 +17,6 @@ from enviroment import StateMonad
 def rollout_step(
     progress,
     step_fn,
-    reset_fn,
     runpar: RunningParameters,
     state: Dict[str, Any],
     obs_buffer: jax.Array,
@@ -98,10 +97,9 @@ def rollout(
     state_out_axes = {**state_in_axes, 'obs_stats': 0}
 
     step_fn = jax.jit(settings.step_fn_creator(settings.network_settings, network_params, settings.robot_shared_data))
-    reset_fn = jax.jit(settings.reset_fn_creator(settings.network_settings, network_params, settings.robot_shared_data))
 
     vmap_rollout_step = jax.vmap(
-        partial(rollout_step, runpar.progress.value, step_fn, reset_fn, runpar),
+        partial(rollout_step, runpar.progress.value, step_fn, runpar),
         in_axes=(
             state_in_axes,  # Arg 0: state (was Arg 1 in your version)
             0,               # Arg 1: obs_buffer
@@ -385,7 +383,7 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
     final_carry, (training_metrics, mean_envs_success_rate, rewards, err) = jax.lax.scan(
         new_goal_step,
         (runpar, settings.optimizer_state, starting_network_params, initial_state),
-        jnp.arange(settings.robot_shared_data.sim_config.active_numberof_goals),
+        jnp.arange(settings.active_numberof_goals),
     )
 
     # shape das perdas é: (numberof_goals, epochs,). Para exibir no formato (epochs, )
@@ -468,7 +466,7 @@ def create_initial_state(rng: jax.Array, progress, settings: TrainingSettings):
     def get_single_obs(s):
         # s é um único 'state' (scalars/unbatched arrays)
         # StateMonad.pure({}) inicia o pdata como um dict vazio
-        pipe = obs_pipeline(settings.robot_shared_data, runpar_init.obs_stat, StateMonad.pure({}))
+        pipe = obs_pipeline(settings.robot_shared_data, runpar_init.obs_stat, StateMonad.pure({}), settings.obs_noise_scale)
         _, out_data = pipe.run(s)
         return out_data["obs"]
 
