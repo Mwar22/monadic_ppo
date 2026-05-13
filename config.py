@@ -19,13 +19,13 @@ class MujocoSimConfig:
     Configurações base para o treino
     """
 
-    ctrl_dt: float = 1.0/5e1  # time step para o controle (s), 50Hz
-    sim_dt: float = 1.0/1e3  # time step para a simulação (s), 1kHz
+    ctrl_dt: float = 1.0 / 5e1  # time step para o controle (s), 50Hz
+    sim_dt: float = 1.0 / 1e3  # time step para a simulação (s), 1kHz
     action_scale: float = 0.007
     obs_noise: float = 0.05
     impl: str = "jax"
-    #nconmax: int = 24 * 8192
-    #njmax: int = 88
+    # nconmax: int = 24 * 8192
+    # njmax: int = 88
 
     @property
     def dt(self) -> float:
@@ -48,17 +48,18 @@ class RewardConfigParameter:
     @classmethod
     def linear_tracking(cls, start_value, end_value):
         def func(p):
-            return start_value - (start_value - end_value)*p
-        
+            return start_value - (start_value - end_value) * p
+
         return cls(func)
-    
+
     @classmethod
     def inv_sqrt_tracking(cls, start_value, end_value):
         def func(p):
-            return start_value - (start_value - end_value)*(p**0.5)
-        
+            return start_value - (start_value - end_value) * (p**0.5)
+
         return cls(func)
-        
+
+
 @struct.dataclass
 class RewardConfig:
     # --- Incentivo de Posição ---
@@ -77,15 +78,19 @@ class RewardConfig:
     # --- Sucesso e Falha ---
     success_reward = RewardConfigParameter.const(500.0)
     failure_penalty = RewardConfigParameter.const(-500.0)
-    
+
     # --- Tolerância ---
     # No início do treino (progress=0), err_tol=0.8
     # No fim do treino (progress=1), err_tol=0.1
     err_tol = RewardConfigParameter.linear_tracking(0.4, 0.01)
-    
+
     # --- Regularização ---
     torques_penalty = RewardConfigParameter.const(-1e-6)
     velocity_penalty = RewardConfigParameter.const(-1e-6)
+
+    # cost action - penalidade por diferença entra ação atual e passada
+    # penaliza delta de ações muito grandes no começo
+    tar_penalty_gain = RewardConfigParameter.linear_tracking(0.1, 0.01)
 
 
 @struct.dataclass
@@ -105,20 +110,18 @@ class VectorRange:
         z = jax.random.normal(subkey, shape=(dim,))
 
         return rng, mean + std * z
-    
+
+
 @struct.dataclass
 class RangeConfig:
     numberof_goals: int
-    position: VectorRange 
-    position_velocities: VectorRange 
+    position: VectorRange
+    position_velocities: VectorRange
     orientation: VectorRange
 
     @classmethod
-    def init(cls,
-        numberof_goals,
-        pos_min, pos_max,
-        posvel_min, posvel_max,
-        ori_min, ori_max
+    def init(
+        cls, numberof_goals, pos_min, pos_max, posvel_min, posvel_max, ori_min, ori_max
     ):
         return cls(
             numberof_goals,
@@ -126,7 +129,3 @@ class RangeConfig:
             VectorRange(posvel_min, posvel_max),
             VectorRange(ori_min, ori_max),
         )
-
-    
-
-

@@ -9,12 +9,12 @@ Arquivo com o código principal de treinamento
 import os
 
 # Tell XLA to use Triton GEMM, this improves steps/sec by ~30% on some GPUs
-xla_flags = os.environ.get('XLA_FLAGS', '')
+xla_flags = os.environ.get("XLA_FLAGS", "")
 
-xla_flags += ' --xla_gpu_triton_gemm_any=True'
-os.environ['XLA_FLAGS'] = xla_flags
+xla_flags += " --xla_gpu_triton_gemm_any=True"
+os.environ["XLA_FLAGS"] = xla_flags
 
-#alocação dinamica
+# alocação dinamica
 os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 
 # evita do jax prealocar a gpu inteira
@@ -25,8 +25,9 @@ os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.60"
 
 import jax
 from jax import config
+
 config.update("jax_enable_x64", False)
-print(f"jax_enable_x64: {jax.config.read('jax_enable_x64')}")    
+print(f"jax_enable_x64: {jax.config.read('jax_enable_x64')}")
 
 
 import optax
@@ -42,18 +43,15 @@ from utils import save
 
 
 ################################################FUNÇÕES AUXILIARES DE CONFIGURAÇÂO ###################################
-#cria o otimizazor
+# cria o otimizazor
 def create_optimizer(steps):
-    
     lr_scheduler = optax.schedules.linear_schedule(
-        init_value=5e-4,
-        end_value=5e-5,
-        transition_steps=steps
+        init_value=5e-4, end_value=5e-5, transition_steps=steps
     )
 
     return optax.chain(
-        optax.clip_by_global_norm(1.0), # gradient clipping
-        optax.adam(lr_scheduler)
+        optax.clip_by_global_norm(1.0),  # gradient clipping
+        optax.adam(lr_scheduler),
     )
 
 
@@ -64,12 +62,12 @@ rng, network_settings, network_params = create_networks(rng, obs_size=27, action
 
 range_cfg = RangeConfig.init(
     500,
-    pos_min = jnp.array([-0.468, -0.468, 0]),
-    pos_max = jnp.array([0.468, 0.468, 0.664]),
-    posvel_min = jnp.array([1e-2, 1e-2, 1e-2]),
-    posvel_max = jnp.array([0.1, 0.1, 0.1]),
-    ori_min = jnp.array([-3.14, -3.14, -3.14]),
-    ori_max = jnp.array([3.14, 3.14, 3.14]),
+    pos_min=jnp.array([-0.468, -0.468, 0]),
+    pos_max=jnp.array([0.468, 0.468, 0.664]),
+    posvel_min=jnp.array([1e-2, 1e-2, 1e-2]),
+    posvel_max=jnp.array([0.1, 0.1, 0.1]),
+    ori_min=jnp.array([-3.14, -3.14, -3.14]),
+    ori_max=jnp.array([3.14, 3.14, 3.14]),
 )
 
 robot_shared_data = RobotSharedData.init(
@@ -79,7 +77,7 @@ robot_shared_data = RobotSharedData.init(
     MujocoSimConfig(),
     RewardConfig(),
     range_cfg,
-    robot_name="thor"
+    robot_name="thor",
 )
 
 if robot_shared_data.value is None:
@@ -89,10 +87,10 @@ settings = TrainingSettings.init(
     network_settings,
     network_params,
     robot_shared_data.value,
-    optimizer_creator  = create_optimizer,
-    step_fn_creator = create_step,
-    reset_fn_creator= create_reset,
-    num_envs= 4096,
+    optimizer_creator=create_optimizer,
+    step_fn_creator=create_step,
+    reset_fn_creator=create_reset,
+    num_envs=4096,
     epochs=10,
     rollout_steps=128,
     target_success=0.75,
@@ -108,29 +106,35 @@ if disable_jit:
 else:
     print("JIT compiling and starting training...")
 
-(runpar, optim_state, network_params, state), metrics = ppo_train(rng, network_params, settings)
+(runpar, optim_state, network_params, state), metrics = ppo_train(
+    rng, network_params, settings
+)
 
 
 ############################################### PLOTAGEM / SALVAMENTOS ###############################################
 
-#salva os parametros treinados da rede
+# salva os parametros treinados da rede
 save(network_params, "trained_params.msgpack")
 
 # salva as estatísticas de observação acumuladas
 save(runpar, "trained_runpar.msgpack")
 
 loss = metrics["avg_loss"]
-mean_rewards_vs_timestamp =  metrics["mean_rewards_vs_timestamp"]
+mean_rewards_vs_timestamp = metrics["mean_rewards_vs_timestamp"]
 mean_rewards_vs_goals = metrics["mean_rewards_vs_goals"]
-grad_norm =  metrics["avg_gradnorm"]
-entropy =  metrics["avg_entropy"]
+grad_norm = metrics["avg_gradnorm"]
+entropy = metrics["avg_entropy"]
 
 avg_loss = jnp.mean(loss[-20:])
 print(f" Training finished! Average loss of last 20 steps: {avg_loss:.4f}")
 
 # plotagem dos dados
-print(f"mean_rewards_vs_goals: min = {jnp.min(mean_rewards_vs_goals)}, max = {jnp.max(mean_rewards_vs_goals)}")
-print(f"mean_rewards_vs_timestamp: min = {jnp.min(mean_rewards_vs_timestamp)}, max = {jnp.max(mean_rewards_vs_timestamp)}")
+print(
+    f"mean_rewards_vs_goals: min = {jnp.min(mean_rewards_vs_goals)}, max = {jnp.max(mean_rewards_vs_goals)}"
+)
+print(
+    f"mean_rewards_vs_timestamp: min = {jnp.min(mean_rewards_vs_timestamp)}, max = {jnp.max(mean_rewards_vs_timestamp)}"
+)
 
 
 fig, axs = plt.subplots(3, 2, figsize=(10, 8), tight_layout=True)
@@ -146,13 +150,13 @@ axs[0][1].set_xlabel("Epochs")
 axs[0][1].set_ylabel("Norm")
 axs[0][1].grid(True)
 
-axs[1][0].semilogy(mean_rewards_vs_timestamp +1)
+axs[1][0].semilogy(mean_rewards_vs_timestamp + 1)
 axs[1][0].set_title("Mean (across envs) sum of rewards (across goals)")
 axs[1][0].set_xlabel("Rollout timestamp")
 axs[1][0].set_ylabel("Average Reward")
 axs[1][0].grid(True)
 
-axs[1][1].plot(mean_rewards_vs_goals)
+axs[1][1].semilogy(mean_rewards_vs_goals + 1)
 axs[1][1].set_title("Mean (across envs) sum of rewards (across rollout timestamps)")
 axs[1][1].set_xlabel("Goal n°")
 axs[1][1].set_ylabel("Average Reward")
