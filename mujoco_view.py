@@ -27,23 +27,27 @@ from dataclassutils import RunningParameters
 from config import MujocoSimConfig, RewardConfig, RangeConfig
 from utils import load
 
-OBS_SZ = 27
+OBS_SZ = 24
 def main():
     range_cfg = RangeConfig.init(
-    300,
-    pos_min = jnp.array([-0.468, -0.468, 0]),
-    pos_max = jnp.array([0.468, 0.468, 0.664]),
-    posvel_min = jnp.array([1e-2, 1e-2, 1e-2]),
-    posvel_max = jnp.array([0.1, 0.1, 0.1]),
-    ori_min = jnp.array([-3.14, -3.14, -3.14]),
-    ori_max = jnp.array([3.14, 3.14, 3.14]),
-)
+        pos_min = jnp.array([-0.468, -0.468, 0]),
+        pos_max = jnp.array([0.468, 0.468, 0.664]),
+        posvel_min = jnp.array([1e-2, 1e-2, 1e-2]),
+        posvel_max = jnp.array([0.1, 0.1, 0.1]),
+        ori_min = jnp.array([-3.14, -3.14, -3.14]),
+        ori_max = jnp.array([3.14, 3.14, 3.14]),
+    )
 
+    sim_cfg = MujocoSimConfig.init(
+        ctrl_freq=50.0,
+        sim_freq=1000.0,
+    )
+    
     robot_shared_data = RobotSharedData.init(
         epath.Path("model/joystick_env.xml"),
         epath.Path("model"),
         epath.Path("model/meshes"),
-        MujocoSimConfig(),
+        sim_cfg,
         RewardConfig(),
         range_cfg,
         robot_name="thor"
@@ -65,7 +69,7 @@ def main():
     runpar = RunningParameters.init((OBS_SZ,))
     trained_runpar = load(runpar, "trained_runpar.msgpack")
 
-    step_fn = jax.jit(create_step(net_settings, trained_params, rsd))
+    step_fn = jax.jit(create_step(rsd, net_settings, trained_params, action_scale = 0.001, obs_noise_scale = 0.01))
 
     # 4. Keyboard Control State
     # Starting target positions and Euler rotations
@@ -127,8 +131,7 @@ def main():
     with mujoco.viewer.launch_passive(m_cpu, d_cpu, key_callback=key_callback) as viewer:
         print("\n" + "="*30)
         print("KEYBOARD CONTROL ACTIVE")
-        print("WASD: Move X/Y | QE: Move Z")
-        print("HOLD CTRL + WASDQE: Rotations")
+        print("Arrows: Move X/Y | PgUp/PgDn: Move Z")
         print("="*30 + "\n")
 
         while viewer.is_running():

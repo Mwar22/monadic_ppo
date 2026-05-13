@@ -693,14 +693,13 @@ def concat_obs_as_array(d: Dict[str, Any]) -> StateMonad:
         # Manually list keys to ensure order and handle scalars
         obs_list = [
             state["goal"]["goal_position_coordinates"],  # (3,)
-            state["goal"]["goal_position_velocities"],  # (3,)
             state["last_action"],  # (6,)
             d["tool_position"],  # (3,)
             d["torques"],  # (6,)
             d["joint_angles"],  # (6,)
         ]
         obs_array = jnp.concatenate(obs_list)
-        # 3 * (3,)  +  3 * (6, ) + (4,)= 27)
+        # 2 * (3,)  +  3 * (6, ) = 24)
 
         return state, {**d, "obs_array": obs_array}
 
@@ -1031,9 +1030,25 @@ def mujoco_step(rsd: RobotSharedData, pdata):
     return StateMonad(fn)
 
 
-def create_step(
+def create_training_step(
     training_settings: TrainingSettings,
     network_parameters: NetworkParameters,
+):
+    return create_step(
+        training_settings.robot_shared_data,
+        training_settings.network_settings,
+        network_parameters,
+        training_settings.action_scale,
+        training_settings.obs_noise_scale
+    )
+
+
+def create_step(
+    robot_shared_data: RobotSharedData,
+    network_settings: NetworksSettings,
+    network_parameters: NetworkParameters,
+    action_scale:float,
+    obs_noise_scale: float,
 ):
     """
     state.keys() = ["rng", "step", "goal", "obs_history", "action", "mjx_data"]
@@ -1056,20 +1071,20 @@ def create_step(
     def step_fn(progress, state, runpar: RunningParameters):
         # obtem uma ação pela observação anterior
         pl = (
-            get_action(training_settings.network_settings, network_parameters)
+            get_action(network_settings, network_parameters)
             .bind(
-                lambda pdata: get_motor_targets(training_settings.robot_shared_data, pdata, training_settings.action_scale)
+                lambda pdata: get_motor_targets(robot_shared_data, pdata, action_scale)
             )  # obtem para os motores segundo a ação
             .bind(
-                lambda pdata: mujoco_step(training_settings.robot_shared_data, pdata)
+                lambda pdata: mujoco_step(robot_shared_data, pdata)
             )  # movimenta no mujoco
         )
 
         # obtem novas observações
-        pl = obs_pipeline(training_settings.robot_shared_data, runpar.obs_stat, pl, training_settings.obs_noise_scale)
+        pl = obs_pipeline(robot_shared_data, runpar.obs_stat, pl, obs_noise_scale)
 
         # de acordo com as observações obtem a recompensa
-        pl = reward_pipeline(progress, training_settings.robot_shared_data, pl)
+        pl = reward_pipeline(progress, robot_shared_data, pl)
 
         # dá a forma final aos valores de retorno
         pl = pl.bind(shape_return)

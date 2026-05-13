@@ -36,7 +36,7 @@ import matplotlib.pyplot as plt
 from jax import config
 from new_ppo import TrainingSettings, ppo_train
 from etils import epath
-from robot import create_step, RobotSharedData
+from robot import create_training_step, RobotSharedData
 from config import MujocoSimConfig, RangeConfig, RewardConfig
 from networks import create_networks
 from utils import save
@@ -57,7 +57,7 @@ def create_optimizer(steps):
 
 ################################################### INICIALIZAÇÂO #####################################################
 rng = jax.random.PRNGKey(42)
-rng, network_settings, network_params = create_networks(rng, obs_size=27, action_size=6)
+rng, network_settings, network_params = create_networks(rng, obs_size=24, action_size=6)
 
 
 range_cfg = RangeConfig.init(
@@ -92,14 +92,14 @@ settings = TrainingSettings.init(
     network_params,
     robot_shared_data.value,
     optimizer_creator=create_optimizer,
-    step_fn_creator=create_step,
+    step_fn_creator=create_training_step,
     num_envs=4096,
     epochs=10,
     action_scale=0.007,
     obs_noise_scale=0.001,
     numberof_goals=200,
     rollout_steps=128,
-    target_success=0.75,
+    target_success=0.5,
 )
 
 
