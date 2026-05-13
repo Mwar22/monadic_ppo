@@ -96,7 +96,7 @@ def rollout(
     }
     state_out_axes = {**state_in_axes, 'obs_stats': 0}
 
-    step_fn = jax.jit(settings.step_fn_creator(settings.network_settings, network_params, settings.robot_shared_data))
+    step_fn = jax.jit(settings.step_fn_creator(settings, network_params))
 
     vmap_rollout_step = jax.vmap(
         partial(rollout_step, runpar.progress.value, step_fn, runpar),
