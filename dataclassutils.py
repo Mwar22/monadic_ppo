@@ -185,7 +185,7 @@ class TrainingSettings:
 
     @property
     def active_numberof_goals(self)-> int:
-        return self.early_stop if self.early_stop else self.numberof_goals
+        return self.early_stop if self.early_stop > 0 else self.numberof_goals
 
 
     @classmethod
