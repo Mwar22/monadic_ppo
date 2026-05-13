@@ -22,11 +22,31 @@ class MujocoSimConfig:
     ctrl_dt: float = 1.0 / 5e1  # time step para o controle (s), 50Hz
     sim_dt: float = 1.0 / 1e3  # time step para a simulação (s), 1kHz
     action_scale: float = 0.007
-    obs_noise: float = 0.05
-    impl: str = "jax"
-    # nconmax: int = 24 * 8192
-    # njmax: int = 88
+    obs_noise_scale: float = 0.001
+    
+    numberof_goals: int = 100
+    early_stop: int = -1
 
+    impl: str = "jax"
+
+    @classmethod
+    def init(cls,
+            ctrl_freq: float = 50.0,
+            sim_freq:float = 1000,
+            action_scale:float = 0.001,
+            obs_noise_scale:float = 0.01,
+            numberof_goals: int = 10,
+            early_stop:int = -1
+        ):
+        return cls(
+            1.0/ctrl_freq,
+            1.0/sim_freq,
+            action_scale,
+            obs_noise_scale,
+            numberof_goals,
+            early_stop
+        )
+    
     @property
     def dt(self) -> float:
         return self.ctrl_dt
@@ -35,6 +55,10 @@ class MujocoSimConfig:
     def n_substeps(self) -> int:
         """Number of sim steps per control step."""
         return int(round(self.dt / self.sim_dt))
+    
+    @property
+    def active_numberof_goals(self)-> int:
+        return self.early_stop if self.early_stop else self.numberof_goals
 
 
 @struct.dataclass
@@ -69,14 +93,14 @@ class RewardConfig:
     # 'Largura' da recompensa: se o erro for igual a sigma, a recompensa cai para ~36%
     # No início do treino (progress=0), sigma=0.5
     # No fim do treino (progress=1), sigma=0.1
-    pos_incentive_sigma = RewardConfigParameter.linear_tracking(0.8, 0.01)
+    pos_incentive_sigma = RewardConfigParameter.linear_tracking(0.8, 0.02)
 
     # --- Incentivo de Orientação ---
-    rot_incentive_gain = RewardConfigParameter.const(100.0)
-    rot_incentive_sigma = RewardConfigParameter.linear_tracking(0.5, 0.05)
+    #rot_incentive_gain = RewardConfigParameter.const(100.0)
+    #rot_incentive_sigma = RewardConfigParameter.linear_tracking(0.5, 0.05)
 
     # --- Sucesso e Falha ---
-    success_reward = RewardConfigParameter.const(500.0)
+    success_reward = RewardConfigParameter.const(1000.0)
     failure_penalty = RewardConfigParameter.const(-500.0)
 
     # --- Tolerância ---
@@ -114,17 +138,15 @@ class VectorRange:
 
 @struct.dataclass
 class RangeConfig:
-    numberof_goals: int
     position: VectorRange
     position_velocities: VectorRange
     orientation: VectorRange
 
     @classmethod
     def init(
-        cls, numberof_goals, pos_min, pos_max, posvel_min, posvel_max, ori_min, ori_max
+        cls, pos_min, pos_max, posvel_min, posvel_max, ori_min, ori_max
     ):
         return cls(
-            numberof_goals,
             VectorRange(pos_min, pos_max),
             VectorRange(posvel_min, posvel_max),
             VectorRange(ori_min, ori_max),

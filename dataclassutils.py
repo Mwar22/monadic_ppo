@@ -175,8 +175,18 @@ class TrainingSettings:
     optimizer: optax.GradientTransformationExtraArgs
     optimizer_state: optax.OptState
     step_fn_creator: Callable
-    reset_fn_creator: Callable
     target_success: float
+
+    action_scale: float = 0.007
+    obs_noise_scale: float = 0.001
+    
+    numberof_goals: int = 100
+    early_stop: int = -1
+
+    @property
+    def active_numberof_goals(self)-> int:
+        return self.early_stop if self.early_stop else self.numberof_goals
+
 
     @classmethod
     def init(
@@ -185,17 +195,20 @@ class TrainingSettings:
         network_params: NetworkParameters,
         robot_shared_settings: RobotSharedData,
         optimizer_creator: Callable[[int], optax.GradientTransformationExtraArgs],
-        step_fn_creator:Callable[[NetworksSettings, NetworkParameters, RobotSharedData], Callable],
-        reset_fn_creator:Callable[[NetworksSettings, NetworkParameters, RobotSharedData], Callable],
+        step_fn_creator:Callable[[Self, NetworkParameters], Callable],
         num_envs: int = 1,
         epochs: int = 1,
+        action_scale:float = 0.001,
+        obs_noise_scale:float = 0.01,
+        numberof_goals: int = 10,
+        early_stop:int = -1,
         rollout_steps: int = 1,
         gamma: float = 0.99,
         gae_lambda: float = 0.95,
         target_success: float = 0.6,
     ):
         # numero de passos para o escalonador de LR baseado na configuração
-        total_steps = robot_shared_settings.range_config.numberof_goals * epochs
+        total_steps = numberof_goals * epochs
 
         optimizer = optimizer_creator(total_steps)
         optimizer_params = optimizer.init(cast(optax.Params, network_params))
@@ -212,8 +225,11 @@ class TrainingSettings:
             optimizer,
             optimizer_params,
             step_fn_creator,
-            reset_fn_creator,
-            target_success
+            target_success,
+            action_scale,
+            obs_noise_scale,
+            numberof_goals,
+            early_stop
         )
     
 

@@ -29,7 +29,7 @@ from utils import (
     maybe_filled_list,
 )
 from typing import TYPE_CHECKING, runtime_checkable
-from monads import MaybeM, ListM, ReaderWriterM
+from monads import MaybeM
 
 if TYPE_CHECKING:
     from dataclassutils import (
@@ -37,6 +37,7 @@ if TYPE_CHECKING:
         NetworkParameters,
         RunningParameters,
         RunningAvg,
+        TrainingSettings,
     )
 
 ########################################## para o pylance não reclamar #############################################
@@ -341,7 +342,7 @@ class RobotSharedData:
     tool_tip_id: int
     tool_base_id: int
     ground_id: int
-    enviroment_config: MujocoSimConfig
+    sim_config: MujocoSimConfig
     reward_config: RewardConfig
     range_config: RangeConfig
 
@@ -351,7 +352,7 @@ class RobotSharedData:
         xml_path: epath.Path,
         model_path: epath.Path,
         meshes_path: epath.Path,
-        enviroment_config: MujocoSimConfig,
+        sim_config: MujocoSimConfig,
         reward_config: RewardConfig,
         range_config: RangeConfig,
         robot_name: str,
@@ -372,14 +373,14 @@ class RobotSharedData:
         )
 
         # configura o timestep
-        mj_model.opt.timestep = enviroment_config.sim_dt
+        mj_model.opt.timestep = sim_config.sim_dt
 
         # dimensões de altura e largura
         mj_model.vis.global_.offwidth = 3840
         mj_model.vis.global_.offheight = 2160
 
         # cria o modelo mjx na gpu
-        mjx_model = mjx.put_model(mj_model, impl=str(enviroment_config.impl))
+        mjx_model = mjx.put_model(mj_model, impl=str(sim_config.impl))
 
         m_joints = Joints.init(mj_model, robot_name)
         if m_joints.value is None:
@@ -411,7 +412,7 @@ class RobotSharedData:
                 tool_tip_id,
                 tool_base_id,
                 ground_id,
-                enviroment_config,
+                sim_config,
                 reward_config,
                 range_config,
             )
@@ -494,7 +495,7 @@ class RobotSharedData:
             data = mjx.step(self.mjx_model, data)
             return data, None
 
-        return jax.lax.scan(single_step, data, (), self.enviroment_config.n_substeps)[0]
+        return jax.lax.scan(single_step, data, (), self.sim_config.n_substeps)[0]
 
 
 ##############################################################################################################
@@ -798,7 +799,7 @@ def debug(pdata, name):
         """
 
 
-def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningAvg, env: StateMonad):
+def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningAvg, env: StateMonad, obs_noise_scale: float):
     return (
         env.bind(
             lambda pdata: StateMonad(
@@ -865,10 +866,10 @@ def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningAvg, env: StateMonad):
         )
         .bind(lambda pdata: concat_obs_as_array(pdata))
         .map(lambda pdata: {**pdata, "obs": pdata["obs_array"]})
+        .bind(
+            lambda pdata: update_obs(pdata, obs_noise_scale)
+        )
         .bind(lambda pdata: normalize_obs(pdata, obs_stats))
-        # .bind(
-        #    lambda pdata: update_obs(pdata, obs_stats, rsd.enviroment_config.obs_noise)
-        # )
         # .bind(lambda pdata: debug(pdata, "position_error"))
         # .bind(lambda pdata: debug(pdata, "orientation_error"))
         .bind(
@@ -909,7 +910,7 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
                         reward_config.pos_incentive_sigma.update(progress),
                         pdata["position_error"],
                     )
-                    + (1 - pdata["position_error"]) * 10
+                    #+ (1 - pdata["position_error"]) * 10
                 ),
             }
         )
@@ -922,12 +923,11 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
                         "reward": (
                             # penalidade por ações muito grandes
                             pdata["reward"]
-                            - reward_config.tar_penalty_gain.update(progress)
-                            * cost_action_rate(pdata["action"], state["last_action"])
-                            
+                            - reward_config.tar_penalty_gain.update(progress) * cost_action_rate(pdata["action"], state["last_action"])
+
                             # Penalidade de torque para evitar movimentos espasmódicos
-                            + jnp.sum(jnp.square(pdata["torques"]))
-                            * reward_config.torques_penalty.update(progress)
+                            + jnp.sum(jnp.square(pdata["torques"])) * reward_config.torques_penalty.update(progress)
+
                             # Penalidade de velocidade para evitar movimentos espasmódicos
                             # + jnp.sum(jnp.square(pdata["joint_vel"])) * reward_config.velocity_penalty.update(progress)
                         ),
@@ -952,10 +952,7 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
             lambda pdata: {
                 **pdata,
                 "success": (
-                    pdata["position_error"]
-                    < pdata[
-                        "err_tol"
-                    ]  # & (pdata["orientation_error"] < pdata["err_tol"]
+                    pdata["position_error"] < pdata["err_tol"]  # & (pdata["orientation_error"] < pdata["err_tol"]
                 ),
                 "failure": jnp.any(pdata["joint_angles"] < rsd.lowers)
                 | jnp.any(pdata["joint_angles"] > rsd.uppers),
@@ -970,12 +967,11 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
                     {
                         **pdata,
                         "done": pdata["success"] | pdata["failure"],
+
                         # Bônus de Sucesso
                         "reward": pdata["reward"]
-                        + pdata["success"]
-                        * reward_config.success_reward.update(progress)
-                        + pdata["failure"]
-                        * reward_config.failure_penalty.update(progress),
+                        + pdata["success"] * reward_config.success_reward.update(progress)
+                        + pdata["failure"]* reward_config.failure_penalty.update(progress),
                     },
                 )
             )
@@ -1010,11 +1006,11 @@ def get_action(
     return StateMonad(fn)
 
 
-def get_motor_targets(rsd: RobotSharedData, pdata, alpha=0.8):
+def get_motor_targets(rsd: RobotSharedData, pdata, action_scale, alpha=0.8):
     def fn(state):
         smoothed_action = alpha * state["last_action"] + (1 - alpha) * pdata["action"]
         mid = 0.5 * (rsd.uppers + rsd.lowers)
-        half = 0.5 * rsd.enviroment_config.action_scale * (rsd.uppers - rsd.lowers)
+        half = 0.5 * action_scale * (rsd.uppers - rsd.lowers)
         ctrl = mid + half * smoothed_action
 
         new_state = {**state, "last_action": smoothed_action}
@@ -1036,9 +1032,8 @@ def mujoco_step(rsd: RobotSharedData, pdata):
 
 
 def create_step(
-    network_settings: NetworksSettings,
+    training_settings: TrainingSettings,
     network_parameters: NetworkParameters,
-    robot_shared_data: RobotSharedData,
 ):
     """
     state.keys() = ["rng", "step", "goal", "obs_history", "action", "mjx_data"]
@@ -1061,20 +1056,20 @@ def create_step(
     def step_fn(progress, state, runpar: RunningParameters):
         # obtem uma ação pela observação anterior
         pl = (
-            get_action(network_settings, network_parameters)
+            get_action(training_settings.network_settings, network_parameters)
             .bind(
-                lambda pdata: get_motor_targets(robot_shared_data, pdata)
+                lambda pdata: get_motor_targets(training_settings.robot_shared_data, pdata, training_settings.action_scale)
             )  # obtem para os motores segundo a ação
             .bind(
-                lambda pdata: mujoco_step(robot_shared_data, pdata)
+                lambda pdata: mujoco_step(training_settings.robot_shared_data, pdata)
             )  # movimenta no mujoco
         )
 
         # obtem novas observações
-        pl = obs_pipeline(robot_shared_data, runpar.obs_stat, pl)
+        pl = obs_pipeline(training_settings.robot_shared_data, runpar.obs_stat, pl, training_settings.obs_noise_scale)
 
         # de acordo com as observações obtem a recompensa
-        pl = reward_pipeline(progress, robot_shared_data, pl)
+        pl = reward_pipeline(progress, training_settings.robot_shared_data, pl)
 
         # dá a forma final aos valores de retorno
         pl = pl.bind(shape_return)
@@ -1082,32 +1077,3 @@ def create_step(
         return pl.run(state)
 
     return step_fn
-
-
-def create_reset(
-    network_settings: NetworksSettings,
-    network_parameters: NetworkParameters,
-    robot_shared_data: RobotSharedData,
-):
-    def reset_fn(progress, state, runpar: RunningParameters):
-        # 1. Sorteia o novo alvo
-        rng, goal = get_goal(robot_shared_data.range_config, progress, state["rng"])
-
-        # 2. Reseta os dados físicos do MuJoCo para a pose inicial
-        # Isso garante que se o robô quebrou/caíu, ele volte a ficar em pé
-        mjx_model = robot_shared_data.mjx_model
-        init_data = mjx.make_data(mjx_model)  # Pose padrão do modelo
-
-        new_state = {
-            **state,
-            "rng": rng,
-            "goal": goal,
-            "mjx_data": init_data,  # Reset físico!
-            "step": 0.0,  # Zera o contador de passos do episódio
-            "success_count": 0.0,  # Zera o contador de sucessos
-            "last_action": 0.0,
-        }
-        return new_state, None
-
-    return reset_fn
-

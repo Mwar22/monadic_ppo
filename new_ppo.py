@@ -385,7 +385,7 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
     final_carry, (training_metrics, mean_envs_success_rate, rewards, err) = jax.lax.scan(
         new_goal_step,
         (runpar, settings.optimizer_state, starting_network_params, initial_state),
-        jnp.arange(settings.robot_shared_data.range_config.numberof_goals),
+        jnp.arange(settings.robot_shared_data.sim_config.active_numberof_goals),
     )
 
     # shape das perdas é: (numberof_goals, epochs,). Para exibir no formato (epochs, )

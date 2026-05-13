@@ -122,7 +122,7 @@ def main():
 
     # 5. Loop with manual goal updates
     slow_motion_factor = 1.0 # Real-time for better control feel
-    frame_dt = (m_cpu.opt.timestep * rsd.enviroment_config.n_substeps) * slow_motion_factor
+    frame_dt = (m_cpu.opt.timestep * rsd.sim_config.n_substeps) * slow_motion_factor
     
     with mujoco.viewer.launch_passive(m_cpu, d_cpu, key_callback=key_callback) as viewer:
         print("\n" + "="*30)

@@ -36,7 +36,7 @@ import matplotlib.pyplot as plt
 from jax import config
 from new_ppo import TrainingSettings, ppo_train
 from etils import epath
-from robot import create_step, create_reset, RobotSharedData
+from robot import create_step, RobotSharedData
 from config import MujocoSimConfig, RangeConfig, RewardConfig
 from networks import create_networks
 from utils import save
@@ -61,7 +61,6 @@ rng, network_settings, network_params = create_networks(rng, obs_size=27, action
 
 
 range_cfg = RangeConfig.init(
-    500,
     pos_min=jnp.array([-0.468, -0.468, 0]),
     pos_max=jnp.array([0.468, 0.468, 0.664]),
     posvel_min=jnp.array([1e-2, 1e-2, 1e-2]),
@@ -70,11 +69,16 @@ range_cfg = RangeConfig.init(
     ori_max=jnp.array([3.14, 3.14, 3.14]),
 )
 
+sim_cfg = MujocoSimConfig.init(
+    ctrl_freq=50.0,
+    sim_freq=1000.0,
+)
+
 robot_shared_data = RobotSharedData.init(
     epath.Path("model/joystick_env.xml"),
     epath.Path("model"),
     epath.Path("model/meshes"),
-    MujocoSimConfig(),
+    sim_cfg,
     RewardConfig(),
     range_cfg,
     robot_name="thor",
@@ -89,9 +93,11 @@ settings = TrainingSettings.init(
     robot_shared_data.value,
     optimizer_creator=create_optimizer,
     step_fn_creator=create_step,
-    reset_fn_creator=create_reset,
     num_envs=4096,
     epochs=10,
+    action_scale=0.007,
+    obs_noise_scale=0.001,
+    numberof_goals=200,
     rollout_steps=128,
     target_success=0.75,
 )
