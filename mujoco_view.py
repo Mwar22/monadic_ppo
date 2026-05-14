@@ -149,6 +149,7 @@ def main():
 
             # B. Run the "Brain" (The PPO policy follows the goal)
             current_state, pdata = step_fn(progress, current_state, trained_runpar)
+
             
             # C. Sync MJX -> Viewer
             d_gpu_to_cpu = mjx.get_data(m_cpu, current_state["mjx_data"])

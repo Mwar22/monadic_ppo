@@ -668,7 +668,7 @@ def update_obs_old(data, obs_noise=0.0):
 def update_obs(data, obs_noise=0.0):
     def func(state):
         rng, rng1 = jax.random.split(state["rng"])
-        obs = data["obs_array"]
+        obs = data["obs"]
 
         # Clip direto para estabilidade
         obs_processed = jnp.clip(obs, -5.0, 5.0)
@@ -701,7 +701,7 @@ def concat_obs_as_array(d: Dict[str, Any]) -> StateMonad:
         obs_array = jnp.concatenate(obs_list)
         # 2 * (3,)  +  3 * (6, ) = 24)
 
-        return state, {**d, "obs_array": obs_array}
+        return state, {**d, "obs": obs_array}
 
     return StateMonad(func)
 
@@ -864,7 +864,6 @@ def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningAvg, env: StateMonad, o
             }
         )
         .bind(lambda pdata: concat_obs_as_array(pdata))
-        .map(lambda pdata: {**pdata, "obs": pdata["obs_array"]})
         .bind(
             lambda pdata: update_obs(pdata, obs_noise_scale)
         )
@@ -876,7 +875,7 @@ def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningAvg, env: StateMonad, o
                 lambda state: (
                     {
                         **state,
-                        "err": jnp.minimum(state["err"], pdata["position_error"]),
+                        "err": pdata["position_error"],
                     },
                     pdata,
                 )

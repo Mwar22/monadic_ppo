@@ -21,30 +21,17 @@ class MujocoSimConfig:
 
     ctrl_dt: float = 1.0 / 5e1  # time step para o controle (s), 50Hz
     sim_dt: float = 1.0 / 1e3  # time step para a simulação (s), 1kHz
-    action_scale: float = 0.007
-    obs_noise_scale: float = 0.001
     
-    numberof_goals: int = 100
-    early_stop: int = -1
-
     impl: str = "jax"
 
     @classmethod
     def init(cls,
             ctrl_freq: float = 50.0,
             sim_freq:float = 1000,
-            action_scale:float = 0.001,
-            obs_noise_scale:float = 0.01,
-            numberof_goals: int = 10,
-            early_stop:int = -1
         ):
         return cls(
             1.0/ctrl_freq,
             1.0/sim_freq,
-            action_scale,
-            obs_noise_scale,
-            numberof_goals,
-            early_stop
         )
     
     @property
@@ -56,10 +43,7 @@ class MujocoSimConfig:
         """Number of sim steps per control step."""
         return int(round(self.dt / self.sim_dt))
     
-    @property
-    def active_numberof_goals(self)-> int:
-        return self.early_stop if self.early_stop else self.numberof_goals
-
+   
 
 @struct.dataclass
 class RewardConfigParameter:
@@ -88,7 +72,7 @@ class RewardConfigParameter:
 class RewardConfig:
     # --- Incentivo de Posição ---
     # O ganho máximo quando o erro é zero
-    pos_incentive_gain = RewardConfigParameter.const(1000.0)
+    pos_incentive_gain = RewardConfigParameter.const(5000.0)
 
     # 'Largura' da recompensa: se o erro for igual a sigma, a recompensa cai para ~36%
     # No início do treino (progress=0), sigma=0.5
@@ -109,7 +93,7 @@ class RewardConfig:
     err_tol = RewardConfigParameter.linear_tracking(0.4, 0.01)
 
     # --- Regularização ---
-    torques_penalty = RewardConfigParameter.const(-1e-6)
+    torques_penalty = RewardConfigParameter.const(-1e-4)
     velocity_penalty = RewardConfigParameter.const(-1e-6)
 
     # cost action - penalidade por diferença entra ação atual e passada
