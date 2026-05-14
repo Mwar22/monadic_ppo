@@ -72,7 +72,7 @@ class RewardConfigParameter:
 class RewardConfig:
     # --- Incentivo de Posição ---
     # O ganho máximo quando o erro é zero
-    pos_incentive_gain = RewardConfigParameter.const(5000.0)
+    pos_incentive_gain = RewardConfigParameter.const(1000.0)
 
     # 'Largura' da recompensa: se o erro for igual a sigma, a recompensa cai para ~36%
     # No início do treino (progress=0), sigma=0.5
@@ -84,21 +84,21 @@ class RewardConfig:
     #rot_incentive_sigma = RewardConfigParameter.linear_tracking(0.5, 0.05)
 
     # --- Sucesso e Falha ---
-    success_reward = RewardConfigParameter.const(1000.0)
+    success_reward = RewardConfigParameter.const(500.0)
     failure_penalty = RewardConfigParameter.const(-500.0)
 
     # --- Tolerância ---
     # No início do treino (progress=0), err_tol=0.8
     # No fim do treino (progress=1), err_tol=0.1
-    err_tol = RewardConfigParameter.linear_tracking(0.4, 0.01)
+    err_tol = RewardConfigParameter.linear_tracking(0.8, 0.01)
 
     # --- Regularização ---
-    torques_penalty = RewardConfigParameter.const(-1e-4)
+    torques_penalty = RewardConfigParameter.const(-1e-6)
     velocity_penalty = RewardConfigParameter.const(-1e-6)
 
     # cost action - penalidade por diferença entra ação atual e passada
-    # penaliza delta de ações muito grandes no começo
-    tar_penalty_gain = RewardConfigParameter.linear_tracking(0.1, 0.01)
+    # penaliza delta de ações muito grandes no final
+    tar_penalty_gain = RewardConfigParameter.linear_tracking(0.01, 0.001)
 
 
 @struct.dataclass

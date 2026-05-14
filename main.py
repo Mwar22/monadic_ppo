@@ -94,12 +94,12 @@ settings = TrainingSettings.init(
     optimizer_creator=create_optimizer,
     step_fn_creator=create_training_step,
     num_envs=4096,
-    epochs=15,
-    action_scale=0.1,
+    epochs=10,
+    action_scale=0.007,
     obs_noise_scale=0.001,
-    numberof_goals=100,
+    numberof_goals=75,
     rollout_steps=128,
-    target_success=0.5,
+    target_success=0.4,
 )
 
 
@@ -130,6 +130,7 @@ mean_rewards_vs_timestamp = metrics["mean_rewards_vs_timestamp"]
 mean_rewards_vs_goals = metrics["mean_rewards_vs_goals"]
 grad_norm = metrics["avg_gradnorm"]
 entropy = metrics["avg_entropy"]
+success_rate = metrics["success_rate"]
 
 avg_loss = jnp.mean(loss[-20:])
 print(f" Training finished! Average loss of last 20 steps: {avg_loss:.4f}")
@@ -143,7 +144,7 @@ print(
 )
 
 
-fig, axs = plt.subplots(3, 2, figsize=(10, 8), tight_layout=True)
+fig, axs = plt.subplots(3, 3, figsize=(10, 8), tight_layout=True)
 axs[0][0].plot(loss)
 axs[0][0].set_title("Training Loss")
 axs[0][0].set_xlabel("Epochs")
@@ -155,6 +156,12 @@ axs[0][1].set_title("Gradient norm (Euclidian, L2)")
 axs[0][1].set_xlabel("Epochs")
 axs[0][1].set_ylabel("Norm")
 axs[0][1].grid(True)
+
+axs[0][2].plot(success_rate)
+axs[0][2].set_title("Mean (across envs) success rate")
+axs[0][2].set_xlabel("Goal n°")
+axs[0][2].set_ylabel("%")
+axs[0][2].grid(True)
 
 axs[1][0].semilogy(mean_rewards_vs_timestamp + 1)
 axs[1][0].set_title("Mean (across envs) sum of rewards (across goals)")

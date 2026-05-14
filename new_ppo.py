@@ -315,8 +315,10 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
         # Transforma qualquer contagem > 0 em 1 (sucesso) ou 0 (falha)
         # A média dará um valor entre  0.0 e 1.0 (0% a 100%)
         # success.shape: (num_envs, )
-        success = state["success_count"] > 0
-        return jax.lax.stop_gradient(jnp.mean(success))
+        success_count = state["success_count"]
+        nsteps = state["steps"]
+        rate  = success_count/(nsteps + 1e-6)
+        return jax.lax.stop_gradient(rate)
 
     def collect_rollouts(state, buffer, runpar: RunningParameters, network_params: NetworkParameters):
 
@@ -420,8 +422,7 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
         "avg_gradnorm":avg_grad_norm,
         "mean_rewards_vs_goals": mean_rewards_vs_goals,
         "mean_rewards_vs_timestamp":mean_rewards_vs_timestamp,
-        #"sr_goals": success_rate_around_goals,
-        #"sr_cycles": success_rate_around_cycles,
+        "success_rate":mean_envs_success_rate,
         "avg_err": avg_err,
     }
 

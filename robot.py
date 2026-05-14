@@ -709,8 +709,8 @@ def concat_obs_as_array(d: Dict[str, Any]) -> StateMonad:
 def success_count(pdata):
     def func(state):
         # Transforma True em 1 e False em 0 e soma
-        count = state["success_count"] + jnp.array(pdata["success"], dtype=jnp.int32)
-        return {**state, "success_count": count}, pdata
+        count = state["success_count"] + pdata["success"]
+        return {**state, "success_count": state["success_count"] + pdata["success"]}, pdata
 
     return StateMonad(func)
 
@@ -949,14 +949,24 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
         .map(
             lambda pdata: {
                 **pdata,
-                "success": (
-                    pdata["position_error"] < pdata["err_tol"]  # & (pdata["orientation_error"] < pdata["err_tol"]
+                "success": jnp.where(
+                    pdata["position_error"] < pdata["err_tol"],
+                    1.0,
+                    0,
                 ),
                 "failure": jnp.any(pdata["joint_angles"] < rsd.lowers)
                 | jnp.any(pdata["joint_angles"] > rsd.uppers),
             }
         )
-        .bind(success_count)
+        # faz a contagem dos casos de sucesso
+        .bind(
+            lambda pdata: StateMonad(
+                lambda state: (
+                    {**state, "success_count": state["success_count"] + pdata["success"]},
+                    pdata,
+                )
+            )
+        )
         # Aplicação das Recompensas de Término
         .bind(
             lambda pdata: StateMonad(
