@@ -45,8 +45,8 @@ from utils import save
 ################################################FUNÇÕES AUXILIARES DE CONFIGURAÇÂO ###################################
 # cria o otimizazor
 def create_optimizer(steps):
-    lr_scheduler = optax.schedules.linear_schedule(
-        init_value=5e-4, end_value=5e-5, transition_steps=steps
+    lr_scheduler = optax.schedules.cosine_onecycle_schedule(
+        peak_value=1e-3, transition_steps=steps
     )
 
     return optax.chain(
@@ -94,8 +94,8 @@ settings = TrainingSettings.init(
     optimizer_creator=create_optimizer,
     step_fn_creator=create_training_step,
     num_envs=4096,
-    epochs=10,
-    action_scale=0.007,
+    epochs=200,
+    action_scale=0.005,
     obs_noise_scale=0.001,
     numberof_goals=75,
     rollout_steps=128,

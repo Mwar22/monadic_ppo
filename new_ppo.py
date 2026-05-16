@@ -316,9 +316,10 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
         # A média dará um valor entre  0.0 e 1.0 (0% a 100%)
         # success.shape: (num_envs, )
         success_count = state["success_count"]
-        nsteps = state["steps"]
+        nsteps = state["step"]
+
         rate  = success_count/(nsteps + 1e-6)
-        return jax.lax.stop_gradient(rate)
+        return jax.lax.stop_gradient(jnp.mean(rate))
 
     def collect_rollouts(state, buffer, runpar: RunningParameters, network_params: NetworkParameters):
 

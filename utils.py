@@ -15,7 +15,8 @@ import mujoco
 from mujoco import MjModel  # type: ignore
 from etils import epath
 from jax import numpy as jnp
-from jax.scipy.special import gammaln, digamma
+from jax.scipy.special import gammaln, digamma 
+from jax.scipy.spatial.transform import Rotation
 from typing import Union, Dict, Any, List, TypeVar, cast
 from monads import MaybeM
 
@@ -45,14 +46,71 @@ def conv2jax_quat(mujoco_quat: jnp.ndarray) -> jnp.ndarray:
     return jnp.array([mujoco_quat[1], mujoco_quat[2], mujoco_quat[3], mujoco_quat[0]])
 
 
-def exp_scale_reward(gain, sigma, value: jax.Array) -> jax.Array:
-    return gain * jnp.exp(-value / sigma)
+def exp_scale_reward(gain, x_zero: float, error_value: jax.Array) -> jax.Array:
+    """_summary_
+
+    Parameters
+    ----------
+    gain : Valor da recompensa quando o erro é zero
+    x_zero : float
+        Valor do erro para o qual a recompensa é nula (cruza o eixo das abscissas)
+    error_value : jax.Array
+        Valor do erro a ser avaliado
+
+    Returns
+    -------
+    jax.Array
+        valor da recompensa
+    """
+    inv_omega = 1.763222834351896710225201776951 # Inverso da contante omega (que por sí é o resultado de W(1), onde W é a função W de lambert. Solução de u*exp(u) = 1)
+    sigma = x_zero*inv_omega
+    return gain * (jnp.exp(-error_value / sigma) - error_value)
 
 
 def l1_l2_reward(gain_l1, gain_l2, value: jax.Array):
     return gain_l2 * jnp.linalg.norm(value, ord=2) + gain_l1 * jnp.linalg.norm(
         value, ord=1
     )
+
+def position_error(goal_position: jax.Array, tool_position: jax.Array) -> jax.Array:
+    """
+    Calcula o erro de posição.
+
+    Parameters
+    ----------
+    data: mjx.Data
+        Estado dinâmico que atualiza a cada step.
+
+    info: dict[str, Any]
+        Dicionario de informações
+    """
+    return jnp.linalg.norm(goal_position - tool_position, ord=2, axis=-1)
+
+
+def orientation_error(
+    goal_orientation: jax.Array, tool_orientation: jax.Array
+) -> jax.Array:
+    """
+    Calcula o erro de orientação
+
+    Parameters
+    ----------
+    data: mjx.Data
+        Estado dinâmico que atualiza a cada step.
+
+    info: dict[str, Any]
+        Dicionario de informações
+    """
+
+    # comando medido em rpy
+    r_target = Rotation.from_euler("zyx", goal_orientation)
+    r_measured = Rotation.from_quat(tool_orientation)
+
+    # calcula a transformação  "erro", com base em: r_measured = r_error * r_target
+    r_error = r_measured * r_target.inv()
+
+    r_error = r_measured * r_target.inv()
+    return jnp.linalg.norm(r_error.as_rotvec())
 
 
 def cost_action_rate(act: jax.Array, last_act: jax.Array) -> jax.Array:

@@ -12,7 +12,6 @@ import jax
 import flax.linen as nn
 from mujoco import MjModel  # type: ignore
 from jax import numpy as jnp
-from jax.scipy.spatial.transform import Rotation
 from mujoco import mjx
 from etils import epath
 from flax import struct
@@ -23,6 +22,8 @@ from utils import (
     l1_l2_reward,
     exp_scale_reward,
     conv2jax_quat,
+    position_error,
+    orientation_error,
     cont_sample_beta,
     cost_action_rate,
     update_assets,
@@ -500,48 +501,6 @@ class RobotSharedData:
 
 ##############################################################################################################
 
-
-def position_error(goal_position: jax.Array, tool_position: jax.Array) -> jax.Array:
-    """
-    Calcula o erro de posição.
-
-    Parameters
-    ----------
-    data: mjx.Data
-        Estado dinâmico que atualiza a cada step.
-
-    info: dict[str, Any]
-        Dicionario de informações
-    """
-    return jnp.linalg.norm(goal_position - tool_position, ord=2, axis=-1)
-
-
-def orientation_error(
-    goal_orientation: jax.Array, tool_orientation: jax.Array
-) -> jax.Array:
-    """
-    Calcula o erro de orientação
-
-    Parameters
-    ----------
-    data: mjx.Data
-        Estado dinâmico que atualiza a cada step.
-
-    info: dict[str, Any]
-        Dicionario de informações
-    """
-
-    # comando medido em rpy
-    r_target = Rotation.from_euler("zyx", goal_orientation)
-    r_measured = Rotation.from_quat(tool_orientation)
-
-    # calcula a transformação  "erro", com base em: r_measured = r_error * r_target
-    r_error = r_measured * r_target.inv()
-
-    r_error = r_measured * r_target.inv()
-    return jnp.linalg.norm(r_error.as_rotvec())
-
-
 def check_done(
     rsd: RobotSharedData, joint_angles: jax.Array, position_error, orientation_error
 ):
@@ -893,7 +852,6 @@ def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningAvg, env: StateMonad, o
                     )
 """
 
-
 def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
     reward_config = rsd.reward_config
     return (
@@ -905,7 +863,7 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
                     # Incentivo de Posição
                     exp_scale_reward(
                         reward_config.pos_incentive_gain.update(progress),
-                        reward_config.pos_incentive_sigma.update(progress),
+                        reward_config.pos_incentive_xzero.update(progress),
                         pdata["position_error"],
                     )
                     #+ (1 - pdata["position_error"]) * 10
@@ -949,11 +907,8 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
         .map(
             lambda pdata: {
                 **pdata,
-                "success": jnp.where(
-                    pdata["position_error"] < pdata["err_tol"],
-                    1.0,
-                    0,
-                ),
+                "success": pdata["position_error"] < pdata["err_tol"],
+        
                 "failure": jnp.any(pdata["joint_angles"] < rsd.lowers)
                 | jnp.any(pdata["joint_angles"] > rsd.uppers),
             }
@@ -962,7 +917,7 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
         .bind(
             lambda pdata: StateMonad(
                 lambda state: (
-                    {**state, "success_count": state["success_count"] + pdata["success"]},
+                    {**state, "success_count": state["success_count"] + jnp.where(pdata["success"], 1.0, 0.0)},
                     pdata,
                 )
             )
