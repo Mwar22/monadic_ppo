@@ -9,25 +9,19 @@ Tarefa para o thor alcançar um alvo
 from __future__ import annotations
 import mujoco
 import jax
-import flax.linen as nn
 from mujoco import MjModel  # type: ignore
 from jax import numpy as jnp
 from mujoco import mjx
 from etils import epath
 from flax import struct
-from typing import Any, Dict, Tuple, List, cast, Callable, Sequence, Protocol, Self
+from typing import Any, Dict, Tuple, List, cast, Protocol, Self
 from config import RangeConfig, RewardConfig, MujocoSimConfig
 from enviroment import StateMonad
 from utils import (
-    l1_l2_reward,
     exp_scale_reward,
-    conv2jax_quat,
     position_error,
-    orientation_error,
-    cont_sample_beta,
     cost_action_rate,
     update_assets,
-    maybe_filled_list,
 )
 from typing import TYPE_CHECKING, runtime_checkable
 from monads import MaybeM
@@ -479,12 +473,28 @@ class RobotSharedData:
 
     def qpos(self, mjx_data: mjx.Data):
         return mjx_data.qpos
+    
+    def normalized_qpos(self, mjx_data: mjx.Data):
+        """_summary_
+
+        Parameters
+        ----------
+        mjx_data : mjx.Data
+
+        Returns
+        -------
+        qpos normalizado. Faz mapeamento linear:  [lowers, uppers] -> [0, 1]
+        """
+        low, high = self.mj_model.actuator_ctrlrange.T
+        return (mjx_data.qpos - low)/(high - low)
+    
 
     def qvel(self, mjx_data: mjx.Data):
         return mjx_data.qvel
 
     def qfrc(self, mjx_data: mjx.Data):
         return mjx_data.qfrc_actuator
+    
 
     def mjx_step(
         self,
@@ -585,45 +595,6 @@ def normalize_obs(data, obs_stats: RunningAvg):
 
     return StateMonad(func)
 
-
-def update_obs_old(data, obs_noise=0.0):
-    def func(state):
-        rng, rng1 = jax.random.split(state["rng"])
-
-        # clipa a observação
-        # normaliza a observação
-        # std = jnp.sqrt(obs_stats.var + 1e-8)
-        # norm_obs = (data["obs_array"] - obs_stats.mean) / std
-        obs = data["obs_array"]
-
-        # proteje a rede contra explosões no inicio
-        obs_processed = jnp.clip(obs, -5.0, 5.0)
-
-        # Adiciona um ruido adicional.
-        # Este 'if' funciona com JIT contanto que obs_noise seja um valor estático.
-        if obs_noise >= 0.0:
-            noise = obs_noise * jax.random.uniform(
-                rng, obs_processed.shape, minval=-1.0, maxval=1.0
-            )
-            obs_processed += noise
-
-        # Adiciona a nova observação no buffer, deslocando as outras observações e descartando a mais antiga
-        obs_history = (
-            jnp.roll(
-                state["obs"], obs_processed.size
-            )  # desloca todo o array para a direita, obs_processd.size de distancia (circular)
-            .at[: obs_processed.size]
-            .set(obs_processed)  # adiciona os novos dados de observação
-        )
-
-        mean_mask = jnp.zeros_like(obs)
-
-        new_state = {**state, "rng": rng1, "obs": obs_history}
-        return new_state, {**data, "obs": obs_history}
-
-    return StateMonad(func)
-
-
 def update_obs(data, obs_noise=0.0):
     def func(state):
         rng, rng1 = jax.random.split(state["rng"])
@@ -664,12 +635,22 @@ def concat_obs_as_array(d: Dict[str, Any]) -> StateMonad:
 
     return StateMonad(func)
 
+def concat_obs_as_array2(d: Dict[str, Any]) -> StateMonad:
+    """
+    :: d -> StateMonad s c
+    """
 
-def success_count(pdata):
     def func(state):
-        # Transforma True em 1 e False em 0 e soma
-        count = state["success_count"] + pdata["success"]
-        return {**state, "success_count": state["success_count"] + pdata["success"]}, pdata
+        # Manually list keys to ensure order and handle scalars
+        obs_list = [
+            state["last_action"],  # (6,)
+            d["position_error"], #(1,0)
+            d["joint_angles"],  # (6,)
+        ]
+        obs_array = jnp.concatenate(obs_list)
+        # (13,0)
+
+        return state, {**d, "obs": obs_array}
 
     return StateMonad(func)
 
@@ -691,36 +672,6 @@ def get_goal(range_config: RangeConfig, progress, rng):
     }
     return rng, goals
 
-
-def sample_random_pose(rsd, rng):
-    rng, subkey = jax.random.split(rng)
-    # Generates a value between lower and upper limits for each joint
-    random_q = jax.random.uniform(
-        subkey, shape=(len(rsd.joint_ids),), minval=rsd.lowers, maxval=rsd.uppers
-    )
-    return rng, random_q
-
-
-def training_frame_setup(rsd: RobotSharedData, progress, rng):
-    rng, position = rsd.range_config.position.sample_normal(rng, progress)
-    rng, position_velocities = rsd.range_config.position_velocities.sample_normal(
-        rng, progress
-    )
-    rng, orientation = rsd.range_config.orientation.sample_normal(rng, progress)
-
-    goals = {
-        "goal_position_coordinates": position,
-        "goal_position_velocities": position_velocities,
-        "goal_orientation_coordinates": orientation,
-    }
-
-    # randomiza as posições de junta, de acordo com os limites
-    rng, subkey = jax.random.split(rng)
-    alpha = jax.random.uniform(subkey)
-    rnd_start_joint_angles = rsd.lowers + (rsd.uppers - rsd.lowers) * alpha
-    return rng, goals
-
-
 def debug(pdata, name):
     def func(state):
         jax.debug.print("{} = {}", name, pdata[name])
@@ -728,34 +679,8 @@ def debug(pdata, name):
 
     return StateMonad(func)
 
-
-"""
-        .bind(
-            lambda pdata: StateMonad(
-                lambda state: (
-                    state,
-                    {**pdata, "orientation": rsd.sensor_data(state["mjx_data"], "tool_orientation")},
-                )
-            )
-        )
-        .map(
-            lambda pdata:{
-                **pdata, "orientation": conv2jax_quat(pdata["orientation"])
-            }
-        )
-        .bind(lambda pdata: StateMonad(
-            lambda state:(
-                state,
-                {
-                    **pdata,
-                    "orientation_error": orientation_error(
-                        state["goal"]["goal_orientation_coordinates"], pdata["orientation"]
-                    ),
-                }
-            )
-        ))
-        """
-
+##############################################################################################################
+#.bind(lambda pdata: normalize_obs(pdata, obs_stats))
 
 def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningAvg, env: StateMonad, obs_noise_scale: float):
     return (
@@ -790,45 +715,17 @@ def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningAvg, env: StateMonad, o
             lambda pdata: StateMonad(
                 lambda state: (
                     state,
-                    {**pdata, "torques": rsd.qfrc(state["mjx_data"])},
-                )
-            )
-        )
-        .bind(
-            lambda pdata: StateMonad(
-                lambda state: (
-                    state,
                     {
                         **pdata,
-                        "joint_angles": rsd.qpos(state["mjx_data"]),
+                        "joint_angles": rsd.normalized_qpos(state["mjx_data"]),
                     },
                 )
             )
-        )
-        .bind(
-            lambda pdata: StateMonad(
-                lambda state: (
-                    state,
-                    {
-                        **pdata,
-                        "joint_vel": rsd.qvel(state["mjx_data"]),
-                    },
-                )
-            )
-        )
-        .map(
-            lambda pdata: {
-                **pdata,
-                "pose_dist": pdata["joint_angles"],  ###CHANGE SO IT COUNTS RELATIVE!
-            }
         )
         .bind(lambda pdata: concat_obs_as_array(pdata))
         .bind(
             lambda pdata: update_obs(pdata, obs_noise_scale)
         )
-        .bind(lambda pdata: normalize_obs(pdata, obs_stats))
-        # .bind(lambda pdata: debug(pdata, "position_error"))
-        # .bind(lambda pdata: debug(pdata, "orientation_error"))
         .bind(
             lambda pdata: StateMonad(
                 lambda state: (
@@ -842,15 +739,6 @@ def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningAvg, env: StateMonad, o
         )
     )
 
-
-"""
-                    # Incentivo de Orientação
-                    exp_scale_reward(
-                        reward_config.rot_incentive_gain.update(progress),
-                        reward_config.rot_incentive_sigma.update(progress),
-                        pdata["orientation_error"]
-                    )
-"""
 
 def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
     reward_config = rsd.reward_config
@@ -866,8 +754,9 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
                         reward_config.pos_incentive_xzero.update(progress),
                         pdata["position_error"],
                     )
-                    #+ (1 - pdata["position_error"]) * 10
                 ),
+                #conta quantas juntas chegaram/ultrapassaram os limites
+                "limitbreach_count": jnp.sum(pdata["joint_angles"] <= 0.0) + jnp.sum(pdata["joint_angles"] >= 1.0),
             }
         )
         .bind(
@@ -878,20 +767,16 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
                         **pdata,
                         "reward": (
                             # penalidade por ações muito grandes
-                            pdata["reward"]
-                            - reward_config.tar_penalty_gain.update(progress) * cost_action_rate(pdata["action"], state["last_action"])
+                            pdata["reward"] + reward_config.tar_penalty_gain.update(progress) * cost_action_rate(pdata["action"], state["last_action"])
 
-                            # Penalidade de torque para evitar movimentos espasmódicos
-                            + jnp.sum(jnp.square(pdata["torques"])) * reward_config.torques_penalty.update(progress)
-
-                            # Penalidade de velocidade para evitar movimentos espasmódicos
-                            # + jnp.sum(jnp.square(pdata["joint_vel"])) * reward_config.velocity_penalty.update(progress)
+                            # penalidade proporcional ao numero de juntas que ultrapassaram os limites
+                            + reward_config.limitbreach_penalty_gain.update(progress) * pdata["limitbreach_count"]
                         ),
                     },
                 )
             )
         )
-        # Tolerância de Erro Linear
+        # Tolerância de Erro Linear e contagem de numero de juntas que ultrapassaram os limites
         .bind(
             lambda pdata: StateMonad(
                 lambda state: (
@@ -908,9 +793,7 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
             lambda pdata: {
                 **pdata,
                 "success": pdata["position_error"] < pdata["err_tol"],
-        
-                "failure": jnp.any(pdata["joint_angles"] < rsd.lowers)
-                | jnp.any(pdata["joint_angles"] > rsd.uppers),
+                "failure": pdata["limitbreach_count"] > 0,
             }
         )
         # faz a contagem dos casos de sucesso
@@ -949,6 +832,38 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
 
 
 ####################################################################################################################
+
+def cont_sample_beta(logits: jax.Array, rng: jax.Array, min_alpha_beta=1.0):
+    """
+    Sample continuous actions in [0,1] using independent Beta distributions
+    parameterized by logits.
+
+    Args:
+        logits: shape (action_dim,), any real numbers
+        rng: JAX PRNGKey
+        min_alpha_beta: minimum value for alpha and beta to avoid numerical issues
+
+    Returns:
+        action: shape (action_dim,)
+        logprob: shape (action_dim,)
+    """
+
+    # mapeia os logits para parametros positivos para serem utilizados na distribuição beta
+    alpha_logits, beta_logits = jnp.split(logits, 2, axis=-1)
+    alpha = jax.nn.softplus(alpha_logits) + min_alpha_beta
+    beta  = jax.nn.softplus(beta_logits) + min_alpha_beta
+
+    # separa o rng para amostras independentes
+    rng, subkey = jax.random.split(rng)
+    actions = jax.random.beta(subkey, alpha, beta)
+
+    # Clip actions to be just inside (0, 1) to avoid -inf logpdf
+    clipped_actions = jnp.clip(actions, 1e-6, 1.0 - 1e-6)
+
+    # logprob para cada dimensão
+    logprobs = jax.scipy.stats.beta.logpdf(clipped_actions, alpha, beta)
+    return actions, jnp.sum(logprobs, axis=-1)
+
 def get_action(
     network_settings: NetworksSettings, network_parameters: NetworkParameters
 ):
@@ -961,7 +876,7 @@ def get_action(
         action, logprob = cont_sample_beta(output, rng1)
 
         # escala ação para de [0, 1] para [-1, 1]
-        action = jnp.clip(2.0 * action - 1.0, -1, 1)
+        action = jnp.clip(2.0 * action - 1.0, -1.0, 1.0)
 
         new_state = {**state, "rng": rng2}
         return new_state, {"action": action, "logprob": logprob}
@@ -969,11 +884,12 @@ def get_action(
     return StateMonad(fn)
 
 
-def get_motor_targets(rsd: RobotSharedData, pdata, action_scale, alpha=0.8):
+def get_ctrl(rsd: RobotSharedData, pdata, action_scale, alpha=0.8):
+    mid = 0.5 * (rsd.uppers + rsd.lowers)
+    half = 0.5 * action_scale * (rsd.uppers - rsd.lowers)
+
     def fn(state):
         smoothed_action = alpha * state["last_action"] + (1 - alpha) * pdata["action"]
-        mid = 0.5 * (rsd.uppers + rsd.lowers)
-        half = 0.5 * action_scale * (rsd.uppers - rsd.lowers)
         ctrl = mid + half * smoothed_action
 
         new_state = {**state, "last_action": smoothed_action}
@@ -993,7 +909,22 @@ def mujoco_step(rsd: RobotSharedData, pdata):
 
     return StateMonad(fn)
 
+def shape_return(pdata):
+    def fn(state):
+        state = {**state, "step": state["step"] + 1}
+        data = {
+            "obs": pdata["obs"],
+            "action": pdata["action"],
+            "reward": pdata["reward"],
+            "logprob": pdata["logprob"],
+            "done": pdata["done"],
+        }
+        return state, data
 
+    return StateMonad(fn)
+
+
+#####################################################################################################
 def create_training_step(
     training_settings: TrainingSettings,
     network_parameters: NetworkParameters,
@@ -1003,7 +934,7 @@ def create_training_step(
         training_settings.network_settings,
         network_parameters,
         training_settings.action_scale,
-        training_settings.obs_noise_scale
+        training_settings.obs_noise_scale,
     )
 
 
@@ -1018,26 +949,12 @@ def create_step(
     state.keys() = ["rng", "step", "goal", "obs_history", "action", "mjx_data"]
     """
 
-    def shape_return(pdata):
-        def fn(state):
-            state = {**state, "step": state["step"] + 1}
-            data = {
-                "obs": pdata["obs"],
-                "action": pdata["action"],
-                "reward": pdata["reward"],
-                "logprob": pdata["logprob"],
-                "done": pdata["done"],
-            }
-            return state, data
-
-        return StateMonad(fn)
-
     def step_fn(progress, state, runpar: RunningParameters):
         # obtem uma ação pela observação anterior
         pl = (
             get_action(network_settings, network_parameters)
             .bind(
-                lambda pdata: get_motor_targets(robot_shared_data, pdata, action_scale)
+                lambda pdata: get_ctrl(robot_shared_data, pdata, action_scale)
             )  # obtem para os motores segundo a ação
             .bind(
                 lambda pdata: mujoco_step(robot_shared_data, pdata)

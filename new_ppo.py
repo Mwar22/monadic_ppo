@@ -4,10 +4,9 @@ import optax
 import jax.numpy as jnp
 import flax.linen as nn
 import utils as mu
-from flax import struct
 from functools import partial
-from typing import Dict, Any, cast, Tuple, Callable, Self
-from utils import  beta_entropy, ema, stdNormalize
+from typing import Dict, Any, cast
+from utils import  beta_entropy
 from robot import get_goal, obs_pipeline
 from mujoco import mjx
 from dataclassutils import RunningParameters, TrainingSettings, BatchedBuffer, NetworkParameters
@@ -318,8 +317,8 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
         success_count = state["success_count"]
         nsteps = state["step"]
 
-        rate  = success_count/(nsteps + 1e-6)
-        return jax.lax.stop_gradient(jnp.mean(rate))
+        rate  = jnp.mean(success_count/(nsteps + 1e-6))
+        return jax.lax.stop_gradient(rate)
 
     def collect_rollouts(state, buffer, runpar: RunningParameters, network_params: NetworkParameters):
 
@@ -373,7 +372,8 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
         runpar = runpar.update(buffer.obs_buffer, mean_envs_success_rate)
     
         newcarry = (runpar, optim_state, network_params, state)
-        return newcarry, (training_metrics, mean_envs_success_rate, buffer.reward_buffer, state["err"])
+        err_tol = settings.robot_shared_data.reward_config.err_tol.update(mean_envs_success_rate)
+        return newcarry, (training_metrics, mean_envs_success_rate, buffer.reward_buffer, state["err"], err_tol)
 
     # loop principal de trainamento, executado por lax.scan
     runpar = RunningParameters.init((settings.network_settings.obs_size, ), settings.target_success)
@@ -383,7 +383,7 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
     # training_metrics[key].shape = (numberof_goals, epochs, *metric_shape)
     # mean_envs_success_rate.shape = (numberof_goals,)
     # rewards.shape = (numberof_goals, num_envs, rollout_steps +1)
-    final_carry, (training_metrics, mean_envs_success_rate, rewards, err) = jax.lax.scan(
+    final_carry, (training_metrics, mean_envs_success_rate, rewards, err, err_tol) = jax.lax.scan(
         new_goal_step,
         (runpar, settings.optimizer_state, starting_network_params, initial_state),
         jnp.arange(settings.active_numberof_goals),
@@ -425,6 +425,7 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
         "mean_rewards_vs_timestamp":mean_rewards_vs_timestamp,
         "success_rate":mean_envs_success_rate,
         "avg_err": avg_err,
+        "err_tol":err_tol,
     }
 
     #final_carry = (runpar, optim_state, network_params)

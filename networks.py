@@ -39,17 +39,24 @@ class Actor(nn.Module):
     @nn.compact
     def __call__(self, obs):
         # Primeira camada com skip connection
-        x1 = nn.Dense(256)(obs)
+        x1 = nn.Dense(256, kernel_init=nn.initializers.lecun_normal())(obs)
         x1 = nn.LayerNorm()(x1)
-        x1 = nn.relu(x1)
+        x1 = activation(x1)
         
-        x2 = nn.Dense(256)(x1)
+        x2 = nn.Dense(256, kernel_init=nn.initializers.lecun_normal())(x1)
         x2 = nn.LayerNorm()(x2)
-        x2 = nn.relu(x2) + x1 # conexão residual
+        x2 = activation(x2) + x1 # conexão residual
         
-        
+        x3 = nn.Dense(64, kernel_init=nn.initializers.lecun_normal())(x2)
+        x3 = nn.LayerNorm()(x3)
+        x3 = activation(x3)
+
+        x4 = nn.Dense(64, kernel_init=nn.initializers.lecun_normal())(x3)
+        x4 = nn.LayerNorm()(x4)
+        x4 = activation(x4) + x3
+
         # 2 pois é uma distribuição, gerando metade para os parametros alfa e metade para beta
-        logits = nn.Dense(2 * self.action_dim, kernel_init=nn.initializers.variance_scaling(0.01,mode="fan_in", distribution="normal"))(x2)
+        logits = nn.Dense(2 * self.action_dim, kernel_init=nn.initializers.lecun_normal())(x4)
         return logits
 
 
@@ -59,15 +66,23 @@ class Critic(nn.Module):
     @nn.compact
     def __call__(self, obs):
        
-        x = nn.Dense(256)(obs)
-        x = nn.LayerNorm()(x)
-        x = activation(x)
+        x1 = nn.Dense(256, kernel_init=nn.initializers.lecun_normal())(obs)
+        x1 = nn.LayerNorm()(x1)
+        x1 = activation(x1)
         
-        x = nn.Dense(256)(x)
-        x = nn.LayerNorm()(x)
-        x = activation(x)
+        x2 = nn.Dense(256, kernel_init=nn.initializers.lecun_normal())(x1)
+        x2 = nn.LayerNorm()(x2)
+        x2 = activation(x2) + x1 # conexão residual
         
-        value = nn.Dense(1)(x)
+        x3 = nn.Dense(64, kernel_init=nn.initializers.lecun_normal())(x2)
+        x3 = nn.LayerNorm()(x3)
+        x3 = activation(x3)
+
+        x4 = nn.Dense(64, kernel_init=nn.initializers.lecun_normal())(x3)
+        x4 = nn.LayerNorm()(x4)
+        x4 = activation(x4) + x3
+        
+        value = nn.Dense(1, kernel_init=nn.initializers.lecun_normal())(x4)
         return value.squeeze(-1)
 
 

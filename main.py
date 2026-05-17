@@ -93,11 +93,11 @@ settings = TrainingSettings.init(
     robot_shared_data.value,
     optimizer_creator=create_optimizer,
     step_fn_creator=create_training_step,
-    num_envs=4096,
-    epochs=200,
-    action_scale=0.005,
+    num_envs=2048,
+    epochs=100,
+    action_scale=0.5,
     obs_noise_scale=0.001,
-    numberof_goals=75,
+    numberof_goals=40,
     rollout_steps=128,
     target_success=0.4,
 )
@@ -131,6 +131,7 @@ mean_rewards_vs_goals = metrics["mean_rewards_vs_goals"]
 grad_norm = metrics["avg_gradnorm"]
 entropy = metrics["avg_entropy"]
 success_rate = metrics["success_rate"]
+err_tol = metrics["err_tol"]
 
 avg_loss = jnp.mean(loss[-20:])
 print(f" Training finished! Average loss of last 20 steps: {avg_loss:.4f}")
@@ -174,6 +175,12 @@ axs[1][1].set_title("Mean (across envs) sum of rewards (across rollout timestamp
 axs[1][1].set_xlabel("Goal n°")
 axs[1][1].set_ylabel("Average Reward")
 axs[1][1].grid(True)
+
+axs[1][2].plot(err_tol)
+axs[1][2].set_title("Err tol")
+axs[1][2].set_xlabel("Goal n°")
+axs[1][2].set_ylabel("Tol value")
+axs[1][2].grid(True)
 
 axs[2][0].plot(entropy)
 axs[2][0].set_title("Entropy")

@@ -47,7 +47,7 @@ class MujocoSimConfig:
 
 @struct.dataclass
 class RewardConfigParameter:
-    update: Callable[[float], float]
+    update: Callable
 
     @classmethod
     def const(cls, value):
@@ -66,20 +66,41 @@ class RewardConfigParameter:
             return start_value - (start_value - end_value) * (p**0.5)
 
         return cls(func)
+    
+    @classmethod
+    def oneshot_cos(cls, max_value=1.0, pct_start=0.3, div_factor=25.0, final_div_factor=100.0, range_value=1.0):
+        omega_first = jnp.pi/(pct_start*range_value)
+        omega_second = jnp.pi/(range_value*(1 - pct_start))
+        phi = -jnp.pi*pct_start/(1-pct_start)
 
+        def first_half(p):
+            intermediate = 1 + div_factor + (1- div_factor)*jnp.cos(omega_first*p)
+            return max_value*intermediate/(2*div_factor)
+        
+        def second_half(p):
+            intermediate = 1 + final_div_factor - (1- final_div_factor)*jnp.cos(omega_second*p + phi)
+            return max_value*intermediate/(2*final_div_factor)
+        
+        def func(p):
+            first = first_half(p)
+            second = second_half(p)
+
+            return jnp.where(p < pct_start*range_value, first, second)
+        
+        return cls(func)
 
 @struct.dataclass
 class RewardConfig:
     # --- Incentivo de Posição ---
     # O ganho máximo quando o erro é zero
-    pos_incentive_gain = RewardConfigParameter.const(5000.0)
+    pos_incentive_gain = RewardConfigParameter.const(1000.0)
 
     # Valor que define o comportamento da recompensa combinada exponencial e linear.
     # para erros acima de xzero, tem-se penalidades (valores negativos)
     # abaixo de xzero, tem-se recompensas (valores positivos)
     # No início do treino (progress=0), xzero=0.5
     # No fim do treino (progress=1), xzero=0.01
-    pos_incentive_xzero = RewardConfigParameter.linear_tracking(0.5, 0.01)
+    pos_incentive_xzero = RewardConfigParameter.linear_tracking(0.33, 0.01)
 
     # --- Incentivo de Orientação ---
     #rot_incentive_gain = RewardConfigParameter.const(100.0)
@@ -87,12 +108,14 @@ class RewardConfig:
 
     # --- Sucesso e Falha ---
     success_reward = RewardConfigParameter.const(1000.0)
-    failure_penalty = RewardConfigParameter.const(-500.0)
+    failure_penalty = RewardConfigParameter.const(-1000.0)
+    limitbreach_penalty_gain = RewardConfigParameter.const(-100.0)
 
     # --- Tolerância ---
     # No início do treino (progress=0), err_tol=0.8
     # No fim do treino (progress=1), err_tol=0.1
-    err_tol = RewardConfigParameter.linear_tracking(0.4, 0.01)
+    #err_tol = RewardConfigParameter.oneshot_cos(max_value=0.4, div_factor=2, final_div_factor=40)
+    err_tol = RewardConfigParameter.linear_tracking(0.3, 0.01)
 
     # --- Regularização ---
     torques_penalty = RewardConfigParameter.const(-1e-6)
@@ -100,7 +123,8 @@ class RewardConfig:
 
     # cost action - penalidade por diferença entra ação atual e passada
     # penaliza delta de ações muito grandes no final
-    tar_penalty_gain = RewardConfigParameter.linear_tracking(0.001, 0.01)
+    tar_penalty_gain = RewardConfigParameter.linear_tracking(-0.001, -0.01)
+
 
 
 @struct.dataclass
