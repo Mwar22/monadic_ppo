@@ -84,7 +84,7 @@ def position_error(goal_position: jax.Array, tool_position: jax.Array) -> jax.Ar
     info: dict[str, Any]
         Dicionario de informações
     """
-    return jnp.linalg.norm(goal_position - tool_position, ord=2, axis=-1)
+    return jnp.linalg.norm(goal_position - tool_position, ord=2)
 
 
 def orientation_error(

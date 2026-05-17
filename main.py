@@ -7,6 +7,8 @@ Arquivo com o código principal de treinamento
 """
 
 import os
+import sys
+sys.stdout.flush()
 
 # Tell XLA to use Triton GEMM, this improves steps/sec by ~30% on some GPUs
 xla_flags = os.environ.get("XLA_FLAGS", "")
@@ -57,7 +59,7 @@ def create_optimizer(steps):
 
 ################################################### INICIALIZAÇÂO #####################################################
 rng = jax.random.PRNGKey(42)
-rng, network_settings, network_params = create_networks(rng, obs_size=24, action_size=6)
+rng, network_settings, network_params = create_networks(rng, obs_size=13, action_size=6)
 
 
 range_cfg = RangeConfig.init(

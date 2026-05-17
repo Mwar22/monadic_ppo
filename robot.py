@@ -613,42 +613,19 @@ def update_obs(data, obs_noise=0.0):
 
     return StateMonad(func)
 
-
 def concat_obs_as_array(d: Dict[str, Any]) -> StateMonad:
     """
     :: d -> StateMonad s c
     """
 
     def func(state):
-        # Manually list keys to ensure order and handle scalars
         obs_list = [
-            state["goal"]["goal_position_coordinates"],  # (3,)
-            state["last_action"],  # (6,)
-            d["tool_position"],  # (3,)
-            d["torques"],  # (6,)
-            d["joint_angles"],  # (6,)
+            state["last_action"],  # (6, )
+            jnp.array([d["position_error"]]), #(1, )
+            d["joint_angles"],  # (6, )
         ]
         obs_array = jnp.concatenate(obs_list)
-        # 2 * (3,)  +  3 * (6, ) = 24)
-
-        return state, {**d, "obs": obs_array}
-
-    return StateMonad(func)
-
-def concat_obs_as_array2(d: Dict[str, Any]) -> StateMonad:
-    """
-    :: d -> StateMonad s c
-    """
-
-    def func(state):
-        # Manually list keys to ensure order and handle scalars
-        obs_list = [
-            state["last_action"],  # (6,)
-            d["position_error"], #(1,0)
-            d["joint_angles"],  # (6,)
-        ]
-        obs_array = jnp.concatenate(obs_list)
-        # (13,0)
+        # (13,)
 
         return state, {**d, "obs": obs_array}
 

@@ -43,6 +43,7 @@ def rollout_step(
         # executa o ambiente
         _state, data = step_fn(progress, _state, runpar)
 
+
         # adiciona o dado no buffer
         _obs_buffer, _action_buffer, _reward_buffer, _logprob_buffer, _ptr = BatchedBuffer.push(
             _obs_buffer,
