@@ -187,34 +187,39 @@ def general_advantage_estimator(
 
 
 def ppo_loss(
-    params:NetworkParameters,
+    params: NetworkParameters,
     settings: TrainingSettings,
-    batch_obs,          #shape: (num_envs, max_steps +1, *obs_shape)
-    batch_actions,      #shape: (num_envs, max_steps +1, *action_shape)
-    batch_advantages,   #shape: (num_envs, max_steps)
-    batch_returns,      #shape: (num_envs, max_steps)
-    old_log_probs,      #shape: (num_envs, max_steps +1)
+    batch_obs,          # shape: (num_envs, max_steps +1, *obs_shape)
+    batch_actions,      # shape: (num_envs, max_steps +1, *action_shape)
+    batch_advantages,   # shape: (num_envs, max_steps)
+    batch_returns,      # shape: (num_envs, max_steps)
+    old_log_probs,      # shape: (num_envs, max_steps +1)
+    batch_ptr,          # ADICIONADO: shape (num_envs,) vindo do buffer.ptr
     clip_eps=0.2,
     c1=0.8,
     c2=0.01,
     min_alpha_beta=1.0,
 ):
-    """
-    Calculates the PPO loss.
-    """
     batch_advantages = jax.lax.stop_gradient(batch_advantages)
     batch_returns = jax.lax.stop_gradient(batch_returns)
 
-    # elimina a contagem do gradiente nestas variaveis
     batch_obs = jax.lax.stop_gradient(batch_obs[:, :-1, :])
     batch_actions = jax.lax.stop_gradient(batch_actions[:, :-1, :])
     old_log_probs = jax.lax.stop_gradient(old_log_probs[:, :-1])
+
+    # --- NOVO: CRIAR MÁSCARA DE PASSOS VÁLIDOS ---
+    max_steps = batch_advantages.shape[1]
+    steps_arr = jnp.arange(max_steps)
+
+    # Compara a matriz de passos com o ponteiro de cada ambiente
+    valid_mask = steps_arr[None, :] < batch_ptr[:, None]  # shape: (num_envs, max_steps)
+    total_valid_elements = jnp.sum(valid_mask) + 1e-6     # Evita divisão por zero
+    # ----------------------------------------------
 
     # forward 
     networks = settings.network_settings
     logits = cast(jax.Array, networks.actor.apply(params.actor, batch_obs))
     values = cast(jax.Array, networks.critic.apply(params.critic, batch_obs))
-
 
     # parametrização
     alpha_logits, beta_logits = jnp.split(logits, 2, axis=-1)
@@ -223,27 +228,28 @@ def ppo_loss(
 
     # logprobs
     clipped_actions = jnp.clip(batch_actions, 1e-6, 1 - 1e-6)
-
     logprobs = jax.scipy.stats.beta.logpdf(clipped_actions, alpha, beta)
     logprobs = jnp.sum(logprobs, axis=2)
 
     # ratio
     ratio = jnp.exp(logprobs - old_log_probs)
 
-    # PPO objective
+    # PPO objective (Modificado para aplicar a máscara)
     unclipped = ratio * batch_advantages
     clipped = jnp.clip(ratio, 1 - clip_eps, 1 + clip_eps) * batch_advantages
-    policy_loss = -jnp.mean(jnp.minimum(unclipped, clipped))
+    raw_policy_loss = -jnp.minimum(unclipped, clipped)
+    policy_loss = jnp.sum(raw_policy_loss * valid_mask) / total_valid_elements
 
-    # value loss
-    value_loss = c1 * jnp.mean((batch_returns - values) ** 2)
+    # Value loss (Modificado para ignorar passos inválidos)
+    raw_value_loss = (batch_returns - values) ** 2
+    value_loss = c1 * (jnp.sum(raw_value_loss * valid_mask) / total_valid_elements)
 
-    # entropy
-    entropy = c2 * jnp.mean(beta_entropy(alpha, beta).sum(axis=2))
+    # Entropy (Modificado para ignorar passos inválidos)
+    raw_entropy = beta_entropy(alpha, beta).sum(axis=2)
+    entropy = c2 * (jnp.sum(raw_entropy * valid_mask) / total_valid_elements)
 
     total_loss = policy_loss + value_loss - entropy
     return total_loss, {"entropy": entropy, "policy_loss": policy_loss, "value_loss": value_loss}
-
 
 
 ##########################################################################
@@ -276,6 +282,7 @@ def train_epochs(
                     advantages,
                     returns,
                     buffer.logprob_buffer,
+                    batch_ptr=buffer.ptr,
                 )
 
             # calcula os gradientes e atualiza os parametros
@@ -307,7 +314,7 @@ def update_goal(state, progress, settings:TrainingSettings):
     batched_rng, batched_goal = vmapped_get_goal(state["rng"])
     return {**state, "rng": batched_rng, "goal":batched_goal}
 
-@jax.jit
+jax.jit
 def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settings: TrainingSettings):
     """The complete, JIT-compiled training function."""
 

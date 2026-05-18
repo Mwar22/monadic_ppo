@@ -8,6 +8,7 @@ Arquivo com o código principal de treinamento
 
 import os
 import sys
+import time
 sys.stdout.flush()
 
 # Tell XLA to use Triton GEMM, this improves steps/sec by ~30% on some GPUs
@@ -95,12 +96,12 @@ settings = TrainingSettings.init(
     robot_shared_data.value,
     optimizer_creator=create_optimizer,
     step_fn_creator=create_training_step,
-    num_envs=2048,
+    num_envs=2048, #2048 vs 4096.
     epochs=128,
     action_scale=2.0,
     obs_noise_scale=0.001,
-    numberof_goals=128,
-    rollout_steps=512,
+    numberof_goals=10, 
+    rollout_steps=512,  #256 vs 512
     target_success=0.4,
 )
 
@@ -114,103 +115,60 @@ if disable_jit:
 else:
     print("JIT compiling and starting training...")
 
-(runpar, optim_state, network_params, state), metrics = ppo_train(
-    rng, network_params, settings
-)
+# 1. Calcular a quantidade total de passos que o grafo vai processar
+passos_por_iteração = settings.num_envs * settings.rollout_steps
+total_passos_treino = settings.active_numberof_goals * passos_por_iteração
 
+print("==================================================")
+print(f"Configuração do Treino:")
+print(f"  Ambientes em paralelo: {settings.num_envs}")
+print(f"  Passos de Rollout:     {settings.rollout_steps}")
+print(f"  Total de Objetivos/Iterações: {settings.active_numberof_goals}")
+print(f"  Total de passos no Grafo: {total_passos_treino:,}")
+print("==================================================")
 
-############################################### PLOTAGEM / SALVAMENTOS ###############################################
+# =====================================================================
+# CHAMADA 1: Compilação JIT + Execução Inicial (Warmup)
+# =====================================================================
+print("\nExecução 1: Compilando o grafo XLA e executando (isto vai demorar)...")
+tempo_inicio_compilacao = time.perf_counter()
 
-# salva os parametros treinados da rede
-save(network_params, "trained_params.msgpack")
+# Dispara a função (o @jax.jit vai compilar aqui se for a primeira vez)
+final_carry, metrics = ppo_train(rng, network_params, settings)
 
-# salva as estatísticas de observação acumuladas
-save(runpar, "trained_runpar.msgpack")
+# CRÍTICO: Força o Python a esperar a GPU terminar 100% da computação
+metrics["avg_loss"].block_until_ready()
 
-loss = metrics["avg_loss"]
-mean_rewards_vs_timestamp = metrics["mean_rewards_vs_timestamp"]
-mean_rewards_vs_goals = metrics["mean_rewards_vs_goals"]
-grad_norm = metrics["avg_gradnorm"]
-entropy = metrics["avg_entropy"]
-success_rate = metrics["success_rate"]
-err_tol = metrics["err_tol"]
+tempo_total_compilacao = time.perf_counter() - tempo_inicio_compilacao
+print(f"-> Execução 1 concluída em {tempo_total_compilacao:.2f} segundos (Compilação + Treino).")
 
-avg_loss = jnp.mean(loss[-20:])
-print(f" Training finished! Average loss of last 20 steps: {avg_loss:.4f}")
+# =====================================================================
+# CHAMADA 2: Benchmark de Velocidade Pura (Usando o Grafo em Cache)
+# =====================================================================
+print("\nExecução 2: Iniciando Benchmark de Velocidade Pura (Grafo em Cache)...")
 
-# plotagem dos dados
-print(
-    f"mean_rewards_vs_goals: min = {jnp.min(mean_rewards_vs_goals)}, max = {jnp.max(mean_rewards_vs_goals)}"
-)
-print(
-    f"mean_rewards_vs_timestamp: min = {jnp.min(mean_rewards_vs_timestamp)}, max = {jnp.max(mean_rewards_vs_timestamp)}"
-)
+# Avança o RNG para a segunda corrida não ser uma cópia idêntica de dados
+rng, subkey = jax.random.split(rng)
 
+tempo_inicio = time.perf_counter()
 
-fig, axs = plt.subplots(3, 3, figsize=(10, 8), tight_layout=True)
-axs[0][0].plot(loss)
-axs[0][0].set_title("Training Loss")
-axs[0][0].set_xlabel("Epochs")
-axs[0][0].set_ylabel("Loss")
-axs[0][0].grid(True)
+# Roda exatamente a mesma função com os mesmos formatos de inputs
+final_carry_bench, metrics_bench = ppo_train(subkey, network_params, settings)
 
-axs[0][1].plot(grad_norm)
-axs[0][1].set_title("Gradient norm (Euclidian, L2)")
-axs[0][1].set_xlabel("Epochs")
-axs[0][1].set_ylabel("Norm")
-axs[0][1].grid(True)
+# Bloqueia novamente até que a GPU termine o treino completo
+metrics_bench["avg_loss"].block_until_ready()
 
-axs[0][2].plot(success_rate)
-axs[0][2].set_title("Mean (across envs) success rate")
-axs[0][2].set_xlabel("Goal n°")
-axs[0][2].set_ylabel("%")
-axs[0][2].grid(True)
+tempo_puro_execucao = time.perf_counter() - tempo_inicio
 
-axs[1][0].semilogy(mean_rewards_vs_timestamp + 1)
-axs[1][0].set_title("Mean (across envs) sum of rewards (across goals)")
-axs[1][0].set_xlabel("Rollout timestamp")
-axs[1][0].set_ylabel("Average Reward")
-axs[1][0].grid(True)
+# =====================================================================
+# 2. CÁLCULO DO SPS REAL
+# =====================================================================
+sps = total_passos_treino / tempo_puro_execucao
 
-axs[1][1].semilogy(mean_rewards_vs_goals + 1)
-axs[1][1].set_title("Mean (across envs) sum of rewards (across rollout timestamps)")
-axs[1][1].set_xlabel("Goal n°")
-axs[1][1].set_ylabel("Average Reward")
-axs[1][1].grid(True)
-
-axs[1][2].plot(err_tol)
-axs[1][2].set_title("Err tol")
-axs[1][2].set_xlabel("Goal n°")
-axs[1][2].set_ylabel("Tol value")
-axs[1][2].grid(True)
-
-axs[2][0].plot(entropy)
-axs[2][0].set_title("Entropy")
-axs[2][0].set_xlabel("Epochs")
-axs[2][0].set_ylabel("Entropy value")
-axs[2][0].grid(True)
-
-
-axs[2][1].plot(metrics["avg_err"])
-axs[2][1].set_title("Average err")
-axs[2][1].set_xlabel("Goal n°")
-axs[2][1].set_ylabel("avg err")
-axs[2][1].grid(True)
-
-
-plt.savefig(f"training_plots.png")
-print("\nTraining plots saved to training_plots.png")
-
-import pandas as pd
-
-"""
-df = pd.DataFrame({
-    "step": range(len(metrics["loss"])),
-    "loss": metrics["loss"],
-    "avg_reward": avg_episode_rewards,
-    "grad_norm": grad_norm,
-    "success_count": avg_success_count
-})
-df.to_csv(f"l1_{activation_str}.csv", index=False)
-"""
-print("Done!")
+print("\n" + "="*50)
+print("               RESULTADOS DO BENCHMARK            ")
+print("="*50)
+print(f"Tempo de Execução de Hardware:  {tempo_puro_execucao:.3f} segundos")
+print(f"Total de Passos Simulados:       {total_passos_treino:,}")
+print(f"Passos por Segundo (SPS Real):   {sps:,.0f}")
+print("="*50)
