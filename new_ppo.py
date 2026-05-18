@@ -50,10 +50,10 @@ def rollout_step(
             _action_buffer,
             _reward_buffer,
             _logprob_buffer,
-            data["obs"],
-            data["action"],
-            data["reward"],
-            data["logprob"],
+            data["obs"].astype(_obs_buffer.dtype),    
+            data["action"].astype(_action_buffer.dtype),
+            data["reward"].astype(_reward_buffer.dtype),
+            data["logprob"].astype(_logprob_buffer.dtype),
             _ptr
         )
 

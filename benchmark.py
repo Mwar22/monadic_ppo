@@ -96,12 +96,12 @@ settings = TrainingSettings.init(
     robot_shared_data.value,
     optimizer_creator=create_optimizer,
     step_fn_creator=create_training_step,
-    num_envs=2048, #2048 vs 4096.
-    epochs=128,
+    num_envs=1280,
+    epochs=10,
     action_scale=2.0,
     obs_noise_scale=0.001,
     numberof_goals=10, 
-    rollout_steps=512,  #256 vs 512
+    rollout_steps=128,  #256 vs 512
     target_success=0.4,
 )
 

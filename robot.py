@@ -624,7 +624,7 @@ def concat_obs_as_array(d: Dict[str, Any]) -> StateMonad:
             jnp.array([d["position_error"]]), #(1, )
             d["joint_angles"],  # (6, )
         ]
-        obs_array = jnp.concatenate(obs_list, dtype=jnp.float16)
+        obs_array = jnp.concatenate(obs_list)
         # (13,)
 
         return state, {**d, "obs": obs_array}
@@ -853,7 +853,7 @@ def get_action(
         action, logprob = cont_sample_beta(output, rng1)
 
         # escala ação para de [0, 1] para [-1, 1]
-        action = jnp.clip(2.0 * action - 1.0, -1.0, 1.0).astype(jnp.float16)
+        action = jnp.clip(2.0 * action - 1.0, -1.0, 1.0)
 
         new_state = {**state, "rng": rng2}
         return new_state, {"action": action, "logprob": logprob}
