@@ -266,13 +266,13 @@ class BatchedBuffer:
         rollout_steps = settings.rollout_steps +1
     
         return cls(
-            jnp.zeros((num_envs, rollout_steps, settings.network_settings.obs_size)),
-            jnp.zeros((num_envs, rollout_steps, settings.network_settings.action_size)),
+            jnp.zeros((num_envs, rollout_steps, settings.network_settings.obs_size), dtype=jnp.float16),
+            jnp.zeros((num_envs, rollout_steps, settings.network_settings.action_size), dtype=jnp.float16),
             jnp.zeros((num_envs, rollout_steps), dtype=jnp.float32),
             jnp.zeros((num_envs, rollout_steps), dtype=jnp.float32),
-            jnp.zeros((num_envs,), dtype=jnp.int32),
-            jnp.zeros((num_envs,), dtype=jnp.bool),
-            jnp.zeros((num_envs,), dtype=jnp.bool),
+            jnp.zeros((num_envs,), dtype=jnp.uint16),
+            jnp.zeros((num_envs,), dtype=jnp.bool_),
+            jnp.zeros((num_envs,), dtype=jnp.bool_),
         )
     
     @classmethod

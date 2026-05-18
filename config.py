@@ -100,16 +100,16 @@ class RewardConfig:
     # abaixo de xzero, tem-se recompensas (valores positivos)
     # No início do treino (progress=0), xzero=0.5
     # No fim do treino (progress=1), xzero=0.01
-    pos_incentive_xzero = RewardConfigParameter.linear_tracking(0.33, 0.01)
+    pos_incentive_xzero = RewardConfigParameter.linear_tracking(0.3, 0.1)
 
     # --- Incentivo de Orientação ---
     #rot_incentive_gain = RewardConfigParameter.const(100.0)
     #rot_incentive_sigma = RewardConfigParameter.linear_tracking(0.5, 0.05)
 
     # --- Sucesso e Falha ---
-    success_reward = RewardConfigParameter.const(1000.0)
-    failure_penalty = RewardConfigParameter.const(-1000.0)
-    limitbreach_penalty_gain = RewardConfigParameter.const(-100.0)
+    success_reward = RewardConfigParameter.const(100.0)
+    failure_penalty = RewardConfigParameter.const(-100.0)
+    limitbreach_penalty_gain = RewardConfigParameter.const(-10.0)
 
     # --- Tolerância ---
     # No início do treino (progress=0), err_tol=0.8
@@ -123,7 +123,7 @@ class RewardConfig:
 
     # cost action - penalidade por diferença entra ação atual e passada
     # penaliza delta de ações muito grandes no final
-    tar_penalty_gain = RewardConfigParameter.linear_tracking(-0.001, -0.01)
+    tar_penalty_gain = RewardConfigParameter.linear_tracking(-0.001, -0.1)
 
 
 

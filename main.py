@@ -48,7 +48,7 @@ from utils import save
 # cria o otimizazor
 def create_optimizer(steps):
     lr_scheduler = optax.schedules.cosine_onecycle_schedule(
-        peak_value=1e-3, transition_steps=steps
+        peak_value=8e-3, transition_steps=steps
     )
 
     return optax.chain(
@@ -97,10 +97,10 @@ settings = TrainingSettings.init(
     step_fn_creator=create_training_step,
     num_envs=2048,
     epochs=100,
-    action_scale=0.5,
+    action_scale=2.0,
     obs_noise_scale=0.001,
-    numberof_goals=40,
-    rollout_steps=128,
+    numberof_goals=100,
+    rollout_steps=400,
     target_success=0.4,
 )
 

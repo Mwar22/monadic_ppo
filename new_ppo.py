@@ -94,9 +94,8 @@ def rollout(
         'success_count':0,
         "err":0
     }
-    state_out_axes = {**state_in_axes, 'obs_stats': 0}
 
-    step_fn = jax.jit(settings.step_fn_creator(settings, network_params))
+    step_fn = settings.step_fn_creator(settings, network_params)
 
     vmap_rollout_step = jax.vmap(
         partial(rollout_step, runpar.progress.value, step_fn, runpar),
@@ -308,6 +307,7 @@ def update_goal(state, progress, settings:TrainingSettings):
     batched_rng, batched_goal = vmapped_get_goal(state["rng"])
     return {**state, "rng": batched_rng, "goal":batched_goal}
 
+@jax.jit
 def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settings: TrainingSettings):
     """The complete, JIT-compiled training function."""
 

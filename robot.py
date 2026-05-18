@@ -624,7 +624,7 @@ def concat_obs_as_array(d: Dict[str, Any]) -> StateMonad:
             jnp.array([d["position_error"]]), #(1, )
             d["joint_angles"],  # (6, )
         ]
-        obs_array = jnp.concatenate(obs_list)
+        obs_array = jnp.concatenate(obs_list, dtype=jnp.float16)
         # (13,)
 
         return state, {**d, "obs": obs_array}
@@ -853,7 +853,7 @@ def get_action(
         action, logprob = cont_sample_beta(output, rng1)
 
         # escala ação para de [0, 1] para [-1, 1]
-        action = jnp.clip(2.0 * action - 1.0, -1.0, 1.0)
+        action = jnp.clip(2.0 * action - 1.0, -1.0, 1.0).astype(jnp.float16)
 
         new_state = {**state, "rng": rng2}
         return new_state, {"action": action, "logprob": logprob}
@@ -861,7 +861,7 @@ def get_action(
     return StateMonad(fn)
 
 
-def get_ctrl(rsd: RobotSharedData, pdata, action_scale, alpha=0.8):
+def get_ctrl(rsd: RobotSharedData, pdata, action_scale, alpha=0.6):
     mid = 0.5 * (rsd.uppers + rsd.lowers)
     half = 0.5 * action_scale * (rsd.uppers - rsd.lowers)
 
@@ -895,6 +895,7 @@ def shape_return(pdata):
             "reward": pdata["reward"],
             "logprob": pdata["logprob"],
             "done": pdata["done"],
+            #"ctrl_l2norm":jnp.linalg.norm(pdata["ctrl"], ord=2),
         }
         return state, data
 
