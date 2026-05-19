@@ -23,10 +23,10 @@ def create_networks(rng:jax.Array, obs_size:int, action_size:int):
 
     actor = Actor(action_size, discrete=True)
     critic = Critic()
-    actor_params = actor.init(rng_actor, dummy_obs),
-    critic_params = critic.init(rng_critic, dummy_obs),
+    actor_params = actor.init(rng_actor, dummy_obs)
+    critic_params = critic.init(rng_critic, dummy_obs)
 
-    return rng, NetworksSettings(obs_size, action_size, actor, critic), NetworkParameters.init(actor_params, critic_params)
+    return rng, NetworksSettings(obs_size, action_size, actor, critic), NetworkParameters(actor_params, critic_params)
 
 ##################################################### MODELOS #########################################################
 activation = lambda x: nn.leaky_relu(x)

@@ -101,17 +101,6 @@ class NetworkParameters:
     actor: Any
     critic: Any
 
-    @classmethod
-    def init(cls, actor_params, critic_params) -> Self:
-
-        if isinstance(actor_params, Tuple):
-            actor_params = actor_params[0]
-
-        if isinstance(critic_params, Tuple):
-            critic_params = critic_params[0]
-
-        return cls(actor_params, critic_params)
-
     def update(self, actor_params, critic_params):
         return NetworkParameters(actor_params, critic_params)
     

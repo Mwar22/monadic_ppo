@@ -48,7 +48,7 @@ from utils import save
 # cria o otimizazor
 def create_optimizer(steps):
     lr_scheduler = optax.schedules.cosine_onecycle_schedule(
-        peak_value=1e-3,        
+        peak_value=1e-4,        
         pct_start=0.2,            # 20% do treino subindo (warm-up), 80% descendo
         div_factor=10.0,          # LR inicial = peak_value / div_factor
         final_div_factor=100.0,    # LR final = LR inicial / final_div_factor para o ajuste fino,
@@ -56,8 +56,8 @@ def create_optimizer(steps):
     )
 
     return optax.chain(
+        optax.adam(lr_scheduler, eps=1e-8),
         optax.clip_by_global_norm(1.0),  # gradient clipping
-        optax.adam(lr_scheduler, eps=1e-5),
     )
 
 
