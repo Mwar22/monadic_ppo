@@ -48,7 +48,7 @@ from utils import save
 # cria o otimizazor
 def create_optimizer(steps):
     lr_scheduler = optax.schedules.cosine_onecycle_schedule(
-        peak_value=1e-4, transition_steps=steps
+        peak_value=5e-3, transition_steps=steps
     )
 
     return optax.chain(
@@ -128,7 +128,6 @@ save(network_params, "trained_params.msgpack")
 save(runpar, "trained_runpar.msgpack")
 
 loss = metrics["avg_loss"]
-print(f"loss: {loss}")
 mean_rewards_vs_timestamp = metrics["mean_rewards_vs_timestamp"]
 mean_rewards_vs_goals = metrics["mean_rewards_vs_goals"]
 grad_norm = metrics["avg_gradnorm"]
