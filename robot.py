@@ -694,6 +694,7 @@ def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningAvg, env: StateMonad, o
                     state,
                     {
                         **pdata,
+                        "joint_vel": rsd.qvel(state["mjx_data"]),
                         "joint_angles": rsd.normalized_qpos(state["mjx_data"]),
                     },
                 )
@@ -748,6 +749,9 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
 
                             # penalidade proporcional ao numero de juntas que ultrapassaram os limites
                             + reward_config.limitbreach_penalty_gain.update(progress) * pdata["limitbreach_count"]
+
+                            #penalidade proporcional a norma l2 das velocidades de junta
+                            + reward_config.velocity_penalty.update(progress) * pdata["joint_vel"]
                         ),
                     },
                 )
@@ -850,7 +854,7 @@ def get_action(
 
         output = network_settings.actor.apply(network_parameters.actor, last_obs)
         output = cast(jax.Array, output)
-        action, logprob = cont_sample_beta(output, rng1)
+        action, logprob = cont_sample_beta(output, rng1, 2.0)
 
         # escala ação para de [0, 1] para [-1, 1]
         action = jnp.clip(2.0 * action - 1.0, -1.0, 1.0)

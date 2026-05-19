@@ -174,6 +174,9 @@ def cont_sample_beta(logits: jax.Array, rng: jax.Array, min_alpha_beta=1.0):
 
     # mapeia os logits para parametros positivos para serem utilizados na distribuição beta
     alpha_logits, beta_logits = jnp.split(logits, 2, axis=-1)
+    alpha_logits = jnp.clip(alpha_logits, -10.0, 10.0)
+    beta_logits  = jnp.clip(beta_logits, -10.0, 10.0)
+    
     alpha = jax.nn.softplus(alpha_logits) + min_alpha_beta
     beta  = jax.nn.softplus(beta_logits) + min_alpha_beta
 
@@ -188,13 +191,17 @@ def cont_sample_beta(logits: jax.Array, rng: jax.Array, min_alpha_beta=1.0):
     logprobs = jax.scipy.stats.beta.logpdf(clipped_actions, alpha, beta)
     return actions, jnp.sum(logprobs, axis=-1)
 
-def beta_entropy(alpha, beta):
-    lnB = gammaln(alpha) + gammaln(beta) - gammaln(alpha + beta)
+def beta_entropy(alpha, beta, eps=1e-6):
+    # Um pequeno epsilon impede NaN se alpha ou beta chegarem colados em zero
+    a = jnp.maximum(alpha, eps)
+    b = jnp.maximum(beta, eps)
+
+    lnB = gammaln(a) + gammaln(b) - gammaln(a + b)
     H = (
         lnB
-        - (alpha - 1) * digamma(alpha)
-        - (beta - 1) * digamma(beta)
-        + (alpha + beta - 2) * digamma(alpha + beta)
+        - (a - 1) * digamma(a)
+        - (b - 1) * digamma(b)
+        + (a + b - 2) * digamma(a + b)
     )
     return H
 

@@ -48,10 +48,10 @@ from utils import save
 # cria o otimizazor
 def create_optimizer(steps):
     lr_scheduler = optax.schedules.cosine_onecycle_schedule(
-        peak_value=1e-4,        
+        peak_value=5e-4,        
         pct_start=0.2,            # 20% do treino subindo (warm-up), 80% descendo
-        div_factor=10.0,          # LR inicial = peak_value / div_factor
-        final_div_factor=100.0,    # LR final = LR inicial / final_div_factor para o ajuste fino,
+        div_factor=5.0,          # LR inicial = peak_value / div_factor
+        final_div_factor=50.0,    # LR final = LR inicial / final_div_factor para o ajuste fino,
         transition_steps=steps
     )
 
@@ -101,11 +101,11 @@ settings = TrainingSettings.init(
     optimizer_creator=create_optimizer,
     step_fn_creator=create_training_step,
     num_envs=1280,
-    epochs=5,
-    action_scale=0.05,
+    epochs=50,
+    action_scale=0.1,
     obs_noise_scale=0.001,
     numberof_goals=20,
-    rollout_steps=128,
+    rollout_steps=50,
     target_success=0.4,
 )
 

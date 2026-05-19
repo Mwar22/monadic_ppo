@@ -198,21 +198,14 @@ def ppo_loss(
     clip_eps=0.2,
     c1=0.8,
     c2=0.01,
-    min_alpha_beta=1.0,
+    min_alpha_beta=2.0,
 ):
-    #jax.debug.print("batch obs: {}", batch_obs)
-    #jax.debug.print("batch actions: {}", batch_actions)
-    #jax.debug.print("batch advantages: {}", batch_advantages)
-    #jax.debug.print("batch returns: {}", batch_returns)
-    #jax.debug.print("batch ptrs: {}", batch_ptr)
-
+   
     batch_advantages = jax.lax.stop_gradient(batch_advantages)
     batch_returns = jax.lax.stop_gradient(batch_returns)
-
     batch_obs = jax.lax.stop_gradient(batch_obs[:, :-1, :])
     batch_actions = jax.lax.stop_gradient(batch_actions[:, :-1, :])
     old_log_probs = jax.lax.stop_gradient(old_log_probs[:, :-1])
-
     batch_ptr = jax.lax.stop_gradient(batch_ptr)
 
     #mascara para os passos validos
@@ -223,6 +216,22 @@ def ppo_loss(
     valid_mask = steps_arr[None, :] < batch_ptr[:, None]  # shape: (num_envs, max_steps)
     total_valid_elements = jnp.sum(valid_mask) + 1e-6     # Evita divisão por zero
 
+    def masked_norm(values, mask):
+       
+        # media dos elementos válidos
+        mean = jnp.sum(values * mask) / total_valid_elements
+        
+        # variancia dos elementos validos
+        variance = jnp.sum(jnp.square(values - mean) * mask) / total_valid_elements
+        std = jnp.sqrt(variance) + 1e-8
+        
+        # normaliza e zera o padding 
+        normalized_adv = ((values - mean) / std) * mask
+        return normalized_adv
+    
+    #normaliza as vantagens
+    batch_advantages = masked_norm(batch_advantages, valid_mask)
+   
     # forward 
     networks = settings.network_settings
     logits = cast(jax.Array, networks.actor.apply(params.actor, batch_obs))
@@ -230,8 +239,11 @@ def ppo_loss(
 
     # parametrização
     alpha_logits, beta_logits = jnp.split(logits, 2, axis=-1)
-    alpha = jnp.clip(jax.nn.softplus(alpha_logits) + min_alpha_beta, 1.0, 100.0)
-    beta  = jnp.clip(jax.nn.softplus(beta_logits) + min_alpha_beta, 1.0, 100.0)
+    alpha_logits = jnp.clip(alpha_logits, -10.0, 10.0)
+    beta_logits  = jnp.clip(beta_logits, -10.0, 10.0)
+
+    alpha = jax.nn.softplus(alpha_logits) + min_alpha_beta
+    beta  = jax.nn.softplus(beta_logits) + min_alpha_beta
 
     # logprobs
     clipped_actions = jnp.clip(batch_actions, 1e-6, 1 - 1e-6)
@@ -239,7 +251,8 @@ def ppo_loss(
     logprobs = jnp.sum(logprobs, axis=2)
 
     #KL divergence
-    kl_div = jnp.mean(old_log_probs - logprobs)
+    raw_kl = old_log_probs - logprobs
+    kl_div = jnp.sum(raw_kl * valid_mask) / total_valid_elements
 
     # ratio
     ratio = jnp.exp(logprobs - old_log_probs)
@@ -370,10 +383,6 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
             new_buffer.ptr,
             new_buffer.done_flag,
         )
-
-        # normaliza para prevenir problemas com os gradientes, com as recompensas ruidosas
-        advantages = mu.stdNormalize(advantages)
-        returns = mu.stdNormalize(returns)
 
         #bloqueia o calculo de gradientes 
         advantages = jax.lax.stop_gradient(advantages)
