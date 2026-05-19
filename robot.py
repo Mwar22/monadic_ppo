@@ -751,7 +751,7 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
                             + reward_config.limitbreach_penalty_gain.update(progress) * pdata["limitbreach_count"]
 
                             #penalidade proporcional a norma l2 das velocidades de junta
-                            + reward_config.velocity_penalty.update(progress) * pdata["joint_vel"]
+                            + reward_config.velocity_penalty.update(progress) * jnp.linalg.norm(pdata["joint_vel"], ord=2)
                         ),
                     },
                 )
@@ -814,7 +814,7 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
 
 ####################################################################################################################
 
-def cont_sample_beta(logits: jax.Array, rng: jax.Array, min_alpha_beta=1.0):
+def cont_sample_beta(logits: jax.Array, rng: jax.Array, min_alpha_beta=2.0):
     """
     Sample continuous actions in [0,1] using independent Beta distributions
     parameterized by logits.
@@ -831,8 +831,10 @@ def cont_sample_beta(logits: jax.Array, rng: jax.Array, min_alpha_beta=1.0):
 
     # mapeia os logits para parametros positivos para serem utilizados na distribuição beta
     alpha_logits, beta_logits = jnp.split(logits, 2, axis=-1)
-    alpha = jax.nn.softplus(alpha_logits) + min_alpha_beta
-    beta  = jax.nn.softplus(beta_logits) + min_alpha_beta
+    
+    # No seu ppo_loss, force a Beta a nunca virar uma agulha rígida:
+    alpha = jnp.clip(jax.nn.softplus(alpha_logits) + min_alpha_beta, 2.0, 5.0)
+    beta  = jnp.clip(jax.nn.softplus(beta_logits) + min_alpha_beta, 2.0, 5.0)
 
     # separa o rng para amostras independentes
     rng, subkey = jax.random.split(rng)
@@ -854,7 +856,7 @@ def get_action(
 
         output = network_settings.actor.apply(network_parameters.actor, last_obs)
         output = cast(jax.Array, output)
-        action, logprob = cont_sample_beta(output, rng1, 2.0)
+        action, logprob = cont_sample_beta(output, rng1)
 
         # escala ação para de [0, 1] para [-1, 1]
         action = jnp.clip(2.0 * action - 1.0, -1.0, 1.0)

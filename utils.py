@@ -156,8 +156,16 @@ def stand_still_reward(
         gain * jnp.linalg.norm(joint_angles - default_pose) * mask.astype(jnp.float32)
     )
 
+def get_beta_params(logits: jax.Array, min_val=2.0, max_val=50.0): # <--- SUBA PARA 50.0
+    """Mapeia logits para os parâmetros alpha e beta de forma unificada e segura."""
+    alpha_logits, beta_logits = jnp.split(logits, 2, axis=-1)
+    
+    alpha = jnp.clip(jax.nn.softplus(alpha_logits) + min_val, min_val, max_val)
+    beta  = jnp.clip(jax.nn.softplus(beta_logits) + min_val, min_val, max_val)
+    
+    return alpha, beta
 
-def cont_sample_beta(logits: jax.Array, rng: jax.Array, min_alpha_beta=1.0):
+def cont_sample_beta(logits: jax.Array, rng: jax.Array):
     """
     Sample continuous actions in [0,1] using independent Beta distributions
     parameterized by logits.
@@ -173,12 +181,7 @@ def cont_sample_beta(logits: jax.Array, rng: jax.Array, min_alpha_beta=1.0):
     """
 
     # mapeia os logits para parametros positivos para serem utilizados na distribuição beta
-    alpha_logits, beta_logits = jnp.split(logits, 2, axis=-1)
-    alpha_logits = jnp.clip(alpha_logits, -10.0, 10.0)
-    beta_logits  = jnp.clip(beta_logits, -10.0, 10.0)
-    
-    alpha = jax.nn.softplus(alpha_logits) + min_alpha_beta
-    beta  = jax.nn.softplus(beta_logits) + min_alpha_beta
+    alpha, beta = get_beta_params(logits)
 
     # separa o rng para amostras independentes
     rng, subkey = jax.random.split(rng)
@@ -272,6 +275,8 @@ def stdNormalize(values: jax.Array):
     std = jnp.std(values)
     values = (values - mean) / (std + 1e-8)
     return values
+
+
 
 
 def update_assets(

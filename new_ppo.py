@@ -2,7 +2,6 @@ from os import wait
 import jax
 import optax
 import jax.numpy as jnp
-import flax.linen as nn
 import utils as mu
 from functools import partial
 from typing import Dict, Any, cast
@@ -38,29 +37,31 @@ def rollout_step(
 
     # Caso stop_flag esteja como False
     def do_step(carry):
-        _state, _obs_buffer, _action_buffer, _reward_buffer, _logprob_buffer, _ptr, _done_flag, _stop_flag = carry
+        c_state, c_obs_buffer, c_action_buffer, c_reward_buffer, c_logprob_buffer, c_ptr, c_done_flag, c_stop_flag = carry
 
-        # executa o ambiente
-        _state, data = step_fn(progress, _state, runpar)
+        # salva a observação antes de avançar a fisica (O_t)
+        obs = c_state["obs"]
 
+        # executa o ambiente (isso avança a física para O_t+1)
+        new_c_state, data = step_fn(progress, c_state, runpar)
 
-        # adiciona o dado no buffer
-        _obs_buffer, _action_buffer, _reward_buffer, _logprob_buffer, _ptr = BatchedBuffer.push(
-            _obs_buffer,
-            _action_buffer,
-            _reward_buffer,
-            _logprob_buffer,
-            data["obs"].astype(_obs_buffer.dtype),    
-            data["action"].astype(_action_buffer.dtype),
-            data["reward"].astype(_reward_buffer.dtype),
-            data["logprob"].astype(_logprob_buffer.dtype),
-            _ptr
-        )
+        #adicionamos os dados no buffer
+        push = lambda buffer, value: buffer.at[c_ptr].set(value.astype(buffer.dtype))
 
-        _done_flag = data["done"] > 0.5 
-        _stop_flag = _done_flag | (_state["step"] >= _reward_buffer.shape[0])
+        c_obs_buffer = push(c_obs_buffer, obs)
+        c_action_buffer = push(c_action_buffer, data["action"])
+        c_reward_buffer = push(c_reward_buffer, data["reward"])
+        c_logprob_buffer = push(c_logprob_buffer, data["logprob"])
+        c_ptr += 1
 
-        return _state, _obs_buffer, _action_buffer, _reward_buffer, _logprob_buffer, _ptr, _done_flag, _stop_flag
+        # Já gravamos a observação do futuro no proximo indice (de forma preventiva)
+        # se o rollout terminar, já fica gravado
+        c_obs_buffer = push(c_obs_buffer, data["obs"])
+
+        c_done_flag = data["done"] > 0.5 
+        c_stop_flag = c_done_flag | (new_c_state["step"] >= c_reward_buffer.shape[0])
+
+        return new_c_state, c_obs_buffer, c_action_buffer, c_reward_buffer, c_logprob_buffer, c_ptr, c_done_flag, c_stop_flag
 
     # Caso stop_flag esteja como True
     def no_step(carry):  #
@@ -196,9 +197,8 @@ def ppo_loss(
     old_log_probs,      # shape: (num_envs, max_steps +1)
     batch_ptr,          # ADICIONADO: shape (num_envs,) vindo do buffer.ptr
     clip_eps=0.2,
-    c1=0.8,
-    c2=0.01,
-    min_alpha_beta=2.0,
+    c1=1e-3,
+    c2=0.1,
 ):
    
     batch_advantages = jax.lax.stop_gradient(batch_advantages)
@@ -237,13 +237,7 @@ def ppo_loss(
     logits = cast(jax.Array, networks.actor.apply(params.actor, batch_obs))
     values = cast(jax.Array, networks.critic.apply(params.critic, batch_obs))
 
-    # parametrização
-    alpha_logits, beta_logits = jnp.split(logits, 2, axis=-1)
-    alpha_logits = jnp.clip(alpha_logits, -10.0, 10.0)
-    beta_logits  = jnp.clip(beta_logits, -10.0, 10.0)
-
-    alpha = jax.nn.softplus(alpha_logits) + min_alpha_beta
-    beta  = jax.nn.softplus(beta_logits) + min_alpha_beta
+    alpha, beta = mu.get_beta_params(logits)
 
     # logprobs
     clipped_actions = jnp.clip(batch_actions, 1e-6, 1 - 1e-6)
@@ -368,7 +362,7 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
     def collect_rollouts(state, buffer, runpar: RunningParameters, network_params: NetworkParameters):
 
         # Faz um rollout (usando a função vetorizada)
-        state, new_buffer = rollout(settings, network_params,state, buffer, runpar)
+        new_state, new_buffer = rollout(settings, network_params,state, buffer, runpar)
 
         # Vetoriza a função GAE
         vmapped_gae = jax.vmap(
@@ -384,12 +378,7 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
             new_buffer.done_flag,
         )
 
-        #bloqueia o calculo de gradientes 
-        advantages = jax.lax.stop_gradient(advantages)
-        returns = jax.lax.stop_gradient(returns)
-
-
-        return state, new_buffer, advantages, returns
+        return new_state, new_buffer, advantages, returns
     
     def new_goal_step(carry, goal_idx):
         """This is the body of the scan, representing one full update."""
@@ -404,17 +393,17 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
         new_goal_state = update_goal(current_state, runpar.progress, settings)
 
         #coleta os dados e atualiza os parâmetros correntes 
-        state, buffer, advantages, returns = collect_rollouts(new_goal_state, buffer, runpar, network_params)
-        mean_envs_success_rate = get_success_rate(state)
+        new_state, new_buffer, advantages, returns = collect_rollouts(new_goal_state, buffer, runpar, network_params)
+        mean_envs_success_rate = get_success_rate(new_state)
     
 
         # metricas tem shape (epochs, *metric_shape)
-        network_params, optim_state, training_metrics = train_epochs(settings, network_params, optim_state, buffer, advantages, returns)
-        runpar = runpar.update(buffer.obs_buffer, goal_idx)
+        network_params, optim_state, training_metrics = train_epochs(settings, network_params, optim_state, new_buffer, advantages, returns)
+        runpar = runpar.update(new_buffer.obs_buffer, goal_idx)
     
-        newcarry = (runpar, optim_state, network_params, state)
+        newcarry = (runpar, optim_state, network_params, new_state)
         err_tol = settings.robot_shared_data.reward_config.err_tol.update(runpar.progress)
-        return newcarry, (training_metrics, mean_envs_success_rate, buffer.reward_buffer, state["err"], err_tol)
+        return newcarry, (training_metrics, mean_envs_success_rate, new_buffer.reward_buffer, new_state["err"], err_tol)
 
     # loop principal de trainamento, executado por lax.scan
     runpar = RunningParameters.init((settings.network_settings.obs_size, ), settings.numberof_goals)

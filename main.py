@@ -102,10 +102,10 @@ settings = TrainingSettings.init(
     step_fn_creator=create_training_step,
     num_envs=1280,
     epochs=50,
-    action_scale=0.1,
+    action_scale=0.01,
     obs_noise_scale=0.001,
-    numberof_goals=20,
-    rollout_steps=50,
+    numberof_goals=50,
+    rollout_steps=100,
     target_success=0.4,
 )
 

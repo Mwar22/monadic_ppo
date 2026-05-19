@@ -10,7 +10,7 @@ import jax
 import jax.numpy as jnp
 from flax import struct
 from dataclasses import field
-from typing import Callable, Self, List
+from typing import Callable, Tuple
 
 
 @struct.dataclass
@@ -93,23 +93,23 @@ class RewardConfigParameter:
 class RewardConfig:
     # --- Incentivo de Posição ---
     # O ganho máximo quando o erro é zero
-    pos_incentive_gain = RewardConfigParameter.const(1000.0)
+    pos_incentive_gain = RewardConfigParameter.const(5.0)
 
     # Valor que define o comportamento da recompensa combinada exponencial e linear.
     # para erros acima de xzero, tem-se penalidades (valores negativos)
     # abaixo de xzero, tem-se recompensas (valores positivos)
     # No início do treino (progress=0), xzero=0.5
     # No fim do treino (progress=1), xzero=0.01
-    pos_incentive_xzero = RewardConfigParameter.linear_tracking(0.6, 0.1)
+    pos_incentive_xzero = RewardConfigParameter.linear_tracking(0.5, 0.1)
 
     # --- Incentivo de Orientação ---
     #rot_incentive_gain = RewardConfigParameter.const(100.0)
     #rot_incentive_sigma = RewardConfigParameter.linear_tracking(0.5, 0.05)
 
     # --- Sucesso e Falha ---
-    success_reward = RewardConfigParameter.const(500.0)
-    failure_penalty = RewardConfigParameter.const(-500.0)
-    limitbreach_penalty_gain = RewardConfigParameter.const(-5.0)
+    success_reward = RewardConfigParameter.const(50.0)
+    failure_penalty = RewardConfigParameter.const(-50.0)
+    limitbreach_penalty_gain = RewardConfigParameter.const(-1.0)
 
     # --- Tolerância ---
     # No início do treino (progress=0), err_tol=0.8
@@ -119,11 +119,11 @@ class RewardConfig:
 
     # --- Regularização ---
     #torques_penalty = RewardConfigParameter.const(-1e-6)
-    velocity_penalty = RewardConfigParameter.linear_tracking(-1e-4, -5e-4)
+    velocity_penalty = RewardConfigParameter.const(-1e-3)
 
     # cost action - penalidade por diferença entra ação atual e passada
     # penaliza delta de ações muito grandes no final
-    tar_penalty_gain = RewardConfigParameter.linear_tracking(-0.001, -0.1)
+    tar_penalty_gain = RewardConfigParameter.linear_tracking(-0.01, -0.1)
 
 
 
@@ -132,7 +132,7 @@ class VectorRange:
     min_values: jax.Array
     max_values: jax.Array
 
-    def sample_normal(self, rng, progress):
+    def sample_normal(self, rng: jax.Array, progress: float)-> Tuple[jax.Array, jax.Array]:
         scale = jnp.maximum(0.01, progress)
 
         dim = self.min_values.shape[0]

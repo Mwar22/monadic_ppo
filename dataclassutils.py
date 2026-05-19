@@ -1,14 +1,16 @@
 ﻿
 import jax
 import optax
-import mujoco
 import jax.numpy as jnp
 import flax.linen as nn
 from flax import struct
 from typing import Any, cast, Tuple, Callable, Self
-from robot import RobotSharedData
-from jax.scipy.spatial.transform import Rotation
+from robot import RobotSharedData, obs_pipeline
+from mujoco import mjx
+from functools import partial
 from utils import conv2jax_quat
+from config import RangeConfig
+from  enviroment import StateMonad
 
 #faz um casting, para evitar o pylance reclamar de coisas como mjData, que vem do c/c++
 mujoco: Any
@@ -240,46 +242,92 @@ class BatchedBuffer:
             jnp.zeros((num_envs,), dtype=jnp.bool_),
         )
     
+@struct.dataclass
+class Goals:
+    batched_pos: jax.Array
+    batched_vel: jax.Array
+
+    get_goal: Callable[[float, jax.Array], Tuple[jax.Array, jax.Array, jax.Array]]
+
     @classmethod
-    def push(
-        cls,
-        obs_buffer: jax.Array,
-        action_buffer: jax.Array,
-        reward_buffer: jax.Array,
-        logprob_buffer: jax.Array,
-        obs: jax.Array,
-        action: jax.Array,
-        reward: jax.Array,
-        logprob: jax.Array,
-        ptr: jax.Array
-    ):
-        """
-        Adiciona um dado em um buffer de dimensões (rollout_steps, *data_shape)
+    def init(cls, batched_rng: jax.Array, range_config: RangeConfig, progress: float = 0.0)->Tuple[jax.Array, Self]:
 
-        Parameters
-        ----------
-        obs_buffer: jax.Array
-            Buffer considerando apenas um único ambiente, (rollout_steps, obs_shape)
+        def get_goal(progress: float, rng: jax.Array):
+            rng1, position = range_config.position.sample_normal(rng, progress)
+            rng2, position_velocities = range_config.position_velocities.sample_normal(rng1, progress)
+            return rng2, position, position_velocities
+        
+        vmapped_get_goal = jax.vmap(partial(get_goal, progress))
+        batched_rng, batched_pos, batched_vel = vmapped_get_goal(batched_rng)
 
-        reward_buffer: jax.Array
-            Buffer considerando apenas um único ambiente, (rollout_steps, )
+        return batched_rng, cls(batched_pos, batched_vel, get_goal)
 
-        ptr: jax.Array
-            Ponteiro para a posição atual no buffer
+    def update(self, batched_rng: jax.Array, progress: float):
+        vmapped_get_goal = jax.vmap(partial(self.get_goal, progress))
+        batched_rng, batched_pos, batched_vel = vmapped_get_goal(batched_rng)
+        return batched_rng, Goals(batched_pos, batched_vel, self.get_goal)
+        
 
-        obs: jax.Array
-            observação
+@struct.dataclass
+class EnviromentsState:
+    num_envs: int
+    batched_rng: jax.Array
+    batched_mjx_data: Any
+    batched_goals: Goals
+    batched_obs: jax.Array  #observação no tempo t
+    batched_current_step: jax.Array
+    batched_success_count: jax.Array
+    batched_last_action: jax.Array
 
-        reward: jax.Array
-            recompensa
-        """
+    @classmethod
+    def init(cls, settings: TrainingSettings, rng: jax.Array, progress: float = 0.0)->Self:
+        # (num_envs, features_dim)
+        num_envs = settings.num_envs
+        batched_rng = jax.random.split(rng, num_envs)
 
-        ptr = jnp.minimum(ptr, obs_buffer.shape[0] - 1)
-        obs_buffer = obs_buffer.at[ptr].set(obs)
-        action_buffer = action_buffer.at[ptr].set(action)
-        reward_buffer = reward_buffer.at[ptr].set(reward)
-        logprob_buffer = logprob_buffer.at[ptr].set(logprob)
+        mjx_data = mjx.make_data(settings.robot_shared_data.mjx_model)
+        batched_mjx_data = jax.tree_util.tree_map(
+            lambda x: jax.numpy.repeat(x[None], num_envs, axis=0),
+            mjx_data
+        )
 
-        return obs_buffer, action_buffer, reward_buffer, logprob_buffer, ptr + 1
-    
+        batched_rng, batched_goals = Goals.init(batched_rng, settings.robot_shared_data.range_config)
+
+        temp_state = EnviromentsState(
+            num_envs,
+            batched_rng,
+            batched_mjx_data,
+            batched_goals,
+            jnp.zeros((num_envs, settings.network_settings.obs_size)),
+            jnp.zeros((num_envs,)),
+            jnp.zeros((num_envs,)),
+            jnp.zeros((num_envs, settings.network_settings.action_size)),
+        )
+
+        # Rode apenas o pipeline de observação para obter o estado REAL inicial
+        # Isso garante que a primeira obs que o agente vê não seja zero
+        runpar_init = RunningParameters.init((settings.network_settings.obs_size,), settings.numberof_goals)
+        
+        def get_single_obs(s):
+            # StateMonad.pure({}) inicia o pdata como um dict vazio
+            pipe = obs_pipeline(settings.robot_shared_data, runpar_init.obs_stat, StateMonad.pure({}), settings.obs_noise_scale)
+            _, out_data = pipe.run(s)
+            return out_data["obs"]
+
+        # vmap mapeia 'get_single_obs' sobre a primeira dimensão de todos os arrays no temp_state
+        initial_obs = jax.vmap(get_single_obs)(temp_state)
+
+        return cls(
+            num_envs,
+            batched_rng,
+            batched_mjx_data,
+            batched_goals,
+            initial_obs,
+            jnp.zeros((num_envs,)),
+            jnp.zeros((num_envs,)),
+            jnp.zeros((num_envs, settings.network_settings.action_size)),
+        )
+    # Adicione essa assinatura apenas para o Pylance calar a boca:
+    def replace(self, **kwargs: Any) -> "EnviromentsState":
+        ...
        
