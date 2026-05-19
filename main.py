@@ -48,12 +48,12 @@ from utils import save
 # cria o otimizazor
 def create_optimizer(steps):
     lr_scheduler = optax.schedules.cosine_onecycle_schedule(
-        peak_value=8e-3, transition_steps=steps
+        peak_value=1e-4, transition_steps=steps
     )
 
     return optax.chain(
         optax.clip_by_global_norm(1.0),  # gradient clipping
-        optax.adam(lr_scheduler),
+        optax.adam(lr_scheduler, eps=1e-5),
     )
 
 
@@ -96,11 +96,11 @@ settings = TrainingSettings.init(
     optimizer_creator=create_optimizer,
     step_fn_creator=create_training_step,
     num_envs=1280,
-    epochs=32,
+    epochs=50,
     action_scale=2.0,
     obs_noise_scale=0.001,
-    numberof_goals=64,
-    rollout_steps=256,
+    numberof_goals=20,
+    rollout_steps=40,
     target_success=0.4,
 )
 
@@ -128,12 +128,14 @@ save(network_params, "trained_params.msgpack")
 save(runpar, "trained_runpar.msgpack")
 
 loss = metrics["avg_loss"]
+print(f"loss: {loss}")
 mean_rewards_vs_timestamp = metrics["mean_rewards_vs_timestamp"]
 mean_rewards_vs_goals = metrics["mean_rewards_vs_goals"]
 grad_norm = metrics["avg_gradnorm"]
 entropy = metrics["avg_entropy"]
 success_rate = metrics["success_rate"]
 err_tol = metrics["err_tol"]
+avg_kl_div = metrics["avg_kl_div"]
 
 avg_loss = jnp.mean(loss[-20:])
 print(f" Training finished! Average loss of last 20 steps: {avg_loss:.4f}")
@@ -160,11 +162,12 @@ axs[0][1].set_xlabel("Epochs")
 axs[0][1].set_ylabel("Norm")
 axs[0][1].grid(True)
 
-axs[0][2].plot(success_rate)
-axs[0][2].set_title("Mean (across envs) success rate")
-axs[0][2].set_xlabel("Goal n°")
-axs[0][2].set_ylabel("%")
+axs[0][2].plot(avg_kl_div)
+axs[0][2].set_title("Mean KL divergence")
+axs[0][2].set_xlabel("Epochs°")
+axs[0][2].set_ylabel("Value")
 axs[0][2].grid(True)
+
 
 axs[1][0].semilogy(mean_rewards_vs_timestamp + 1)
 axs[1][0].set_title("Mean (across envs) sum of rewards (across goals)")
@@ -196,6 +199,12 @@ axs[2][1].set_title("Average err")
 axs[2][1].set_xlabel("Goal n°")
 axs[2][1].set_ylabel("avg err")
 axs[2][1].grid(True)
+
+axs[2][2].plot(success_rate)
+axs[2][2].set_title("Mean (across envs) success rate")
+axs[2][2].set_xlabel("Goal n°")
+axs[2][2].set_ylabel("%")
+axs[2][2].grid(True)
 
 
 plt.savefig(f"training_plots.png")

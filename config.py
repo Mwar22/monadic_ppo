@@ -107,9 +107,9 @@ class RewardConfig:
     #rot_incentive_sigma = RewardConfigParameter.linear_tracking(0.5, 0.05)
 
     # --- Sucesso e Falha ---
-    success_reward = RewardConfigParameter.const(100.0)
-    failure_penalty = RewardConfigParameter.const(-100.0)
-    limitbreach_penalty_gain = RewardConfigParameter.const(-10.0)
+    success_reward = RewardConfigParameter.const(500.0)
+    failure_penalty = RewardConfigParameter.const(-500.0)
+    limitbreach_penalty_gain = RewardConfigParameter.const(-5.0)
 
     # --- Tolerância ---
     # No início do treino (progress=0), err_tol=0.8

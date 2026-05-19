@@ -200,6 +200,12 @@ def ppo_loss(
     c2=0.01,
     min_alpha_beta=1.0,
 ):
+    #jax.debug.print("batch obs: {}", batch_obs)
+    #jax.debug.print("batch actions: {}", batch_actions)
+    #jax.debug.print("batch advantages: {}", batch_advantages)
+    #jax.debug.print("batch returns: {}", batch_returns)
+    #jax.debug.print("batch ptrs: {}", batch_ptr)
+
     batch_advantages = jax.lax.stop_gradient(batch_advantages)
     batch_returns = jax.lax.stop_gradient(batch_returns)
 
@@ -207,14 +213,15 @@ def ppo_loss(
     batch_actions = jax.lax.stop_gradient(batch_actions[:, :-1, :])
     old_log_probs = jax.lax.stop_gradient(old_log_probs[:, :-1])
 
-    # --- NOVO: CRIAR MÁSCARA DE PASSOS VÁLIDOS ---
+    batch_ptr = jax.lax.stop_gradient(batch_ptr)
+
+    #mascara para os passos validos
     max_steps = batch_advantages.shape[1]
     steps_arr = jnp.arange(max_steps)
 
     # Compara a matriz de passos com o ponteiro de cada ambiente
     valid_mask = steps_arr[None, :] < batch_ptr[:, None]  # shape: (num_envs, max_steps)
     total_valid_elements = jnp.sum(valid_mask) + 1e-6     # Evita divisão por zero
-    # ----------------------------------------------
 
     # forward 
     networks = settings.network_settings
@@ -231,12 +238,16 @@ def ppo_loss(
     logprobs = jax.scipy.stats.beta.logpdf(clipped_actions, alpha, beta)
     logprobs = jnp.sum(logprobs, axis=2)
 
+    #KL divergence
+    kl_div = jnp.mean(old_log_probs - logprobs)
+
     # ratio
     ratio = jnp.exp(logprobs - old_log_probs)
 
     # PPO objective (Modificado para aplicar a máscara)
     unclipped = ratio * batch_advantages
     clipped = jnp.clip(ratio, 1 - clip_eps, 1 + clip_eps) * batch_advantages
+
     raw_policy_loss = -jnp.minimum(unclipped, clipped)
     policy_loss = jnp.sum(raw_policy_loss * valid_mask) / total_valid_elements
 
@@ -249,11 +260,17 @@ def ppo_loss(
     entropy = c2 * (jnp.sum(raw_entropy * valid_mask) / total_valid_elements)
 
     total_loss = policy_loss + value_loss - entropy
-    return total_loss, {"entropy": entropy, "policy_loss": policy_loss, "value_loss": value_loss}
+    return total_loss, {"entropy": entropy, "policy_loss": policy_loss, "value_loss": value_loss, "kl_div":kl_div}
 
 
 ##########################################################################
+def tree_any_nan(tree):
+    leaves = jax.tree_util.tree_leaves(tree)
 
+    return jnp.array([
+        jnp.any(jnp.isnan(x))
+        for x in leaves
+    ]).any()
 
 ##########################################################################
 def train_epochs(
@@ -267,8 +284,11 @@ def train_epochs(
         def grad_norm(grads):
             leaves = jax.tree_util.tree_leaves(grads)
 
-            # norma euclidiana (L2) do gradiente
-            return jnp.sqrt(sum([jnp.sum(jnp.square(g)) for g in leaves]))
+            sq_sum = 0.0
+            for g in leaves:
+                sq_sum += jnp.sum(jnp.square(g))
+
+            return jnp.sqrt(sq_sum)
 
         def single_epoch(carry,_):
             _parameters, _optimizer_state = carry
@@ -289,6 +309,10 @@ def train_epochs(
             (loss_val, aux_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(_parameters)
             updates, new_optim_state = settings.optimizer.update(grads, _optimizer_state)
             new_parameters = cast(NetworkParameters, optax.apply_updates(_parameters, updates))
+
+            #jax.debug.print("params invalid: {}", tree_any_nan(new_parameters))
+            #jax.debug.print("grads invalid: {}", tree_any_nan(grads))
+
 
             new_carry = (new_parameters, new_optim_state)
         
@@ -401,6 +425,7 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
     avg_loss = jnp.mean(training_metrics["loss"], axis=0)
     avg_entropy = jnp.mean(training_metrics["entropy"], axis=0)
     avg_grad_norm = jnp.mean(training_metrics["grad_norm"], axis=0)
+    avg_kl_div = jnp.mean(training_metrics["kl_div"], axis=0)
 
     # shape de recompensas é: (numberof_goals, num_envs, rollout_steps +1)
     #jax.debug.print("rewards shape: {}", rewards.shape)
@@ -434,6 +459,7 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
         "success_rate":mean_envs_success_rate,
         "avg_err": avg_err,
         "err_tol":err_tol,
+        "avg_kl_div":avg_kl_div,
     }
 
     #final_carry = (runpar, optim_state, network_params)
