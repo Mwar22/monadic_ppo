@@ -48,7 +48,11 @@ from utils import save
 # cria o otimizazor
 def create_optimizer(steps):
     lr_scheduler = optax.schedules.cosine_onecycle_schedule(
-        peak_value=5e-3, transition_steps=steps
+        peak_value=1e-3,        
+        pct_start=0.2,            # 20% do treino subindo (warm-up), 80% descendo
+        div_factor=10.0,          # LR inicial = peak_value / div_factor
+        final_div_factor=100.0,    # LR final = LR inicial / final_div_factor para o ajuste fino,
+        transition_steps=steps
     )
 
     return optax.chain(
@@ -58,7 +62,8 @@ def create_optimizer(steps):
 
 
 ################################################### INICIALIZAÇÂO #####################################################
-rng = jax.random.PRNGKey(42)
+rng = jax.random.PRNGKey(777)
+rng, rng2 = jax.random.split(rng)
 rng, network_settings, network_params = create_networks(rng, obs_size=13, action_size=6)
 
 
@@ -96,11 +101,11 @@ settings = TrainingSettings.init(
     optimizer_creator=create_optimizer,
     step_fn_creator=create_training_step,
     num_envs=1280,
-    epochs=50,
-    action_scale=2.0,
+    epochs=5,
+    action_scale=0.05,
     obs_noise_scale=0.001,
     numberof_goals=20,
-    rollout_steps=40,
+    rollout_steps=128,
     target_success=0.4,
 )
 
@@ -115,7 +120,7 @@ else:
     print("JIT compiling and starting training...")
 
 (runpar, optim_state, network_params, state), metrics = ppo_train(
-    rng, network_params, settings
+    rng2, network_params, settings
 )
 
 

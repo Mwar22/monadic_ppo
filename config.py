@@ -115,7 +115,7 @@ class RewardConfig:
     # No início do treino (progress=0), err_tol=0.8
     # No fim do treino (progress=1), err_tol=0.1
     #err_tol = RewardConfigParameter.oneshot_cos(max_value=0.4, div_factor=2, final_div_factor=40)
-    err_tol = RewardConfigParameter.linear_tracking(0.3, 0.01)
+    err_tol = RewardConfigParameter.linear_tracking(0.5, 0.01)
 
     # --- Regularização ---
     torques_penalty = RewardConfigParameter.const(-1e-6)

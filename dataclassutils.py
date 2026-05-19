@@ -69,55 +69,31 @@ class RunningExponentialAvg:
         new_ema = (self.alpha * self.ema_value) + ((1 - self.alpha) * update_value)
         return RunningExponentialAvg(new_ema, self.alpha)
     
-@struct.dataclass   
-class RunningProgress:
-    value: jax.Array
-    step_size: float
-
-    @classmethod
-    def init(cls, initial_value: jax.Array = jnp.array(0), step_size=0.005) -> Self:
-        return cls(initial_value, step_size)
-    
-    def update(self, success_rate, target_success):
-        delta = jnp.where(success_rate > target_success, self.step_size, -self.step_size)
-        new_value = jnp.clip(self.value + delta, 0.0, 1.0)
-        return RunningProgress(new_value, self.step_size)
 
 @struct.dataclass
 class RunningParameters:
     obs_stat: RunningAvg
-    ema_success: RunningExponentialAvg
-    progress: RunningProgress
-    success_rate: jax.Array
-    target_success: float 
-
+    progress: float
+    numberof_goals: int
+    
     @classmethod
-    def init(cls, obs_shape, target_success: float = 0.6) -> Self:
+    def init(cls, obs_shape, numberof_goals: int = 1) -> Self:
         # Inicializamos com uma contagem pequena para evitar divisões por zero
         return cls(
             RunningAvg.init(obs_shape),
-            RunningExponentialAvg.init(),
-            RunningProgress.init(),
-            jnp.array(0),
-            target_success
+            0.0,
+            numberof_goals,
         )
     
-    def update(self, batch_obs: jax.Array, success_rate: jax.Array, target_success: float | None = None):
+    def update(self, batch_obs: jax.Array, goal_idx: int):
         new_obs_stat = self.obs_stat.update(batch_obs)
-        new_ema_success = self.ema_success.update(success_rate)
 
-        new_rp = lambda ts: RunningParameters(
+        return RunningParameters(
             new_obs_stat,
-            new_ema_success,
-            self.progress.update(new_ema_success.ema_value, ts),
-            success_rate,
-            ts
+            goal_idx/self.numberof_goals,
+            self.numberof_goals
         )
         
-        if target_success is not None:
-           return new_rp(target_success)
-        
-        return new_rp(self.target_success)
     
 
 @struct.dataclass

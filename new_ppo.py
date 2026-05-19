@@ -98,7 +98,7 @@ def rollout(
     step_fn = settings.step_fn_creator(settings, network_params)
 
     vmap_rollout_step = jax.vmap(
-        partial(rollout_step, runpar.progress.value, step_fn, runpar),
+        partial(rollout_step, runpar.progress, step_fn, runpar),
         in_axes=(
             state_in_axes,  # Arg 0: state (was Arg 1 in your version)
             0,               # Arg 1: obs_buffer
@@ -382,7 +382,7 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
 
         return state, new_buffer, advantages, returns
     
-    def new_goal_step(carry, _):
+    def new_goal_step(carry, goal_idx):
         """This is the body of the scan, representing one full update."""
         runpar, optim_state, network_params, current_state = carry
         runpar = cast(RunningParameters, runpar)
@@ -392,7 +392,7 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
         buffer = BatchedBuffer.init(settings)
 
         #atualiza os goals com base no estado atual
-        new_goal_state = update_goal(current_state, runpar.progress.value, settings)
+        new_goal_state = update_goal(current_state, runpar.progress, settings)
 
         #coleta os dados e atualiza os parâmetros correntes 
         state, buffer, advantages, returns = collect_rollouts(new_goal_state, buffer, runpar, network_params)
@@ -401,15 +401,15 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
 
         # metricas tem shape (epochs, *metric_shape)
         network_params, optim_state, training_metrics = train_epochs(settings, network_params, optim_state, buffer, advantages, returns)
-        runpar = runpar.update(buffer.obs_buffer, mean_envs_success_rate)
+        runpar = runpar.update(buffer.obs_buffer, goal_idx)
     
         newcarry = (runpar, optim_state, network_params, state)
-        err_tol = settings.robot_shared_data.reward_config.err_tol.update(mean_envs_success_rate)
+        err_tol = settings.robot_shared_data.reward_config.err_tol.update(runpar.progress)
         return newcarry, (training_metrics, mean_envs_success_rate, buffer.reward_buffer, state["err"], err_tol)
 
     # loop principal de trainamento, executado por lax.scan
-    runpar = RunningParameters.init((settings.network_settings.obs_size, ), settings.target_success)
-    rng1, initial_state = create_initial_state(rng, runpar.progress.value, settings)
+    runpar = RunningParameters.init((settings.network_settings.obs_size, ), settings.numberof_goals)
+    rng1, initial_state = create_initial_state(rng, runpar.progress, settings)
 
     # após  o scan, teremos o seguinte:
     # training_metrics[key].shape = (numberof_goals, epochs, *metric_shape)
@@ -498,7 +498,7 @@ def create_initial_state(rng: jax.Array, progress, settings: TrainingSettings):
 
     # Rode apenas o pipeline de observação para obter o estado REAL inicial
     # Isso garante que a primeira obs que o agente vê não seja zero
-    runpar_init = RunningParameters.init((settings.network_settings.obs_size,), settings.target_success)
+    runpar_init = RunningParameters.init((settings.network_settings.obs_size,), settings.numberof_goals)
     
     def get_single_obs(s):
         # s é um único 'state' (scalars/unbatched arrays)
