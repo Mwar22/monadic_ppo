@@ -13,7 +13,6 @@ from enviroment import StateMonad
 
 
 def rollout_step(
-    progress,
     step_fn,
     runpar: RunningParameters,
     state: Dict[str, Any],
@@ -43,7 +42,7 @@ def rollout_step(
         obs = c_state["obs"]
 
         # executa o ambiente (isso avança a física para O_t+1)
-        new_c_state, data = step_fn(progress, c_state, runpar)
+        new_c_state, data = step_fn(c_state, runpar)
 
         #adicionamos os dados no buffer
         push = lambda buffer, value: buffer.at[c_ptr].set(value.astype(buffer.dtype))
@@ -99,7 +98,7 @@ def rollout(
     step_fn = settings.step_fn_creator(settings, network_params)
 
     vmap_rollout_step = jax.vmap(
-        partial(rollout_step, runpar.progress, step_fn, runpar),
+        partial(rollout_step, step_fn, runpar),
         in_axes=(
             state_in_axes,  # Arg 0: state (was Arg 1 in your version)
             0,               # Arg 1: obs_buffer
@@ -230,7 +229,7 @@ def ppo_loss(
         return normalized_adv
     
     #normaliza as vantagens
-    batch_advantages = masked_norm(batch_advantages, valid_mask)
+    #batch_advantages = masked_norm(batch_advantages, valid_mask)
    
     # forward 
     networks = settings.network_settings

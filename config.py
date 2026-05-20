@@ -88,12 +88,23 @@ class RewardConfigParameter:
             return jnp.where(p < pct_start*range_value, first, second)
         
         return cls(func)
+    
+    @classmethod
+    def cos_tracking(cls, max_value=1.0, div_factor=10.0, range_value=1.0):
+        omega = jnp.pi/range_value
+
+        def func(p):
+            intermediate = 1 + div_factor + (div_factor - 1)*jnp.cos(omega*p)
+            return max_value*intermediate/(2*div_factor)
+        
+        return cls(func)
+
 
 @struct.dataclass
 class RewardConfig:
     # --- Incentivo de Posição ---
     # O ganho máximo quando o erro é zero
-    pos_incentive_gain = RewardConfigParameter.const(5.0)
+    pos_incentive_gain = RewardConfigParameter.const(1.0)
 
     # Valor que define o comportamento da recompensa combinada exponencial e linear.
     # para erros acima de xzero, tem-se penalidades (valores negativos)
@@ -107,19 +118,19 @@ class RewardConfig:
     #rot_incentive_sigma = RewardConfigParameter.linear_tracking(0.5, 0.05)
 
     # --- Sucesso e Falha ---
-    success_reward = RewardConfigParameter.const(50.0)
-    failure_penalty = RewardConfigParameter.const(-50.0)
-    limitbreach_penalty_gain = RewardConfigParameter.const(-1.0)
+    success_reward = RewardConfigParameter.const(10.0)
+    failure_penalty = RewardConfigParameter.const(-100.0)
+    limitbreach_penalty_gain = RewardConfigParameter.const(-0.01)
 
     # --- Tolerância ---
     # No início do treino (progress=0), err_tol=0.8
     # No fim do treino (progress=1), err_tol=0.1
     #err_tol = RewardConfigParameter.oneshot_cos(max_value=0.4, div_factor=2, final_div_factor=40)
-    err_tol = RewardConfigParameter.linear_tracking(0.5, 0.01)
+    err_tol = RewardConfigParameter.linear_tracking(0.2, 0.05)
 
     # --- Regularização ---
     #torques_penalty = RewardConfigParameter.const(-1e-6)
-    velocity_penalty = RewardConfigParameter.const(-1e-3)
+    velocity_penalty = RewardConfigParameter.const(-1e-6)
 
     # cost action - penalidade por diferença entra ação atual e passada
     # penaliza delta de ações muito grandes no final

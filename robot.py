@@ -22,6 +22,7 @@ from utils import (
     position_error,
     cost_action_rate,
     update_assets,
+    cont_sample_beta,
 )
 from typing import TYPE_CHECKING, runtime_checkable
 from monads import MaybeM
@@ -600,8 +601,7 @@ def update_obs(data, obs_noise=0.0):
         rng, rng1 = jax.random.split(state["rng"])
         obs = data["obs"]
 
-        # Clip direto para estabilidade
-        obs_processed = jnp.clip(obs, -5.0, 5.0)
+        obs_processed = jnp.nan_to_num(obs, nan=0.0, posinf=5.0, neginf=-5.0)
 
         # Use jnp.where ou simplesmente multiplique pelo ruído para evitar o 'if'
         noise = jax.random.uniform(rng, obs_processed.shape, minval=-1.0, maxval=1.0)
@@ -701,6 +701,7 @@ def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningAvg, env: StateMonad, o
             )
         )
         .bind(lambda pdata: concat_obs_as_array(pdata))
+        .bind(lambda pdata: normalize_obs(pdata, obs_stats))
         .bind(
             lambda pdata: update_obs(pdata, obs_noise_scale)
         )
@@ -744,11 +745,8 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
                     {
                         **pdata,
                         "reward": (
-                            # penalidade por ações muito grandes
-                            pdata["reward"] + reward_config.tar_penalty_gain.update(progress) * cost_action_rate(pdata["action"], state["last_action"])
-
                             # penalidade proporcional ao numero de juntas que ultrapassaram os limites
-                            + reward_config.limitbreach_penalty_gain.update(progress) * pdata["limitbreach_count"]
+                            pdata["reward"] + reward_config.limitbreach_penalty_gain.update(progress) * pdata["limitbreach_count"]
 
                             #penalidade proporcional a norma l2 das velocidades de junta
                             + reward_config.velocity_penalty.update(progress) * jnp.linalg.norm(pdata["joint_vel"], ord=2)
@@ -774,7 +772,12 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
             lambda pdata: {
                 **pdata,
                 "success": pdata["position_error"] < pdata["err_tol"],
-                "failure": pdata["limitbreach_count"] > 0,
+            }
+        )
+        .map(
+            lambda pdata: {
+                **pdata,
+                "failure": (~pdata["success"]) & (jnp.abs(progress - 1) <= 1e-3),
             }
         )
         # faz a contagem dos casos de sucesso
@@ -793,7 +796,7 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
                     state,
                     {
                         **pdata,
-                        "done": pdata["success"] | pdata["failure"],
+                        "done": pdata["success"], #| pdata["failure"],
 
                         # Bônus de Sucesso
                         "reward": pdata["reward"]
@@ -813,40 +816,6 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
 
 
 ####################################################################################################################
-
-def cont_sample_beta(logits: jax.Array, rng: jax.Array, min_alpha_beta=2.0):
-    """
-    Sample continuous actions in [0,1] using independent Beta distributions
-    parameterized by logits.
-
-    Args:
-        logits: shape (action_dim,), any real numbers
-        rng: JAX PRNGKey
-        min_alpha_beta: minimum value for alpha and beta to avoid numerical issues
-
-    Returns:
-        action: shape (action_dim,)
-        logprob: shape (action_dim,)
-    """
-
-    # mapeia os logits para parametros positivos para serem utilizados na distribuição beta
-    alpha_logits, beta_logits = jnp.split(logits, 2, axis=-1)
-    
-    # No seu ppo_loss, force a Beta a nunca virar uma agulha rígida:
-    alpha = jnp.clip(jax.nn.softplus(alpha_logits) + min_alpha_beta, 2.0, 5.0)
-    beta  = jnp.clip(jax.nn.softplus(beta_logits) + min_alpha_beta, 2.0, 5.0)
-
-    # separa o rng para amostras independentes
-    rng, subkey = jax.random.split(rng)
-    actions = jax.random.beta(subkey, alpha, beta)
-
-    # Clip actions to be just inside (0, 1) to avoid -inf logpdf
-    clipped_actions = jnp.clip(actions, 1e-6, 1.0 - 1e-6)
-
-    # logprob para cada dimensão
-    logprobs = jax.scipy.stats.beta.logpdf(clipped_actions, alpha, beta)
-    return actions, jnp.sum(logprobs, axis=-1)
-
 def get_action(
     network_settings: NetworksSettings, network_parameters: NetworkParameters
 ):
@@ -858,9 +827,6 @@ def get_action(
         output = cast(jax.Array, output)
         action, logprob = cont_sample_beta(output, rng1)
 
-        # escala ação para de [0, 1] para [-1, 1]
-        action = jnp.clip(2.0 * action - 1.0, -1.0, 1.0)
-
         new_state = {**state, "rng": rng2}
         return new_state, {"action": action, "logprob": logprob}
 
@@ -871,8 +837,11 @@ def get_ctrl(rsd: RobotSharedData, pdata, action_scale, alpha=0.6):
     mid = 0.5 * (rsd.uppers + rsd.lowers)
     half = 0.5 * action_scale * (rsd.uppers - rsd.lowers)
 
+    # escala ação para de [0, 1] para [-1, 1]
+    physical_action = jnp.clip(2.0 * pdata["action"] - 1.0, -1.0, 1.0)
+
     def fn(state):
-        smoothed_action = alpha * state["last_action"] + (1 - alpha) * pdata["action"]
+        smoothed_action = alpha * state["last_action"] + (1 - alpha) * physical_action
         ctrl = mid + half * smoothed_action
 
         new_state = {**state, "last_action": smoothed_action}
@@ -933,7 +902,7 @@ def create_step(
     state.keys() = ["rng", "step", "goal", "obs_history", "action", "mjx_data"]
     """
 
-    def step_fn(progress, state, runpar: RunningParameters):
+    def step_fn(state, runpar: RunningParameters):
         # obtem uma ação pela observação anterior
         pl = (
             get_action(network_settings, network_parameters)
@@ -949,7 +918,7 @@ def create_step(
         pl = obs_pipeline(robot_shared_data, runpar.obs_stat, pl, obs_noise_scale)
 
         # de acordo com as observações obtem a recompensa
-        pl = reward_pipeline(progress, robot_shared_data, pl)
+        pl = reward_pipeline(runpar.progress, robot_shared_data, pl)
 
         # dá a forma final aos valores de retorno
         pl = pl.bind(shape_return)

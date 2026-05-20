@@ -100,12 +100,12 @@ settings = TrainingSettings.init(
     robot_shared_data.value,
     optimizer_creator=create_optimizer,
     step_fn_creator=create_training_step,
-    num_envs=1280,
+    num_envs=1400,
     epochs=50,
-    action_scale=0.01,
+    action_scale=0.25,
     obs_noise_scale=0.001,
-    numberof_goals=50,
-    rollout_steps=100,
+    numberof_goals=20,
+    rollout_steps=512,
     target_success=0.4,
 )
 
@@ -173,14 +173,14 @@ axs[0][2].set_ylabel("Value")
 axs[0][2].grid(True)
 
 
-axs[1][0].semilogy(mean_rewards_vs_timestamp + 1)
-axs[1][0].set_title("Mean (across envs) sum of rewards (across goals)")
+axs[1][0].plot(mean_rewards_vs_timestamp)
+axs[1][0].set_title("Mean (ac. envs) sum of rewards (ac. goals)")
 axs[1][0].set_xlabel("Rollout timestamp")
 axs[1][0].set_ylabel("Average Reward")
 axs[1][0].grid(True)
 
-axs[1][1].semilogy(mean_rewards_vs_goals + 1)
-axs[1][1].set_title("Mean (across envs) sum of rewards (across rollout timestamps)")
+axs[1][1].plot(mean_rewards_vs_goals)
+axs[1][1].set_title("Mean (ac. envs) sum of rewards (ac. rollouts)")
 axs[1][1].set_xlabel("Goal n°")
 axs[1][1].set_ylabel("Average Reward")
 axs[1][1].grid(True)

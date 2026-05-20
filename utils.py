@@ -46,7 +46,7 @@ def conv2jax_quat(mujoco_quat: jnp.ndarray) -> jnp.ndarray:
     return jnp.array([mujoco_quat[1], mujoco_quat[2], mujoco_quat[3], mujoco_quat[0]])
 
 
-def exp_scale_reward(gain, x_zero: float, error_value: jax.Array) -> jax.Array:
+def exp_scale_reward2(gain, x_zero: float, error_value: jax.Array) -> jax.Array:
     """_summary_
 
     Parameters
@@ -66,6 +66,15 @@ def exp_scale_reward(gain, x_zero: float, error_value: jax.Array) -> jax.Array:
     sigma = x_zero*inv_omega
     return gain * (jnp.exp(-error_value / sigma) - error_value)
 
+def exp_scale_reward(gain, x_zero: float, error_value: jax.Array) -> jax.Array:
+    """
+    Recompensa Exponencial Pura:
+    - Se error_value == 0 -> Recompensa = gain
+    - Se error_value é grande -> Recompensa se aproxima de 0 (mas nunca é negativa)
+    - x_zero atua como o 'raio' de suavidade (sigma).
+    """
+    # Usamos uma Gaussiana (Sino) para dar um platô suave perto do alvo
+    return -gain * error_value
 
 def l1_l2_reward(gain_l1, gain_l2, value: jax.Array):
     return gain_l2 * jnp.linalg.norm(value, ord=2) + gain_l1 * jnp.linalg.norm(
@@ -156,7 +165,7 @@ def stand_still_reward(
         gain * jnp.linalg.norm(joint_angles - default_pose) * mask.astype(jnp.float32)
     )
 
-def get_beta_params(logits: jax.Array, min_val=2.0, max_val=50.0): # <--- SUBA PARA 50.0
+def get_beta_params(logits: jax.Array, min_val=2.0, max_val=50.0):
     """Mapeia logits para os parâmetros alpha e beta de forma unificada e segura."""
     alpha_logits, beta_logits = jnp.split(logits, 2, axis=-1)
     
