@@ -75,7 +75,7 @@ class RunningExponentialAvg:
 @struct.dataclass
 class RunningParameters:
     obs_stat: RunningAvg
-    progress: float
+    progress: jax.Array
     update_threshold: float
     update_increment: float
     
@@ -84,7 +84,7 @@ class RunningParameters:
         # Inicializamos com uma contagem pequena para evitar divisões por zero
         return cls(
             RunningAvg.init(obs_shape),
-            0.0,
+            jnp.array(0.0),
             update_threshold,
             update_increment
         )
@@ -92,7 +92,7 @@ class RunningParameters:
     def update(self, batch_obs: jax.Array, success_rate: jax.Array):
         new_obs_stat = self.obs_stat.update(batch_obs)
 
-        progress = self.progress + jax.lax.cond(success_rate > self.update_threshold, self.update_increment, 0.0)
+        progress = self.progress + jnp.where(success_rate > self.update_threshold, self.update_increment, 0.0)
         return RunningParameters(
             new_obs_stat,
             progress,
