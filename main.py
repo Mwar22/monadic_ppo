@@ -57,8 +57,8 @@ def create_optimizer(steps):
     )
 
     return optax.chain(
+        optax.clip_by_global_norm(1.0),
         optax.adam(lr_scheduler, eps=1e-8),
-        optax.clip_by_global_norm(1.0),  # gradient clipping
     )
 
 

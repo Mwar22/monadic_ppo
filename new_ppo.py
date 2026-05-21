@@ -83,7 +83,6 @@ def rollout(
     settings: TrainingSettings,
     network_params: NetworkParameters,
     init_state: Dict[str, Any],
-    buffer: BatchedBuffer,
     runpar: RunningParameters,
 ):
     # Match the structure of your 'state' dictionary exactly
@@ -121,6 +120,7 @@ def rollout(
 
     def scan_fn(carry, _):
         state, buffer = carry
+
         state, obs_buffer, action_buffer, reward_buffer, logprob_buffer, ptr, done_flag, stop_flag = vmap_rollout_step(
             state,
             buffer.obs_buffer,
@@ -132,9 +132,13 @@ def rollout(
             buffer.stop_flag
         )
 
+        #encapsula os dados em um novo buffer
         buffer = BatchedBuffer(obs_buffer, action_buffer, reward_buffer, logprob_buffer, ptr, done_flag, stop_flag)
 
         return (state, buffer), None
+
+    #cria um buffer vazio
+    buffer = BatchedBuffer.init(settings)
 
     (final_state, final_buffer), _ = jax.lax.scan(
         scan_fn, (init_state, buffer), None, length=settings.rollout_steps
@@ -252,12 +256,16 @@ def ppo_loss(
     logprobs = jax.scipy.stats.beta.logpdf(clipped_actions, alpha, beta)
     logprobs = jnp.sum(logprobs, axis=2)
 
-    #KL divergence
-    raw_kl = old_log_probs - logprobs
-    kl_div = jnp.sum(raw_kl * valid_mask) / total_valid_elements
-
     # ratio
-    ratio = jnp.exp(logprobs - old_log_probs)
+    logratio = logprobs - old_log_probs
+
+    # Clipa o valor antes de passar para a exponencial
+    # jnp.exp(10) é ~22000 (bem grande) e  jnp.exp(-10) é ~0.00004, sendo mais que suficiente
+    safe_logratio = jnp.clip(logratio, -10.0, 10.0)
+    ratio = jnp.exp(safe_logratio)
+
+    #KL divergence
+    kl_div = jnp.sum(-safe_logratio * valid_mask) / total_valid_elements
 
     # PPO objective (Modificado para aplicar a máscara)
     unclipped = ratio * batch_advantages
@@ -377,10 +385,10 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
         #rate  = jnp.where(nsteps > 0, mean_count/((mean_nsteps + 1e-6)), 0.0)
         return jax.lax.stop_gradient(mean_count)
 
-    def collect_rollouts(state, buffer, runpar: RunningParameters, network_params: NetworkParameters):
+    def collect_rollouts(state, runpar: RunningParameters, network_params: NetworkParameters):
 
         # Faz um rollout (usando a função vetorizada)
-        new_state, new_buffer = rollout(settings, network_params,state, buffer, runpar)
+        new_state, new_buffer = rollout(settings, network_params,state, runpar)
 
         # Vetoriza a função GAE
         vmapped_gae = jax.vmap(
@@ -404,24 +412,20 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
         runpar = cast(RunningParameters, runpar)
         network_params = cast(NetworkParameters, network_params)
 
-        # cria um buffer
-        buffer = BatchedBuffer.init(settings)
-
         #atualiza os goals com base no estado atual
         new_goal_state = update_goal(current_state, runpar.progress, settings)
 
         #coleta os dados e atualiza os parâmetros correntes 
-        new_state, new_buffer, advantages, returns = collect_rollouts(new_goal_state, buffer, runpar, network_params)
+        new_state, batched_buffer, advantages, returns = collect_rollouts(new_goal_state, runpar, network_params)
         mean_envs_success_rate = get_success_rate(new_state)
     
-
         # metricas tem shape (epochs, *metric_shape)
-        network_params, optim_state, training_metrics = train_epochs(settings, network_params, optim_state, new_buffer, advantages, returns)
-        runpar = runpar.update(new_buffer.obs_buffer, goal_idx)
+        network_params, optim_state, training_metrics = train_epochs(settings, network_params, optim_state, batched_buffer, advantages, returns)
+        runpar = runpar.update(batched_buffer.obs_buffer, goal_idx)
     
         newcarry = (runpar, optim_state, network_params, new_state)
         err_tol = settings.robot_shared_data.reward_config.err_tol.update(runpar.progress)
-        return newcarry, (training_metrics, mean_envs_success_rate, new_buffer.reward_buffer, new_state["err"], err_tol, new_state["ctrl_norm"])
+        return newcarry, (training_metrics, mean_envs_success_rate, batched_buffer.reward_buffer, new_state["err"], err_tol, new_state["ctrl_norm"])
 
     # loop principal de trainamento, executado por lax.scan
     runpar = RunningParameters.init((settings.network_settings.obs_size, ), settings.numberof_goals)
