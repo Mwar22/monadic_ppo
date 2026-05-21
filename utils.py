@@ -165,48 +165,20 @@ def stand_still_reward(
         gain * jnp.linalg.norm(joint_angles - default_pose) * mask.astype(jnp.float32)
     )
 
-def get_beta_params(logits: jax.Array, min_val=2.0, max_val=50.0):
-    """Mapeia logits para os parâmetros alpha e beta de forma unificada e segura."""
-    alpha_logits, beta_logits = jnp.split(logits, 2, axis=-1)
-    
-    alpha = jnp.clip(jax.nn.softplus(alpha_logits) + min_val, min_val, max_val)
-    beta  = jnp.clip(jax.nn.softplus(beta_logits) + min_val, min_val, max_val)
-    
-    return alpha, beta
-
-def cont_sample_beta(logits: jax.Array, rng: jax.Array):
-    """
-    Sample continuous actions in [0,1] using independent Beta distributions
-    parameterized by logits.
-
-    Args:
-        logits: shape (action_dim,), any real numbers
-        rng: JAX PRNGKey
-        min_alpha_beta: minimum value for alpha and beta to avoid numerical issues
-
-    Returns:
-        action: shape (action_dim,)
-        logprob: shape (action_dim,)
-    """
-
-    # mapeia os logits para parametros positivos para serem utilizados na distribuição beta
-    alpha, beta = get_beta_params(logits)
+def cont_sample_beta(rng: jax.Array, alpha: jax.Array, beta: jax.Array):
 
     # separa o rng para amostras independentes
     rng, subkey = jax.random.split(rng)
     actions = jax.random.beta(subkey, alpha, beta)
 
-    # Clip actions to be just inside (0, 1) to avoid -inf logpdf
-    clipped_actions = jnp.clip(actions, 1e-6, 1.0 - 1e-6)
+    # Clipa as ações para ficar dentro de (0, 1)
+    clipped_actions = jnp.clip(actions, 1e-4, 1.0 - 1e-4)
 
     # logprob para cada dimensão
     logprobs = jax.scipy.stats.beta.logpdf(clipped_actions, alpha, beta)
     return actions, jnp.sum(logprobs, axis=-1)
 
-def beta_entropy(alpha, beta, eps=1e-6):
-    # Um pequeno epsilon impede NaN se alpha ou beta chegarem colados em zero
-    a = jnp.maximum(alpha, eps)
-    b = jnp.maximum(beta, eps)
+def beta_entropy(a, b):
 
     lnB = gammaln(a) + gammaln(b) - gammaln(a + b)
     H = (

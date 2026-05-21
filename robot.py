@@ -726,16 +726,8 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
         env.map(
             lambda pdata: {
                 **pdata,
-                "reward": (
-                    # Incentivo de Posição
-                    exp_scale_reward(
-                        reward_config.pos_incentive_gain.update(progress),
-                        reward_config.pos_incentive_xzero.update(progress),
-                        pdata["position_error"],
-                    )
-                ),
-                #conta quantas juntas chegaram/ultrapassaram os limites
-                "limitbreach_count": jnp.sum(pdata["joint_angles"] <= 0.0) + jnp.sum(pdata["joint_angles"] >= 1.0),
+                "reward":- reward_config.pos_incentive_gain.update(progress)*pdata["position_error"],
+
             }
         )
         .bind(
@@ -746,7 +738,7 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
                         **pdata,
                         "reward": (
                             # penalidade proporcional ao numero de juntas que ultrapassaram os limites
-                            pdata["reward"] + reward_config.limitbreach_penalty_gain.update(progress) * pdata["limitbreach_count"]
+                            # pdata["reward"] + reward_config.limitbreach_penalty_gain.update(progress) * pdata["limitbreach_count"]
 
                             #penalidade proporcional a norma l2 das velocidades de junta
                             + reward_config.velocity_penalty.update(progress) * jnp.linalg.norm(pdata["joint_vel"], ord=2)
@@ -809,7 +801,7 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
         .map(
             lambda pdata: {
                 **pdata,
-                "reward": jnp.clip(pdata["reward"], -5000.0, 5000.0),
+                "reward": jnp.clip(pdata["reward"], -500.0, 500.0),
             }
         )
     )
@@ -822,13 +814,18 @@ def get_action(
     def fn(state):
         last_obs = state["obs"]
         rng1, rng2 = jax.random.split(state["rng"])
+        
+        alpha, beta = network_settings.actor.apply(network_parameters.actor, last_obs)
+        alpha = cast(jax.Array, alpha)
+        beta = cast(jax.Array, beta)
+        
+        action, logprob = cont_sample_beta(rng1, alpha, beta)
 
-        output = network_settings.actor.apply(network_parameters.actor, last_obs)
-        output = cast(jax.Array, output)
-        action, logprob = cont_sample_beta(output, rng1)
+        # escala ação para de [0, 1] para [-1, 1]
+        physical_action = jnp.clip(2.0 * action - 1.0, -1.0, 1.0)
 
         new_state = {**state, "rng": rng2}
-        return new_state, {"action": action, "logprob": logprob}
+        return new_state, {"action": physical_action, "logprob": logprob}
 
     return StateMonad(fn)
 
@@ -837,11 +834,9 @@ def get_ctrl(rsd: RobotSharedData, pdata, action_scale, alpha=0.6):
     mid = 0.5 * (rsd.uppers + rsd.lowers)
     half = 0.5 * action_scale * (rsd.uppers - rsd.lowers)
 
-    # escala ação para de [0, 1] para [-1, 1]
-    physical_action = jnp.clip(2.0 * pdata["action"] - 1.0, -1.0, 1.0)
 
     def fn(state):
-        smoothed_action = alpha * state["last_action"] + (1 - alpha) * physical_action
+        smoothed_action = alpha * state["last_action"] + (1 - alpha) * pdata["action"]
         ctrl = mid + half * smoothed_action
 
         new_state = {**state, "last_action": smoothed_action}
@@ -863,14 +858,13 @@ def mujoco_step(rsd: RobotSharedData, pdata):
 
 def shape_return(pdata):
     def fn(state):
-        state = {**state, "step": state["step"] + 1}
+        state = {**state, "step": state["step"] + 1,  "ctrl_norm":jnp.linalg.norm(pdata["ctrl"], ord=2),}
         data = {
             "obs": pdata["obs"],
             "action": pdata["action"],
             "reward": pdata["reward"],
             "logprob": pdata["logprob"],
             "done": pdata["done"],
-            #"ctrl_l2norm":jnp.linalg.norm(pdata["ctrl"], ord=2),
         }
         return state, data
 

@@ -27,7 +27,7 @@ class RunningAvg:
         return cls(
             mean=jnp.zeros(shape),
             var=jnp.ones(shape),
-            count=jnp.array(1e-4)
+            count=jnp.array(0.0)
         )
     
     @jax.jit
@@ -53,10 +53,10 @@ class RunningAvg:
         m_a = self.var * self.count
         m_b = batch_var * batch_count
         M2 = m_a + m_b + jnp.square(delta) * (self.count * batch_count / total_count)
-        new_var = M2 / total_count
+        new_var = M2 / (total_count + 1e-6)
 
         # evita que gradientes sejam calculados
-        return jax.lax.stop_gradient(RunningAvg(mean=new_mean, var=new_var, count=total_count))
+        return RunningAvg(mean=new_mean, var=new_var, count=total_count)
 
 @struct.dataclass   
 class RunningExponentialAvg:

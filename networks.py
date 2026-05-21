@@ -32,9 +32,13 @@ def create_networks(rng:jax.Array, obs_size:int, action_size:int):
 activation = lambda x: nn.leaky_relu(x)
 
 hidden_init = nn.initializers.orthogonal(jnp.sqrt(2))
-actor_init = nn.initializers.orthogonal(0.01)
-critic_init = nn.initializers.orthogonal(1.0)
+actor_init = nn.initializers.orthogonal(0.005)
+critic_init = nn.initializers.orthogonal(0.01)
 
+min_alpha_beta = 1e-3
+max_alpha_beta = 10.0
+smooth_bound = lambda x: min_alpha_beta + (max_alpha_beta - min_alpha_beta) * jax.nn.sigmoid(x)
+                              
 class Actor(nn.Module):
     action_dim: int
     discrete: bool
@@ -42,41 +46,38 @@ class Actor(nn.Module):
     @nn.compact
     def __call__(self, obs):
         # Primeira camada com skip connection
-        x1 = nn.Dense(256, kernel_init=hidden_init, dtype=jnp.float16)(obs)
-        x1 = nn.LayerNorm()(x1)
+        x1 = nn.Dense(256, kernel_init=hidden_init, dtype=jnp.float32)(obs)
         x1 = activation(x1)
         
-        x2 = nn.Dense(256, kernel_init=hidden_init, dtype=jnp.float16)(x1)
-        x2 = nn.LayerNorm()(x2)
-        x2 = activation(x2) + x1 # conexão residual
+        x2 = nn.Dense(256, kernel_init=hidden_init, dtype=jnp.float32)(x1)
+        x2 = activation(x2)
         
-        x3 = nn.Dense(64, kernel_init=hidden_init, dtype=jnp.float16)(x2)
-        x3 = nn.LayerNorm()(x3)
+        x3 = nn.Dense(64, kernel_init=hidden_init, dtype=jnp.float32)(x2)
         x3 = activation(x3)
 
+        alpha_logits = nn.Dense(self.action_dim, kernel_init=actor_init)(x3)
+        beta_logits = nn.Dense(self.action_dim, kernel_init=actor_init)(x3)
+        
+        # limita os valores para alpha e beta dentro de faixas conhecidas (evita inst. numerica)
+        alpha = smooth_bound(alpha_logits)
+        beta = smooth_bound(beta_logits)
 
-        # 2 pois é uma distribuição, gerando metade para os parametros alfa e metade para beta
-        logits = nn.Dense(2 * self.action_dim, kernel_init=actor_init, dtype=jnp.float32)(x3)
-        return logits
+        return alpha, beta
 
 
 class Critic(nn.Module):
     @nn.compact
     def __call__(self, obs):
        
-        x1 = nn.Dense(256, kernel_init=hidden_init, dtype=jnp.float16)(obs)
-        x1 = nn.LayerNorm()(x1)
+        x1 = nn.Dense(256, kernel_init=hidden_init, dtype=jnp.float32)(obs)
         x1 = activation(x1)
         
-        x2 = nn.Dense(256, kernel_init=hidden_init, dtype=jnp.float16)(x1)
-        x2 = nn.LayerNorm()(x2)
-        x2 = activation(x2) + x1 # conexão residual
+        x2 = nn.Dense(256, kernel_init=hidden_init, dtype=jnp.float32)(x1)
+        x2 = activation(x2)
         
-        x3 = nn.Dense(64, kernel_init=hidden_init, dtype=jnp.float16)(x2)
-        x3 = nn.LayerNorm()(x3)
+        x3 = nn.Dense(64, kernel_init=hidden_init, dtype=jnp.float32)(x2)
         x3 = activation(x3)
 
-        
         value = nn.Dense(1, kernel_init=critic_init, dtype=jnp.float32)(x3)
         return value.squeeze(-1)
 

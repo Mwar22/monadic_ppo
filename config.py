@@ -104,7 +104,7 @@ class RewardConfigParameter:
 class RewardConfig:
     # --- Incentivo de Posição ---
     # O ganho máximo quando o erro é zero
-    pos_incentive_gain = RewardConfigParameter.const(1.0)
+    pos_incentive_gain = RewardConfigParameter.const(5)
 
     # Valor que define o comportamento da recompensa combinada exponencial e linear.
     # para erros acima de xzero, tem-se penalidades (valores negativos)
@@ -118,7 +118,9 @@ class RewardConfig:
     #rot_incentive_sigma = RewardConfigParameter.linear_tracking(0.5, 0.05)
 
     # --- Sucesso e Falha ---
-    success_reward = RewardConfigParameter.const(10.0)
+    success_reward = RewardConfigParameter.const(500.0)
+
+    #chegou no final (progresso=1) e não atingiu sucesso
     failure_penalty = RewardConfigParameter.const(-100.0)
     limitbreach_penalty_gain = RewardConfigParameter.const(-0.01)
 
@@ -126,7 +128,7 @@ class RewardConfig:
     # No início do treino (progress=0), err_tol=0.8
     # No fim do treino (progress=1), err_tol=0.1
     #err_tol = RewardConfigParameter.oneshot_cos(max_value=0.4, div_factor=2, final_div_factor=40)
-    err_tol = RewardConfigParameter.linear_tracking(0.2, 0.05)
+    err_tol = RewardConfigParameter.linear_tracking(0.3, 0.05)
 
     # --- Regularização ---
     #torques_penalty = RewardConfigParameter.const(-1e-6)
@@ -135,6 +137,7 @@ class RewardConfig:
     # cost action - penalidade por diferença entra ação atual e passada
     # penaliza delta de ações muito grandes no final
     tar_penalty_gain = RewardConfigParameter.linear_tracking(-0.01, -0.1)
+
 
 
 

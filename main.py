@@ -28,6 +28,7 @@ os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.60"
 import jax
 from jax import config
 
+config.update("jax_debug_nans", True)
 config.update("jax_enable_x64", False)
 print(f"jax_enable_x64: {jax.config.read('jax_enable_x64')}")
 
@@ -49,7 +50,7 @@ from utils import save
 def create_optimizer(steps):
     lr_scheduler = optax.schedules.cosine_onecycle_schedule(
         peak_value=5e-4,        
-        pct_start=0.2,            # 20% do treino subindo (warm-up), 80% descendo
+        pct_start=0.3,            # 30% do treino subindo (warm-up), 70% descendo
         div_factor=5.0,          # LR inicial = peak_value / div_factor
         final_div_factor=50.0,    # LR final = LR inicial / final_div_factor para o ajuste fino,
         transition_steps=steps
@@ -100,12 +101,12 @@ settings = TrainingSettings.init(
     robot_shared_data.value,
     optimizer_creator=create_optimizer,
     step_fn_creator=create_training_step,
-    num_envs=1400,
-    epochs=50,
-    action_scale=0.25,
+    num_envs=1500,
+    epochs=10,
+    action_scale=0.01,
     obs_noise_scale=0.001,
     numberof_goals=20,
-    rollout_steps=512,
+    rollout_steps=256,
     target_success=0.4,
 )
 
@@ -118,6 +119,7 @@ if disable_jit:
     print("Debug: JIT disabled!")
 else:
     print("JIT compiling and starting training...")
+
 
 (runpar, optim_state, network_params, state), metrics = ppo_train(
     rng2, network_params, settings
@@ -140,6 +142,7 @@ entropy = metrics["avg_entropy"]
 success_rate = metrics["success_rate"]
 err_tol = metrics["err_tol"]
 avg_kl_div = metrics["avg_kl_div"]
+avg_ctrl_norm = metrics["avg_ctrl_norm"]
 
 avg_loss = jnp.mean(loss[-20:])
 print(f" Training finished! Average loss of last 20 steps: {avg_loss:.4f}")
@@ -151,7 +154,6 @@ print(
 print(
     f"mean_rewards_vs_timestamp: min = {jnp.min(mean_rewards_vs_timestamp)}, max = {jnp.max(mean_rewards_vs_timestamp)}"
 )
-
 
 fig, axs = plt.subplots(3, 3, figsize=(10, 8), tight_layout=True)
 axs[0][0].plot(loss)
@@ -174,21 +176,26 @@ axs[0][2].grid(True)
 
 
 axs[1][0].plot(mean_rewards_vs_timestamp)
-axs[1][0].set_title("Mean (ac. envs) sum of rewards (ac. goals)")
+axs[1][0].set_title("Mean sum of rewards (ac. goals)")
 axs[1][0].set_xlabel("Rollout timestamp")
 axs[1][0].set_ylabel("Average Reward")
 axs[1][0].grid(True)
 
 axs[1][1].plot(mean_rewards_vs_goals)
-axs[1][1].set_title("Mean (ac. envs) sum of rewards (ac. rollouts)")
+axs[1][1].set_title("Mean sum of rewards (ac. rollouts)")
 axs[1][1].set_xlabel("Goal n°")
 axs[1][1].set_ylabel("Average Reward")
 axs[1][1].grid(True)
 
-axs[1][2].plot(err_tol)
+
+dual = axs[1][2].twinx()
 axs[1][2].set_title("Err tol")
+axs[1][2].plot(err_tol)
+dual.plot(avg_ctrl_norm, color="red")
+
 axs[1][2].set_xlabel("Goal n°")
 axs[1][2].set_ylabel("Tol value")
+dual.set_ylabel("Avg ctrl norm")
 axs[1][2].grid(True)
 
 axs[2][0].plot(entropy)
@@ -196,6 +203,7 @@ axs[2][0].set_title("Entropy")
 axs[2][0].set_xlabel("Epochs")
 axs[2][0].set_ylabel("Entropy value")
 axs[2][0].grid(True)
+dual.grid(True)
 
 
 axs[2][1].plot(metrics["avg_err"])
