@@ -36,7 +36,7 @@ actor_init = nn.initializers.orthogonal(0.005)
 critic_init = nn.initializers.orthogonal(0.01)
 
 min_alpha_beta = 1.0
-max_alpha_beta = 10.0
+max_alpha_beta = 100.0
 smooth_bound = lambda x: min_alpha_beta + (max_alpha_beta - min_alpha_beta) * jax.nn.sigmoid(x)
                               
 class Actor(nn.Module):

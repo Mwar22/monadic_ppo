@@ -210,7 +210,7 @@ def ppo_loss(
     batch_ptr,          # ADICIONADO: shape (num_envs,) vindo do buffer.ptr
     clip_eps=0.2,
     c1=0.5,
-    c2=0.001,
+    c2=0.1,
     eps=1e-4,
 ):
    

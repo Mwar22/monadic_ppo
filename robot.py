@@ -726,7 +726,7 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
         env.map(
             lambda pdata: {
                 **pdata,
-                "reward":- reward_config.pos_incentive_gain.update(progress)*pdata["position_error"],
+                "reward": -reward_config.pos_incentive_gain.update(progress)*pdata["position_error"],
 
             }
         )
@@ -736,44 +736,28 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
                     state,
                     {
                         **pdata,
-                        "reward": (
-                            # penalidade proporcional ao numero de juntas que ultrapassaram os limites
-                            # pdata["reward"] + reward_config.limitbreach_penalty_gain.update(progress) * pdata["limitbreach_count"]
-
-                            #penalidade proporcional a norma l2 das velocidades de junta
-                            + reward_config.velocity_penalty.update(progress) * jnp.linalg.norm(pdata["joint_vel"], ord=2)
-                        ),
+                        "reward": pdata["reward"] + reward_config.velocity_penalty.update(progress) * jnp.linalg.norm(pdata["joint_vel"], ord=2),
                     },
                 )
             )
         )
-        # Tolerância de Erro Linear e contagem de numero de juntas que ultrapassaram os limites
         .bind(
             lambda pdata: StateMonad(
                 lambda state: (
-                    state,
+                    state, 
                     {
                         **pdata,
-                        "err_tol": reward_config.err_tol.update(progress),
-                    },
+                        "err_tol": reward_config.err_tol.update(progress)
+                    }
                 )
             )
         )
-        # Verificação de Done e Sucesso
         .map(
             lambda pdata: {
                 **pdata,
-                "success": pdata["position_error"] < pdata["err_tol"],
+                "success": pdata["position_error"] < pdata["err_tol"]
             }
         )
-        .map(
-            lambda pdata: {
-                **pdata,
-                "failure": (jnp.linalg.norm(pdata["joint_vel"], ord=2) > 100.0),
-                "end_of_progress": jnp.abs(progress - 1) <= 1e-3
-            }
-        )
-        # faz a contagem dos casos de sucesso
         .bind(
             lambda pdata: StateMonad(
                 lambda state: (
@@ -789,12 +773,10 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
                     state,
                     {
                         **pdata,
-                        "done": pdata["success"] |  pdata["failure"] | pdata["end_of_progress"],
+                        "done": pdata["success"],
 
                         # Bônus de Sucesso
-                        "reward": pdata["reward"]
-                        + pdata["success"] * reward_config.success_reward.update(progress)
-                        + pdata["failure"]* reward_config.failure_penalty.update(progress),
+                        "reward": pdata["reward"] + pdata["success"] * reward_config.success_reward.update(progress),
                     },
                 )
             )
@@ -802,7 +784,7 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
         .map(
             lambda pdata: {
                 **pdata,
-                "reward": jnp.clip(pdata["reward"], -500.0, 500.0),
+                "reward": jnp.clip(pdata["reward"], -100.0, 100.0),
             }
         )
     )
@@ -828,7 +810,7 @@ def get_action(
     return StateMonad(fn)
 
 
-def get_ctrl(rsd: RobotSharedData, pdata, action_scale, alpha=0.6):
+def get_ctrl(rsd: RobotSharedData, pdata, action_scale, alpha=0.1):
     mid = 0.5 * (rsd.uppers + rsd.lowers)
     half = 0.5 * action_scale * (rsd.uppers - rsd.lowers)
 
@@ -862,17 +844,22 @@ def mujoco_step(rsd: RobotSharedData, pdata):
 def shape_return(pdata):
     def fn(state):
         state = {**state, "step": state["step"] + 1,  "ctrl_norm":jnp.linalg.norm(pdata["ctrl"], ord=2),}
+        
+        # protege a rede neural se a física quebrar
+        is_healthy = jnp.isfinite(pdata["reward"]) & jnp.isfinite(pdata["logprob"])
+        done = pdata["done"] | (~is_healthy)
+        safe_reward = jnp.where(is_healthy, pdata["reward"], -50.0)
+
         data = {
             "obs": pdata["obs"],
             "action": pdata["action"],
-            "reward": pdata["reward"],
-            "logprob": pdata["logprob"],
-            "done": pdata["done"],
+            "reward": safe_reward,
+            "logprob": jnp.nan_to_num(pdata["logprob"], nan=0.0),
+            "done": done,
         }
         return state, data
 
     return StateMonad(fn)
-
 
 #####################################################################################################
 def create_training_step(
