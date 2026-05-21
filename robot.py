@@ -769,7 +769,8 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
         .map(
             lambda pdata: {
                 **pdata,
-                "failure": (~pdata["success"]) & (jnp.abs(progress - 1) <= 1e-3),
+                "failure": (jnp.linalg.norm(pdata["joint_vel"], ord=2) > 100.0),
+                "end_of_progress": jnp.abs(progress - 1) <= 1e-3
             }
         )
         # faz a contagem dos casos de sucesso
@@ -788,7 +789,7 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
                     state,
                     {
                         **pdata,
-                        "done": pdata["success"], #| pdata["failure"],
+                        "done": pdata["success"] |  pdata["failure"] | pdata["end_of_progress"],
 
                         # Bônus de Sucesso
                         "reward": pdata["reward"]
@@ -821,11 +822,8 @@ def get_action(
         
         action, logprob = cont_sample_beta(rng1, alpha, beta)
 
-        # escala ação para de [0, 1] para [-1, 1]
-        physical_action = jnp.clip(2.0 * action - 1.0, -1.0, 1.0)
-
         new_state = {**state, "rng": rng2}
-        return new_state, {"action": physical_action, "logprob": logprob}
+        return new_state, {"action": action, "logprob": logprob}
 
     return StateMonad(fn)
 
@@ -836,8 +834,13 @@ def get_ctrl(rsd: RobotSharedData, pdata, action_scale, alpha=0.6):
 
 
     def fn(state):
+
+        #smoothed no intervalo [0, 1]
         smoothed_action = alpha * state["last_action"] + (1 - alpha) * pdata["action"]
-        ctrl = mid + half * smoothed_action
+
+        # escala ação para de [0, 1] para [-1, 1]
+        physical_action = jnp.clip(2.0 * smoothed_action - 1.0, -1.0, 1.0)
+        ctrl = mid + half * physical_action
 
         new_state = {**state, "last_action": smoothed_action}
         return new_state, {**pdata, "ctrl": jnp.clip(ctrl, rsd.lowers, rsd.uppers)}

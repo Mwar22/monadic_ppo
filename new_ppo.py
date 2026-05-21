@@ -210,7 +210,8 @@ def ppo_loss(
     batch_ptr,          # ADICIONADO: shape (num_envs,) vindo do buffer.ptr
     clip_eps=0.2,
     c1=1e-3,
-    c2=0.1,
+    c2=0.01,
+    eps=1e-4,
 ):
    
     batch_advantages = jax.lax.stop_gradient(batch_advantages)
@@ -226,7 +227,7 @@ def ppo_loss(
 
     # Compara a matriz de passos com o ponteiro de cada ambiente
     valid_mask = steps_arr[None, :] < batch_ptr[:, None]  # shape: (num_envs, max_steps)
-    total_valid_elements = jnp.sum(valid_mask) + 1e-6     # Evita divisão por zero
+    total_valid_elements = jnp.sum(valid_mask) + eps    # Evita divisão por zero
 
     def masked_norm(values, mask):
        
@@ -235,7 +236,7 @@ def ppo_loss(
         
         # variancia dos elementos validos
         variance = jnp.sum(jnp.square(values - mean) * mask) / total_valid_elements
-        std = jnp.sqrt(variance) + 1e-8
+        std = jnp.sqrt(variance + eps)
         
         # normaliza e zera o padding 
         normalized_adv = ((values - mean) / std) * mask
@@ -252,7 +253,7 @@ def ppo_loss(
     values = cast(jax.Array, networks.critic.apply(params.critic, batch_obs))
 
     # logprobs
-    clipped_actions = jnp.clip(batch_actions, 1e-6, 1 - 1e-6)
+    clipped_actions = jnp.clip(batch_actions, eps, 1.0 - eps)
     logprobs = jax.scipy.stats.beta.logpdf(clipped_actions, alpha, beta)
     logprobs = jnp.sum(logprobs, axis=2)
 
@@ -279,7 +280,10 @@ def ppo_loss(
     value_loss = c1 * (jnp.sum(raw_value_loss * valid_mask) / total_valid_elements)
 
     # Entropy (Modificado para ignorar passos inválidos)
-    raw_entropy = beta_entropy(alpha, beta).sum(axis=2)
+    #raw_entropy = beta_entropy(alpha, beta).sum(axis=2)
+
+    #entropia = E[-log pi(a)]
+    raw_entropy = -logprobs
     entropy = c2 * (jnp.sum(raw_entropy * valid_mask) / total_valid_elements)
 
     total_loss = policy_loss + value_loss - entropy
@@ -333,8 +337,13 @@ def train_epochs(
             updates, new_optim_state = settings.optimizer.update(grads, _optimizer_state)
             new_parameters = cast(NetworkParameters, optax.apply_updates(_parameters, updates))
 
-            #jax.debug.print("params invalid: {}", tree_any_nan(new_parameters))
-            #jax.debug.print("grads invalid: {}", tree_any_nan(grads))
+            grads_have_nan = tree_any_nan(grads)
+            jax.lax.cond(
+                grads_have_nan,
+                lambda _: jax.debug.print(" NAN DETECTED IN GRADIENTS! Loss: {}", loss_val),
+                lambda _: None,
+                None
+            )
 
 
             new_carry = (new_parameters, new_optim_state)
@@ -379,11 +388,10 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
         nsteps = state["step"]
 
         mean_count  = jnp.mean(success_count)
-        #mean_nsteps = jnp.mean(nsteps)
+        mean_nsteps = jnp.mean(nsteps)
 
-        
-        #rate  = jnp.where(nsteps > 0, mean_count/((mean_nsteps + 1e-6)), 0.0)
-        return jax.lax.stop_gradient(mean_count)
+        rate  = jnp.where(mean_nsteps > 0, mean_count/((mean_nsteps + 1e-6)), 0.0)
+        return jax.lax.stop_gradient(rate)
 
     def collect_rollouts(state, runpar: RunningParameters, network_params: NetworkParameters):
 
