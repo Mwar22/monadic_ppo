@@ -209,8 +209,8 @@ def ppo_loss(
     old_log_probs,      # shape: (num_envs, max_steps +1)
     batch_ptr,          # ADICIONADO: shape (num_envs,) vindo do buffer.ptr
     clip_eps=0.2,
-    c1=1e-3,
-    c2=0.01,
+    c1=0.5,
+    c2=0.001,
     eps=1e-4,
 ):
    
@@ -429,14 +429,14 @@ def ppo_train(rng: jax.Array, starting_network_params: NetworkParameters, settin
     
         # metricas tem shape (epochs, *metric_shape)
         network_params, optim_state, training_metrics = train_epochs(settings, network_params, optim_state, batched_buffer, advantages, returns)
-        runpar = runpar.update(batched_buffer.obs_buffer, goal_idx)
+        runpar = runpar.update(batched_buffer.obs_buffer, mean_envs_success_rate)
     
         newcarry = (runpar, optim_state, network_params, new_state)
         err_tol = settings.robot_shared_data.reward_config.err_tol.update(runpar.progress)
         return newcarry, (training_metrics, mean_envs_success_rate, batched_buffer.reward_buffer, new_state["err"], err_tol, new_state["ctrl_norm"])
 
     # loop principal de trainamento, executado por lax.scan
-    runpar = RunningParameters.init((settings.network_settings.obs_size, ), settings.numberof_goals)
+    runpar = RunningParameters.init((settings.network_settings.obs_size, ), update_threshold=settings.target_success)
     rng1, initial_state = create_initial_state(rng, runpar.progress, settings)
 
     # após  o scan, teremos o seguinte:

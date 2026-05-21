@@ -76,24 +76,28 @@ class RunningExponentialAvg:
 class RunningParameters:
     obs_stat: RunningAvg
     progress: float
-    numberof_goals: int
+    update_threshold: float
+    update_increment: float
     
     @classmethod
-    def init(cls, obs_shape, numberof_goals: int = 1) -> Self:
+    def init(cls, obs_shape, update_threshold: float = 0.6, update_increment: float = 0.01) -> Self:
         # Inicializamos com uma contagem pequena para evitar divisões por zero
         return cls(
             RunningAvg.init(obs_shape),
             0.0,
-            numberof_goals,
+            update_threshold,
+            update_increment
         )
     
-    def update(self, batch_obs: jax.Array, goal_idx: int):
+    def update(self, batch_obs: jax.Array, success_rate: jax.Array):
         new_obs_stat = self.obs_stat.update(batch_obs)
 
+        progress = self.progress + jax.lax.cond(success_rate > self.update_threshold, self.update_increment, 0.0)
         return RunningParameters(
             new_obs_stat,
-            goal_idx/self.numberof_goals,
-            self.numberof_goals
+            progress,
+            self.update_threshold,
+            self.update_increment,
         )
         
     

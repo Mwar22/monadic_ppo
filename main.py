@@ -107,7 +107,7 @@ settings = TrainingSettings.init(
     obs_noise_scale=0.001,
     numberof_goals=20,
     rollout_steps=256,
-    target_success=0.4,
+    target_success=0.6,
 )
 
 
