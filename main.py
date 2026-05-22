@@ -52,13 +52,13 @@ def create_optimizer(steps):
         peak_value=5e-4,        
         pct_start=0.3,            # 30% do treino subindo (warm-up), 70% descendo
         div_factor=5.0,          # LR inicial = peak_value / div_factor
-        final_div_factor=50.0,    # LR final = LR inicial / final_div_factor para o ajuste fino,
+        final_div_factor=10.0,    # LR final = LR inicial / final_div_factor para o ajuste fino,
         transition_steps=steps
     )
 
     return optax.chain(
         optax.clip_by_global_norm(1.0),
-        optax.adam(lr_scheduler, eps=1e-8),
+        optax.adam(lr_scheduler, eps=1e-4),
     )
 
 
@@ -102,10 +102,10 @@ settings = TrainingSettings.init(
     optimizer_creator=create_optimizer,
     step_fn_creator=create_training_step,
     num_envs=1600,
-    epochs=1500,
+    epochs=300,
     action_scale=1.0,
     obs_noise_scale=0.001,
-    numberof_goals=20,
+    numberof_goals=150,
     rollout_steps=256,
     target_success=0.6,
 )

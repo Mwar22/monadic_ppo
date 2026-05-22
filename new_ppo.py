@@ -257,7 +257,7 @@ def ppo_loss(
     batch_ptr,  # ADICIONADO: shape (num_envs,) vindo do buffer.ptr
     clip_eps=0.2,
     c1=0.5,
-    c2=0.5,
+    c2=0.12,
     eps=1e-4,
 ):
     batch_advantages = jax.lax.stop_gradient(batch_advantages)
@@ -389,6 +389,7 @@ def train_epochs(
             NetworkParameters, optax.apply_updates(_parameters, updates)
         )
 
+        """
         grads_have_nan = tree_any_nan(grads)
         jax.lax.cond(
             grads_have_nan,
@@ -396,6 +397,7 @@ def train_epochs(
             lambda _: None,
             None,
         )
+        """
 
         new_carry = (new_parameters, new_optim_state)
 

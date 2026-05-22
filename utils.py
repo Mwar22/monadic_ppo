@@ -140,7 +140,6 @@ def cost_action_rate(act: jax.Array, last_act: jax.Array) -> jax.Array:
 def stand_still_reward(
     gain,
     position_velocities: jax.Array,
-    orientation_velocities: jax.Array,
     default_pose: jax.Array,
     joint_angles: jax.Array,
 ) -> jax.Array:
@@ -158,9 +157,10 @@ def stand_still_reward(
         Angulos atuais das juntas do robô
     """
     linear_velocity = jnp.linalg.norm(position_velocities)
-    angular_velocity = jnp.linalg.norm(orientation_velocities)
+    ##angular_velocity = jnp.linalg.norm(orientation_velocities)
 
-    mask = jnp.logical_and(linear_velocity < 0.001, angular_velocity < 0.001)
+    #mask = jnp.logical_and(linear_velocity < 0.001, angular_velocity < 0.001)
+    mask = linear_velocity < 0.01
     return (
         gain * jnp.linalg.norm(joint_angles - default_pose) * mask.astype(jnp.float32)
     )

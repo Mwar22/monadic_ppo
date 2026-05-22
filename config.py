@@ -104,7 +104,7 @@ class RewardConfigParameter:
 class RewardConfig:
     # --- Incentivo de Posição ---
     # O ganho máximo quando o erro é zero
-    pos_incentive_gain = RewardConfigParameter.const(0.5)
+    pos_incentive_gain = RewardConfigParameter.const(0.6)
 
     # Valor que define o comportamento da recompensa combinada exponencial e linear.
     # para erros acima de xzero, tem-se penalidades (valores negativos)
