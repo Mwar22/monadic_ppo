@@ -707,8 +707,8 @@ def obs_pipeline(
             )
         )
         .bind(lambda pdata: concat_obs_as_array(pdata))
-        .bind(lambda pdata: normalize_obs(pdata, obs_stats))
         .bind(lambda pdata: update_obs(pdata, obs_noise_scale))
+        .bind(lambda pdata: normalize_obs(pdata, obs_stats))
         .bind(
             lambda pdata: StateMonad(
                 lambda state: (
