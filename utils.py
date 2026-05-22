@@ -165,18 +165,18 @@ def stand_still_reward(
         gain * jnp.linalg.norm(joint_angles - default_pose) * mask.astype(jnp.float32)
     )
 
-def cont_sample_beta(rng: jax.Array, alpha: jax.Array, beta: jax.Array):
+def cont_sample_beta(rng: jax.Array, alpha: jax.Array, beta: jax.Array, eps=1e-4):
 
     # separa o rng para amostras independentes
     rng, subkey = jax.random.split(rng)
     actions = jax.random.beta(subkey, alpha, beta)
 
     # Clipa as ações para ficar dentro de (0, 1)
-    clipped_actions = jnp.clip(actions, 1e-4, 1.0 - 1e-4)
+    clipped_actions = jnp.clip(actions, eps, 1.0 - eps)
 
     # logprob para cada dimensão
     logprobs = jax.scipy.stats.beta.logpdf(clipped_actions, alpha, beta)
-    return actions, jnp.sum(logprobs, axis=-1)
+    return clipped_actions, jnp.sum(logprobs, axis=-1)
 
 def beta_entropy(a, b):
 

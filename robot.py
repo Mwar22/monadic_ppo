@@ -474,7 +474,7 @@ class RobotSharedData:
 
     def qpos(self, mjx_data: mjx.Data):
         return mjx_data.qpos
-    
+
     def normalized_qpos(self, mjx_data: mjx.Data):
         """_summary_
 
@@ -487,15 +487,13 @@ class RobotSharedData:
         qpos normalizado. Faz mapeamento linear:  [lowers, uppers] -> [0, 1]
         """
         low, high = self.mj_model.actuator_ctrlrange.T
-        return (mjx_data.qpos - low)/(high - low)
-    
+        return (mjx_data.qpos - low) / (high - low)
 
     def qvel(self, mjx_data: mjx.Data):
         return mjx_data.qvel
 
     def qfrc(self, mjx_data: mjx.Data):
         return mjx_data.qfrc_actuator
-    
 
     def mjx_step(
         self,
@@ -511,6 +509,7 @@ class RobotSharedData:
 
 
 ##############################################################################################################
+
 
 def check_done(
     rsd: RobotSharedData, joint_angles: jax.Array, position_error, orientation_error
@@ -596,6 +595,7 @@ def normalize_obs(data, obs_stats: RunningAvg):
 
     return StateMonad(func)
 
+
 def update_obs(data, obs_noise=0.0):
     def func(state):
         rng, rng1 = jax.random.split(state["rng"])
@@ -613,6 +613,7 @@ def update_obs(data, obs_noise=0.0):
 
     return StateMonad(func)
 
+
 def concat_obs_as_array(d: Dict[str, Any]) -> StateMonad:
     """
     :: d -> StateMonad s c
@@ -621,7 +622,7 @@ def concat_obs_as_array(d: Dict[str, Any]) -> StateMonad:
     def func(state):
         obs_list = [
             state["last_action"],  # (6, )
-            jnp.array([d["position_error"]]), #(1, )
+            jnp.array([d["position_error"]]),  # (1, )
             d["joint_angles"],  # (6, )
         ]
         obs_array = jnp.concatenate(obs_list)
@@ -649,6 +650,7 @@ def get_goal(range_config: RangeConfig, progress, rng):
     }
     return rng, goals
 
+
 def debug(pdata, name):
     def func(state):
         jax.debug.print("{} = {}", name, pdata[name])
@@ -656,10 +658,14 @@ def debug(pdata, name):
 
     return StateMonad(func)
 
-##############################################################################################################
-#.bind(lambda pdata: normalize_obs(pdata, obs_stats))
 
-def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningAvg, env: StateMonad, obs_noise_scale: float):
+##############################################################################################################
+# .bind(lambda pdata: normalize_obs(pdata, obs_stats))
+
+
+def obs_pipeline(
+    rsd: RobotSharedData, obs_stats: RunningAvg, env: StateMonad, obs_noise_scale: float
+):
     return (
         env.bind(
             lambda pdata: StateMonad(
@@ -702,9 +708,7 @@ def obs_pipeline(rsd: RobotSharedData, obs_stats: RunningAvg, env: StateMonad, o
         )
         .bind(lambda pdata: concat_obs_as_array(pdata))
         .bind(lambda pdata: normalize_obs(pdata, obs_stats))
-        .bind(
-            lambda pdata: update_obs(pdata, obs_noise_scale)
-        )
+        .bind(lambda pdata: update_obs(pdata, obs_noise_scale))
         .bind(
             lambda pdata: StateMonad(
                 lambda state: (
@@ -726,8 +730,8 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
         env.map(
             lambda pdata: {
                 **pdata,
-                "reward": -reward_config.pos_incentive_gain.update(progress)*pdata["position_error"],
-
+                "reward": -reward_config.pos_incentive_gain.update(progress)
+                * pdata["position_error"],
             }
         )
         .bind(
@@ -736,7 +740,9 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
                     state,
                     {
                         **pdata,
-                        "reward": pdata["reward"] + reward_config.velocity_penalty.update(progress) * jnp.linalg.norm(pdata["joint_vel"], ord=2),
+                        "reward": pdata["reward"]
+                        + reward_config.velocity_penalty.update(progress)
+                        * jnp.linalg.norm(pdata["joint_vel"], ord=2),
                     },
                 )
             )
@@ -744,42 +750,38 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
         .bind(
             lambda pdata: StateMonad(
                 lambda state: (
-                    state, 
-                    {
-                        **pdata,
-                        "err_tol": reward_config.err_tol.update(progress)
-                    }
+                    state,
+                    {**pdata, "err_tol": reward_config.err_tol.update(progress)},
                 )
             )
         )
         .map(
             lambda pdata: {
                 **pdata,
-                "success": pdata["position_error"] < pdata["err_tol"]
+                "success": pdata["position_error"] < pdata["err_tol"],
             }
         )
         .bind(
             lambda pdata: StateMonad(
                 lambda state: (
-                    {**state, "success_count": state["success_count"] + jnp.where(pdata["success"], 1.0, 0.0)},
+                    {
+                        **state,
+                        "success": jnp.where(pdata["success"], 1.0, 0.0),
+                        "step": state["step"] + 1,
+                    },
                     pdata,
                 )
             )
         )
         # Aplicação das Recompensas de Término
-        .bind(
-            lambda pdata: StateMonad(
-                lambda state: (
-                    state,
-                    {
-                        **pdata,
-                        "done": pdata["success"],
-
-                        # Bônus de Sucesso
-                        "reward": pdata["reward"] + pdata["success"] * reward_config.success_reward.update(progress),
-                    },
-                )
-            )
+        .map(
+            lambda pdata: {
+                **pdata,
+                "done": pdata["success"],
+                # Bônus de Sucesso
+                "reward": pdata["reward"]
+                + pdata["success"] * reward_config.success_reward.update(progress),
+            }
         )
         .map(
             lambda pdata: {
@@ -797,11 +799,11 @@ def get_action(
     def fn(state):
         last_obs = state["obs"]
         rng1, rng2 = jax.random.split(state["rng"])
-        
+
         alpha, beta = network_settings.actor.apply(network_parameters.actor, last_obs)
         alpha = cast(jax.Array, alpha)
         beta = cast(jax.Array, beta)
-        
+
         action, logprob = cont_sample_beta(rng1, alpha, beta)
 
         new_state = {**state, "rng": rng2}
@@ -814,10 +816,8 @@ def get_ctrl(rsd: RobotSharedData, pdata, action_scale, alpha=0.1):
     mid = 0.5 * (rsd.uppers + rsd.lowers)
     half = 0.5 * action_scale * (rsd.uppers - rsd.lowers)
 
-
     def fn(state):
-
-        #smoothed no intervalo [0, 1]
+        # smoothed no intervalo [0, 1]
         smoothed_action = alpha * state["last_action"] + (1 - alpha) * pdata["action"]
 
         # escala ação para de [0, 1] para [-1, 1]
@@ -841,10 +841,14 @@ def mujoco_step(rsd: RobotSharedData, pdata):
 
     return StateMonad(fn)
 
+
 def shape_return(pdata):
     def fn(state):
-        state = {**state, "step": state["step"] + 1,  "ctrl_norm":jnp.linalg.norm(pdata["ctrl"], ord=2),}
-        
+        state = {
+            **state,
+            "ctrl_norm": jnp.linalg.norm(pdata["ctrl"], ord=2),
+        }
+
         # protege a rede neural se a física quebrar
         is_healthy = jnp.isfinite(pdata["reward"]) & jnp.isfinite(pdata["logprob"])
         done = pdata["done"] | (~is_healthy)
@@ -860,6 +864,7 @@ def shape_return(pdata):
         return state, data
 
     return StateMonad(fn)
+
 
 #####################################################################################################
 def create_training_step(
@@ -879,7 +884,7 @@ def create_step(
     robot_shared_data: RobotSharedData,
     network_settings: NetworksSettings,
     network_parameters: NetworkParameters,
-    action_scale:float,
+    action_scale: float,
     obs_noise_scale: float,
 ):
     """
@@ -910,3 +915,4 @@ def create_step(
         return pl.run(state)
 
     return step_fn
+
