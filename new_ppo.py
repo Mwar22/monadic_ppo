@@ -255,9 +255,9 @@ def ppo_loss(
     batch_returns,  # shape: (num_envs, max_steps)
     old_log_probs,  # shape: (num_envs, max_steps +1)
     batch_ptr,  # ADICIONADO: shape (num_envs,) vindo do buffer.ptr
-    clip_eps=0.2,
-    c1=0.5,
-    c2=0.12,
+    c1,
+    c2,
+    clip_eps=0.15,
     eps=1e-4,
 ):
     batch_advantages = jax.lax.stop_gradient(batch_advantages)
@@ -355,6 +355,10 @@ def train_epochs(
     buffer: BatchedBuffer,
     advantages: jax.Array,
     returns: jax.Array,
+    success_rate: jax.Array,
+    loss_c1=0.5,
+    loss_c2_base=0.05,
+    loss_c2_bonus=0.3,
 ):
     def grad_norm(grads):
         leaves = jax.tree_util.tree_leaves(grads)
@@ -369,6 +373,9 @@ def train_epochs(
         _parameters, _optimizer_state = carry
 
         def loss_fn(par):
+            #escalonamento para c2
+            current_c2 = loss_c2_base + loss_c2_bonus * (1.0 - success_rate)
+
             return ppo_loss(
                 par,
                 settings,
@@ -378,6 +385,8 @@ def train_epochs(
                 returns,
                 buffer.logprob_buffer,
                 batch_ptr=buffer.ptr,
+                c1 = loss_c1,
+                c2 = current_c2
             )
 
         # calcula os gradientes e atualiza os parametros
@@ -449,6 +458,12 @@ def ppo_train(
         # success.shape: (num_envs, )
         success = state["success"]
         return jax.lax.stop_gradient(jnp.mean(success))
+    
+    def get_fullbuffer_rate(buffer: BatchedBuffer):
+        # retorna o percentual de ambientes que pararam, mas não foram por ter atingido o objetivo.
+        # ou seja precisaram de mais passos para atingir o alvo
+        x = ~buffer.done_flag & buffer.stop_flag
+        return jax.lax.stop_gradient(jnp.mean(x))
 
     def collect_rollouts(
         state, runpar: RunningParameters, network_params: NetworkParameters
@@ -485,13 +500,14 @@ def ppo_train(
         new_state, batched_buffer, advantages, returns = collect_rollouts(
             new_goal_state, runpar, network_params
         )
-        mean_envs_success_rate = get_success_rate(new_state)
+        success_rate = get_success_rate(new_state)
+        full_buffer_termination_rate = get_fullbuffer_rate(batched_buffer)
 
         # metricas tem shape (epochs, *metric_shape)
         network_params, optim_state, training_metrics = train_epochs(
-            settings, network_params, optim_state, batched_buffer, advantages, returns
+            settings, network_params, optim_state, batched_buffer, advantages, returns, success_rate
         )
-        runpar = runpar.update(batched_buffer.obs_buffer, mean_envs_success_rate)
+        runpar = runpar.update(batched_buffer.obs_buffer, success_rate)
 
         newcarry = (runpar, optim_state, network_params, new_state)
         err_tol = settings.robot_shared_data.reward_config.err_tol.update(
@@ -499,11 +515,12 @@ def ppo_train(
         )
         return newcarry, (
             training_metrics,
-            mean_envs_success_rate,
+            success_rate,
             batched_buffer.reward_buffer,
             new_state["err"],
             err_tol,
             new_state["ctrl_norm"],
+            full_buffer_termination_rate,
         )
 
     # loop principal de trainamento, executado por lax.scan
@@ -518,7 +535,7 @@ def ppo_train(
     # rewards.shape = (numberof_goals, num_envs, rollout_steps +1)
     (
         final_carry,
-        (training_metrics, mean_envs_success_rate, rewards, err, err_tol, ctrl_norm),
+        (training_metrics, mean_envs_success_rate, rewards, err, err_tol, ctrl_norm, full_buffer_termination_rate),
     ) = jax.lax.scan(
         new_goal_step,
         (runpar, settings.optimizer_state, starting_network_params, initial_state),
@@ -563,6 +580,7 @@ def ppo_train(
         "err_tol": err_tol,
         "avg_kl_div": avg_kl_div,
         "avg_ctrl_norm": avg_ctrl_norm,
+        "fullbuffer_termination_rate": full_buffer_termination_rate,
     }
 
     # final_carry = (runpar, optim_state, network_params)

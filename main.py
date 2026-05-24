@@ -8,12 +8,15 @@ Arquivo com o código principal de treinamento
 
 import os
 import sys
+
 sys.stdout.flush()
 
 # Tell XLA to use Triton GEMM, this improves steps/sec by ~30% on some GPUs
 xla_flags = os.environ.get("XLA_FLAGS", "")
 
-xla_flags += " --xla_gpu_triton_gemm_any=True --xla_dump_to=/tmp/xla_dump --xla_dump_hlo_as_text"
+xla_flags += (
+    " --xla_gpu_triton_gemm_any=True --xla_dump_to=/tmp/xla_dump --xla_dump_hlo_as_text"
+)
 os.environ["XLA_FLAGS"] = xla_flags
 
 # alocação dinamica
@@ -49,11 +52,11 @@ from utils import save
 # cria o otimizazor
 def create_optimizer(steps):
     lr_scheduler = optax.schedules.cosine_onecycle_schedule(
-        peak_value=1e-4,        
-        pct_start=0.3,            # 30% do treino subindo (warm-up), 70% descendo
-        div_factor=5.0,          # LR inicial = peak_value / div_factor
-        final_div_factor=10.0,    # LR final = LR inicial / final_div_factor para o ajuste fino,
-        transition_steps=steps
+        peak_value=1e-4,
+        pct_start=0.3,  # 30% do treino subindo (warm-up), 70% descendo
+        div_factor=5.0,  # LR inicial = peak_value / div_factor
+        final_div_factor=10.0,  # LR final = LR inicial / final_div_factor para o ajuste fino,
+        transition_steps=steps,
     )
 
     return optax.chain(
@@ -102,10 +105,10 @@ settings = TrainingSettings.init(
     optimizer_creator=create_optimizer,
     step_fn_creator=create_training_step,
     num_envs=1600,
-    epochs=300,
-    action_scale=1.0,
+    epochs=200,
+    action_scale=0.75,
     obs_noise_scale=0.001,
-    numberof_goals=100,
+    numberof_goals=150,
     rollout_steps=256,
     target_success=0.6,
 )
@@ -143,6 +146,7 @@ success_rate = metrics["success_rate"]
 err_tol = metrics["err_tol"]
 avg_kl_div = metrics["avg_kl_div"]
 avg_ctrl_norm = metrics["avg_ctrl_norm"]
+fullbuffer_termination_rate = metrics["fullbuffer_termination_rate"]
 
 avg_loss = jnp.mean(loss[-20:])
 print(f" Training finished! Average loss of last 20 steps: {avg_loss:.4f}")
@@ -187,16 +191,14 @@ axs[1][1].set_xlabel("Goal n°")
 axs[1][1].set_ylabel("Average Reward")
 axs[1][1].grid(True)
 
-
-dual = axs[1][2].twinx()
-axs[1][2].set_title("Err tol")
 axs[1][2].plot(err_tol)
-dual.plot(avg_ctrl_norm, color="red")
-
 axs[1][2].set_xlabel("Goal n°")
 axs[1][2].set_ylabel("Tol value")
-dual.set_ylabel("Avg ctrl norm")
 axs[1][2].grid(True)
+dual = axs[1][2].twinx()
+dual.plot(avg_ctrl_norm, color="red")
+dual.set_ylabel("Avg ctrl norm")
+dual.grid(True)
 
 axs[2][0].plot(entropy)
 axs[2][0].set_title("Entropy")
@@ -205,7 +207,6 @@ axs[2][0].set_ylabel("Entropy value")
 axs[2][0].grid(True)
 dual.grid(True)
 
-
 axs[2][1].plot(metrics["avg_err"])
 axs[2][1].set_title("Average err")
 axs[2][1].set_xlabel("Goal n°")
@@ -213,10 +214,14 @@ axs[2][1].set_ylabel("avg err")
 axs[2][1].grid(True)
 
 axs[2][2].plot(success_rate)
-axs[2][2].set_title("Mean (across envs) success rate")
 axs[2][2].set_xlabel("Goal n°")
-axs[2][2].set_ylabel("%")
+axs[2][2].set_ylabel("Success rate %")
 axs[2][2].grid(True)
+dual2 = axs[2][2].twinx()
+dual2.plot(fullbuffer_termination_rate, color="red")
+dual2.set_ylabel("Fullbuffer termination rate %")
+dual2.grid(True)
+
 
 
 plt.savefig(f"training_plots.png")

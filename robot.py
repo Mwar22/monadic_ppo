@@ -773,14 +773,24 @@ def reward_pipeline(progress, rsd: RobotSharedData, env: StateMonad):
                 )
             )
         )
+        .bind(
+            lambda pdata: StateMonad(
+                lambda state: (
+                    state,
+
+                    #penalidade proporcional ao numero de passos
+                    {**pdata, "reward": pdata["reward"] + state["step"] * reward_config.steps_penalty.update(progress),},
+                )
+            )
+        )
         # Aplicação das Recompensas de Término
         .map(
             lambda pdata: {
                 **pdata,
                 "done": pdata["success"],
+                
                 # Bônus de Sucesso
-                "reward": pdata["reward"]
-                + pdata["success"] * reward_config.success_reward.update(progress),
+                "reward": pdata["reward"] + pdata["success"] * reward_config.success_reward.update(progress),
             }
         )
         .map(
@@ -915,4 +925,3 @@ def create_step(
         return pl.run(state)
 
     return step_fn
-

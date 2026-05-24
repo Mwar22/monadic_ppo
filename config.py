@@ -106,23 +106,13 @@ class RewardConfig:
     # O ganho máximo quando o erro é zero
     pos_incentive_gain = RewardConfigParameter.const(0.6)
 
-    # Valor que define o comportamento da recompensa combinada exponencial e linear.
-    # para erros acima de xzero, tem-se penalidades (valores negativos)
-    # abaixo de xzero, tem-se recompensas (valores positivos)
-    # No início do treino (progress=0), xzero=0.5
-    # No fim do treino (progress=1), xzero=0.01
-    pos_incentive_xzero = RewardConfigParameter.linear_tracking(0.5, 0.1)
-
-    # --- Incentivo de Orientação ---
-    #rot_incentive_gain = RewardConfigParameter.const(100.0)
-    #rot_incentive_sigma = RewardConfigParameter.linear_tracking(0.5, 0.05)
 
     # --- Sucesso e Falha ---
-    success_reward = RewardConfigParameter.const(100.0)
+    success_reward = RewardConfigParameter.const(75.0)
 
     #chegou no final (progresso=1) e não atingiu sucesso
     failure_penalty = RewardConfigParameter.const(-50.0)
-    limitbreach_penalty_gain = RewardConfigParameter.const(-0.01)
+    limitbreach_penalty_gain = RewardConfigParameter.const(-0.05)
 
     # --- Tolerância ---
     # No início do treino (progress=0), err_tol=0.8
@@ -137,6 +127,11 @@ class RewardConfig:
     # cost action - penalidade por diferença entra ação atual e passada
     # penaliza delta de ações muito grandes no final
     tar_penalty_gain = RewardConfigParameter.linear_tracking(-0.001, -0.01)
+
+    #penalidade proporcional ao numero de passos
+    # o objetivo é ajudar o robô a selecionar a rota que gaste menos passos
+    # enquanto o progresso é baixo, a penalidade é pequena para o robô explorar mais
+    steps_penalty = RewardConfigParameter.linear_tracking(-0.001, -0.05)
 
 
 
