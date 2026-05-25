@@ -574,7 +574,7 @@ def ppo_train(
         "avg_entropy": avg_entropy,
         "avg_gradnorm": avg_grad_norm,
         "mean_rewards_vs_goals": mean_rewards_vs_goals,
-        "mean_rewards_vs_timestamp": mean_rewards_vs_timestamp,
+        "mean_rewards_vs_timestamp": mean_rewards_vs_timestamp[:-1],
         "success_rate": mean_envs_success_rate,
         "avg_err": avg_err,
         "err_tol": err_tol,

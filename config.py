@@ -102,10 +102,7 @@ class RewardConfigParameter:
 
 @struct.dataclass
 class RewardConfig:
-    # --- Incentivo de Posição ---
-    # O ganho máximo quando o erro é zero
     pos_incentive_gain = RewardConfigParameter.const(0.6)
-
 
     # --- Sucesso e Falha ---
     success_reward = RewardConfigParameter.const(75.0)
@@ -115,9 +112,6 @@ class RewardConfig:
     limitbreach_penalty_gain = RewardConfigParameter.const(-0.05)
 
     # --- Tolerância ---
-    # No início do treino (progress=0), err_tol=0.8
-    # No fim do treino (progress=1), err_tol=0.1
-    #err_tol = RewardConfigParameter.oneshot_cos(max_value=0.4, div_factor=2, final_div_factor=40)
     err_tol = RewardConfigParameter.linear_tracking(0.25, 0.05)
 
     # --- Regularização ---
