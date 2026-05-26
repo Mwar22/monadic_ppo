@@ -4,7 +4,7 @@
 # Created Date: 25/05/2026 01:33:38
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 25/05/2026 01:55:03
+# Last Modified: 26/05/2026 09:03:53
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -21,10 +21,11 @@
 import jax
 from typing import Protocol, Tuple, Any
 from flax import struct
-from state import EnviromentState
+from .state import EnviromentState
 
 class StepData(struct.PyTreeNode):
     observation: jax.Array       # (num_envs, *obs_shape)
+    tool_pos: jax.Array          # (num_envs, 3)
     action: jax.Array    # (num_envs, *action_shape)
     reward: jax.Array    # (num_envs,)
     logprob: jax.Array   # (num_envs,)

@@ -4,7 +4,7 @@
 # Created Date: 25/05/2026 01:46:39
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 25/05/2026 01:56:35
+# Last Modified: 25/05/2026 02:22:43
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026

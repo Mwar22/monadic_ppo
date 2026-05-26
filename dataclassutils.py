@@ -1,15 +1,34 @@
-﻿
+﻿# -*- coding:utf-8 -*-
+###
+# File:  dataclassutils.py
+# Created Date: 24/05/2026 08:50:47
+# Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
+# -----
+# Last Modified: 26/05/2026 09:14:39
+# Modified By: Lucas de Jesus 
+# -----
+# Copyright (c) 2026
+# 
+# This file is subject to the terms and conditions defined in
+# the 'LICENSE.txt' file found in the root of this source tree.
+# Please read LICENSE.txt for full copyright and licensing details.
+# -----
+# HISTORY:
+# Date      	By	Comments
+# ----------	---	----------------------------------------------------------
+###
+
 import jax
 import optax
 import jax.numpy as jnp
 import flax.linen as nn
 from flax import struct
 from typing import Any, cast, Tuple, Callable, Self
-from robot import RobotSharedData, obs_pipeline
+from algorithms.ppo.agent.robot import RobotSharedData, obs_pipeline
 from mujoco import mjx
 from functools import partial
-from utils import conv2jax_quat
-from config import RangeConfig
+from utils2 import conv2jax_quat
+from algorithms.ppo.agent.config import RangeConfig
 from  enviroment import StateMonad
 
 #faz um casting, para evitar o pylance reclamar de coisas como mjData, que vem do c/c++
@@ -289,7 +308,7 @@ class EnviromentsState:
         num_envs = settings.num_envs
         batched_rng = jax.random.split(rng, num_envs)
 
-        mjx_data = mjx.make_data(settings.robot_shared_data.mjx_model)
+        mjx_data = mjx.make_data(settings.robot_shared_data._mjx_model)
         batched_mjx_data = jax.tree_util.tree_map(
             lambda x: jax.numpy.repeat(x[None], num_envs, axis=0),
             mjx_data

@@ -4,7 +4,7 @@
 # Created Date: 25/05/2026 07:23:03
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 25/05/2026 11:43:59
+# Last Modified: 25/05/2026 03:57:08
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -21,7 +21,7 @@
 
 import jax
 import jax.numpy as jnp
-from networks import Policy, Value
+from algorithms.ppo.networks import Policy, Value
 
 def ppo_loss(
     policy_network: Policy,

@@ -2,11 +2,11 @@ from os import wait
 import jax
 import optax
 import jax.numpy as jnp
-import utils as mu
+import utils2 as mu
 from functools import partial
 from typing import Dict, Any, cast
-from utils import beta_entropy
-from robot import get_goal, obs_pipeline
+from utils2 import beta_entropy
+from algorithms.ppo.agent.robot import get_goal, obs_pipeline
 from mujoco import mjx
 from dataclassutils import (
     RunningParameters,
@@ -595,7 +595,7 @@ def create_initial_state(rng: jax.Array, progress, settings: TrainingSettings):
     num_envs = settings.num_envs
     batched_rng = jax.random.split(rng, num_envs)
 
-    mjx_data = mjx.make_data(settings.robot_shared_data.mjx_model)
+    mjx_data = mjx.make_data(settings.robot_shared_data._mjx_model)
     batched_mjx_data = jax.tree_util.tree_map(
         lambda x: jax.numpy.repeat(x[None], num_envs, axis=0), mjx_data
     )
