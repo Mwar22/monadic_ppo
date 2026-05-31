@@ -1,4 +1,15 @@
+# Ignore all Python bytecode directories
 **/__pycache__/
+
+# Ignore individual compiled python files (just in case)
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore pytest cache (essential for your project)
+.pytest_cache/
+
+
 *.csv
 *.png
 .vscode/
