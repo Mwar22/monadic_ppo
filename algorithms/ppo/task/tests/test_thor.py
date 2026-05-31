@@ -4,7 +4,7 @@
 # Created Date: 30/05/2026 03:33:57
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 31/05/2026 10:10:31
+# Last Modified: 31/05/2026 12:03:51
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -71,22 +71,8 @@ def test_thor_sizes(agent_par):
     assert agent.policy().action_size == 6, "Policy action_size deve ser 6, pois são 6 juntas "
     assert agent.value().obs_size== 15, "Value obs_size deve ser 15, uma vez que contem uma observação extra se comparado à politica: tool_position"
 
-
-
-import jax.numpy as jnp
-from jax.tree_util import tree_map
-
-"""def are_data_equal(data1, data2, atol=1e-6):
-    # tree_map applies the comparison to every leaf of the mjx.Data struct
-    # (qpos, qvel, ctrl, etc.)
-    comparisons = tree_map(lambda x, y: jnp.isclose(x, y, atol=atol), data1, data2)
-    
-    # Check if all comparisons across the entire tree are True
-    return jnp.all(jax.tree_util.tree_leaves(comparisons))"""
-
-def test_thor_step_and_reset(enviroment, agent_par):
-    agent, rngs = agent_par
-
+@pytest.fixture(scope="session")
+def batch_and_mjx_data(enviroment):
     num_envs = 2
 
     #cria um mjx_data inicial e reseta um dado ambiente
@@ -95,12 +81,29 @@ def test_thor_step_and_reset(enviroment, agent_par):
     batched_mjx_data = jax.tree_util.tree_map(
         lambda x: jax.numpy.repeat(x[None], num_envs, axis=0), initial_mjx_data
     )
+    return num_envs, batched_mjx_data
+
+def test_thor_reset(enviroment, agent_par, batch_and_mjx_data):
+    agent, rngs = agent_par
+    num_envs, batched_mjx_data = batch_and_mjx_data
 
     #cria mapas vetoriais para as funções step e reset, para funcinar com mjx_data em batch
     vmap_agent_reset = jax.vmap(agent.reset, in_axes=(None, None, 0))
-    vmap_agent_step = jax.vmap(agent.step, in_axes = (None, 0, 0, 0))
-
     reset_data, reset_mjx_data = vmap_agent_reset(enviroment, rngs, batched_mjx_data)
+
+    #testa se a dimensão de batch vai aparecer
+    assert reset_data.value.shape ==(num_envs, )
+
+    #testa se o mjx_data resultante também terá o shape de batch, como inicial
+    assert reset_mjx_data.qpos.shape == batched_mjx_data.qpos.shape
+
+def test_thor_step(enviroment, agent_par, batch_and_mjx_data):
+    agent, rngs = agent_par
+    num_envs, batched_mjx_data = batch_and_mjx_data
+
+
+    #cria mapas vetoriais para as funções step e reset, para funcinar com mjx_data em batch
+    vmap_agent_step = jax.vmap(agent.step, in_axes = (None, 0, 0, 0))
 
     #cria uma observação qualquer  e obtem a ação relativa
     dummy_policy_obs = jax.random.normal(rngs(), (num_envs, agent.policy().obs_size))
@@ -108,7 +111,11 @@ def test_thor_step_and_reset(enviroment, agent_par):
 
     assert action.shape == (num_envs, agent.policy().action_size)
 
-    #dummy_target = jax.random.normal(rngs(), (3,))
-    #step_mjx_data, step_data = agent.step(enviroment, reset_mjx_data, action, dummy_target)
+    dummy_target = jax.random.normal(rngs(), (num_envs, 3))
+    step_data, step_mjx_data = vmap_agent_step(enviroment, action, dummy_target, batched_mjx_data)
 
-   # assert are_data_equal(reset_mjx_data, reset_mjx_data), "mjx_data após tomada de ação deve ser diferente"
+    #testa se o shape das recompensas vai bater com o batch
+    assert step_data.reward.shape == (num_envs, )
+
+    #testa se o mjx_data resultante também terá o shape de batch, como inicial
+    assert step_mjx_data.qpos.shape == batched_mjx_data.qpos.shape

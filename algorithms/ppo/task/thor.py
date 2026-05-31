@@ -4,7 +4,7 @@
 # Created Date: 24/05/2026 08:47:36
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 31/05/2026 09:57:44
+# Last Modified: 31/05/2026 11:38:20
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -158,9 +158,9 @@ class ThorEnv(struct.PyTreeNode):
         return self._joint_space
     
     def failed(self, mjx_data: mjx.Data):
-        g1 = mjx_data.contact.geom1
-        g2 = mjx_data.contact.geom2
-        dist = mjx_data.contact.dist
+        g1 = mjx_data._impl.contact.geom1   # type: ignore[attr-defined]
+        g2 = mjx_data._impl.contact.geom2   # type: ignore[attr-defined]
+        dist = mjx_data._impl.contact.dist  # type: ignore[attr-defined]
 
         # só existe colisão se dist <= 0
         is_collision = dist <= 0
