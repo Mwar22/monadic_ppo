@@ -4,7 +4,7 @@
 # Created Date: 31/05/2026 12:47:24
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 31/05/2026 01:12:34
+# Last Modified: 31/05/2026 02:36:35
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -77,6 +77,6 @@ def test_rollout(enviroment, agent_par, batch_and_mjx_data):
     rollout_steps = 25
 
     dummy_target = jax.random.normal(rngs(), (num_envs, 3))
-    buffer = new_buffer(num_envs, rollout_steps, agent.policy().obs_size, agent.value().obs_size, agent.policy().action_size)
+    buffer = new_buffer(num_envs, rollout_steps, agent.policy.obs_size, agent.value.obs_size, agent.policy.action_size)
     
     buffer, mjx_data = rollout(agent, enviroment, rngs, batched_mjx_data, dummy_target, rollout_steps, buffer)

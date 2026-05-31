@@ -4,7 +4,7 @@
 # Created Date: 25/05/2026 11:54:02
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 31/05/2026 01:26:03
+# Last Modified: 31/05/2026 02:37:31
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -132,10 +132,10 @@ def rollout(
         policy_obs, value_obs, mjx_data, buffer, rngs = carry
 
         #obtem a ação, e avalia logprob e entropia relativas
-        actions = agent.policy().sample(policy_obs, rngs)
+        actions = agent.policy.sample(policy_obs, rngs)
 
         #logprob segundo a politica atual
-        logprob, _ = agent.policy().evaluate_actions(policy_obs, actions)
+        logprob, _ = agent.policy.evaluate_actions(policy_obs, actions)
         
         #avança o agente
         step_data, mjx_data = vmap_agent_step(enviroment, actions, target, mjx_data)

@@ -4,7 +4,7 @@
 # Created Date: 25/05/2026 07:23:03
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 30/05/2026 04:07:38
+# Last Modified: 31/05/2026 02:36:57
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -47,10 +47,10 @@ def ppo_loss(
     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
     # logprob, entropia segundo a politica atual
-    logprobs, entropy = agent.policy().evaluate_actions(policy_obs, actions)
+    logprobs, entropy = agent.policy.evaluate_actions(policy_obs, actions)
 
     # value segundo parametros atuais
-    values = agent.value()(policy_obs).squeeze(-1)
+    values = agent.value(policy_obs).squeeze(-1)
 
     # clipa log_ratio (jnp.exp(10) é ~22000 (bem grande) e  jnp.exp(-10) é ~0.00004, sendo mais que suficiente)
     safe_logratio = jnp.clip(logprobs - old_log_probs, -10.0, 10.0)

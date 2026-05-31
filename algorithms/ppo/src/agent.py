@@ -4,7 +4,7 @@
 # Created Date: 29/05/2026 01:06:35
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 31/05/2026 09:56:29
+# Last Modified: 31/05/2026 03:07:43
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -23,6 +23,7 @@ from mujoco import mjx
 from typing import Protocol, Tuple, Dict, Any, runtime_checkable
 from flax import nnx, struct
 from .enviroment import MujocoEnv, mujoco_step, mujoco_reset
+from abc import ABC, abstractmethod
 
 @runtime_checkable
 class Policy(Protocol):
@@ -112,16 +113,21 @@ class StepData(struct.PyTreeNode):
     done: jax.Array
     info: Dict[str, Any]
     
-@runtime_checkable
-class Agent(Protocol):
-    
+#@runtime_checkable
+class Agent(nnx.Module, ABC):
+
+    @property
+    @abstractmethod
     def policy(self)->Policy:
         ...
 
+    @property
+    @abstractmethod
     def value(self)-> Value:
         ...
 
     @staticmethod
+    @abstractmethod
     def compose_obs(env: MujocoEnv, mjx_data:mjx.Data)->Tuple[jax.Array, jax.Array]:
         """
         Deve coletar informações de um ambiente 'MujocoEnv' e compor observações para a política e para a função de valor.
@@ -138,8 +144,10 @@ class Agent(Protocol):
         """
         ...
 
+    @abstractmethod
     def reset(self, env: MujocoEnv,  rngs: nnx.Rngs, mjx_data:mjx.Data)->Tuple[ResetData, mjx.Data]:
         ...
 
+    @abstractmethod
     def step(self, env: MujocoEnv,  action: jax.Array, target: jax.Array, mjx_data:mjx.Data,)->Tuple[StepData, mjx.Data]:
         ...

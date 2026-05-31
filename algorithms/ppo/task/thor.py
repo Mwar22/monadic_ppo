@@ -4,7 +4,7 @@
 # Created Date: 24/05/2026 08:47:36
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 31/05/2026 01:17:58
+# Last Modified: 31/05/2026 03:09:18
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -28,6 +28,7 @@ Tarefa para o thor alcançar um alvo
 from __future__ import annotations
 import mujoco
 import jax
+import algorithms.ppo.src.enviroment as mjenv
 from mujoco import MjModel  # type: ignore
 from jax import numpy as jnp
 from mujoco import mjx
@@ -37,8 +38,8 @@ from typing import Any, Dict, Self, Union, List, Tuple, cast
 from algorithms.ppo.utils.canonical_space import CanonicalSpace, new_cs, transform_to_cs, transform_vel_to_cs
 from algorithms.ppo.task.actor import Actor
 from algorithms.ppo.task.critic import Critic
-from algorithms.ppo.src.agent import Policy, Value, ResetData, StepData
-import algorithms.ppo.src.enviroment as mjenv
+from algorithms.ppo.src.agent import Policy, Value, Agent, ResetData, StepData
+
 
 ########################################## para o pylance não reclamar #############################################
 mujoco: Any
@@ -194,7 +195,7 @@ class ThorEnv(struct.PyTreeNode):
 #####################################################################################################################
 #####################################################################################################################
 
-class ThorAgent:
+class ThorAgent(Agent):
 
     def __init__(
         self,
@@ -211,9 +212,11 @@ class ThorAgent:
         self._value = Critic(action_obs.shape[0], rngs)
         self.max_step_rads = max_step_rads
     
+    @property
     def policy(self)->Policy:
         return self._policy
 
+    @property
     def value(self)-> Value:
         return self._value
     
@@ -237,11 +240,11 @@ class ThorAgent:
         policy_obs, value_obs = ThorAgent.compose_obs(env, mjx_data)
        
         #obtem uma ação com base na observação para a política
-        action = self.policy().sample(policy_obs, rngs)
+        action = self.policy.sample(policy_obs, rngs)
 
         #calcula logprob, entropia e value
-        logprob, entropy = self.policy().evaluate_actions(policy_obs, action)
-        value = self.value()(value_obs)
+        logprob, entropy = self.policy.evaluate_actions(policy_obs, action)
+        value = self.value(value_obs)
 
         return ResetData(action, logprob, value, entropy), mjx_data
     

@@ -4,7 +4,7 @@
 # Created Date: 30/05/2026 03:33:57
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 31/05/2026 12:48:27
+# Last Modified: 31/05/2026 02:35:46
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -65,9 +65,9 @@ def test_instance(enviroment):
 def test_thor_sizes(agent_par):
     agent, _ = agent_par
 
-    assert agent.policy().obs_size == 12, "Policy obs_size deve ser 12, pois são 6 juntas, e cada uma com um angulo e velocidade"
-    assert agent.policy().action_size == 6, "Policy action_size deve ser 6, pois são 6 juntas "
-    assert agent.value().obs_size== 15, "Value obs_size deve ser 15, uma vez que contem uma observação extra se comparado à politica: tool_position"
+    assert agent.policy.obs_size == 12, "Policy obs_size deve ser 12, pois são 6 juntas, e cada uma com um angulo e velocidade"
+    assert agent.policy.action_size == 6, "Policy action_size deve ser 6, pois são 6 juntas "
+    assert agent.value.obs_size== 15, "Value obs_size deve ser 15, uma vez que contem uma observação extra se comparado à politica: tool_position"
 
 @pytest.fixture(scope="session")
 def batch_and_mjx_data(enviroment):
@@ -104,10 +104,10 @@ def test_thor_step(enviroment, agent_par, batch_and_mjx_data):
     vmap_agent_step = jax.vmap(agent.step, in_axes = (None, 0, 0, 0))
 
     #cria uma observação qualquer  e obtem a ação relativa
-    dummy_policy_obs = jax.random.normal(rngs(), (num_envs, agent.policy().obs_size))
-    action = agent.policy().sample(dummy_policy_obs, rngs)
+    dummy_policy_obs = jax.random.normal(rngs(), (num_envs, agent.policy.obs_size))
+    action = agent.policy.sample(dummy_policy_obs, rngs)
 
-    assert action.shape == (num_envs, agent.policy().action_size)
+    assert action.shape == (num_envs, agent.policy.action_size)
 
     dummy_target = jax.random.normal(rngs(), (num_envs, 3))
     step_data, step_mjx_data = vmap_agent_step(enviroment, action, dummy_target, batched_mjx_data)
