@@ -1,6 +1,25 @@
-﻿# task.py - O Jogo
+﻿# -*- coding:utf-8 -*-
+###
+# File:  task.py
+# Created Date: 24/05/2026 02:01:01
+# Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
+# -----
+# Last Modified: 29/05/2026 01:40:02
+# Modified By: Lucas de Jesus 
+# -----
+# Copyright (c) 2026
+# 
+# This file is subject to the terms and conditions defined in
+# the 'LICENSE.txt' file found in the root of this source tree.
+# Please read LICENSE.txt for full copyright and licensing details.
+# -----
+# HISTORY:
+# Date      	By	Comments
+# ----------	---	----------------------------------------------------------
+###
+# task.py - O Jogo
 from jax import numpy as jnp
-from config import RewardConfig
+from algorithms.ppo.agent.config import RewardConfig
 from enviroment import StateMonad
 
 def reward_and_termination_pipeline(progress, reward_config: RewardConfig, pdata: dict):

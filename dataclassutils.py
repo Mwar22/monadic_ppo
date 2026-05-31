@@ -4,7 +4,7 @@
 # Created Date: 24/05/2026 08:50:47
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 26/05/2026 09:14:39
+# Last Modified: 29/05/2026 01:41:13
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -24,7 +24,7 @@ import jax.numpy as jnp
 import flax.linen as nn
 from flax import struct
 from typing import Any, cast, Tuple, Callable, Self
-from algorithms.ppo.agent.robot import RobotSharedData, obs_pipeline
+from algorithms.ppo.reach_target.thor import ThorEnv, obs_pipeline
 from mujoco import mjx
 from functools import partial
 from utils2 import conv2jax_quat
@@ -161,7 +161,7 @@ class TrainingSettings:
     gamma: float
     gae_lambda: float
 
-    robot_shared_data: RobotSharedData
+    robot_shared_data: ThorEnv
     optimizer: optax.GradientTransformationExtraArgs
     optimizer_state: optax.OptState
     step_fn_creator: Callable
@@ -183,7 +183,7 @@ class TrainingSettings:
         cls,
         network_settings: NetworksSettings,
         network_params: NetworkParameters,
-        robot_shared_settings: RobotSharedData,
+        robot_shared_settings: ThorEnv,
         optimizer_creator: Callable[[int], optax.GradientTransformationExtraArgs],
         step_fn_creator:Callable[[Self, NetworkParameters], Callable],
         num_envs: int = 1,

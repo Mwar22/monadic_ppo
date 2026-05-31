@@ -4,7 +4,7 @@
 # Created Date: 25/05/2026 11:54:02
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 26/05/2026 10:22:33
+# Last Modified: 30/05/2026 04:08:42
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -20,23 +20,26 @@
 
 import jax
 import jax.numpy as jnp
+import src.enviroment as mjenv
 from mujoco import mjx
 from flax import struct, nnx
-from enviroment.step import StepData
-from networks.actor import Actor
-from enviroment.mujoco import MujocoEnv, mujoco_step, mujoco_reset, mujoco_sensors
+from typing import Tuple
+from src.agent import Agent
+from utils.monads import State
 
 class RolloutBuffer(struct.PyTreeNode):
-    observations: jax.Array       # (rollout_steps +1, num_envs, *obs_shape)
-    tool_pos: jax.Array  # (rollout_steps +1, num_envs, 3)
-    actions: jax.Array    # (rollout_steps +1, num_envs, *action_shape)
-    rewards: jax.Array    # (rollout_steps +1, num_envs,)
-    logprobs: jax.Array   # (rollout_steps +1, num_envs,)
+    policy_obs: jax.Array       # (rollout_steps +1, num_enviroments, *obs_shape)
+    value_obs: jax.Array
+    actions: jax.Array    # (rollout_steps +1, num_enviroments, *action_shape)
+    rewards: jax.Array    # (rollout_steps +1, num_enviroments,)
+    logprobs: jax.Array   # (rollout_steps +1, num_enviroments,)
+    dones: jax.Array       #(rollout_steps +1, num_enviroments,)
   
 def new_buffer(
-    num_envs: int,
+    num_enviroments: int,
     rollout_steps: int,
-    obs_size:int,
+    policy_obs_size:int,
+    value_obs_size:int,
     action_size: int
 )->RolloutBuffer:
     """
@@ -44,7 +47,7 @@ def new_buffer(
 
     Parameters
     ----------
-    num_envs : int
+    num_enviroments : int
     rollout_steps : int
     obs_size : int
     action_size : int
@@ -53,23 +56,30 @@ def new_buffer(
     -------
     RolloutBuffer
     """
-    _num_envs = int(jnp.maximum(jnp.array(num_envs), 1.0))
+    _num_enviroments = int(jnp.maximum(jnp.array(num_enviroments), 1.0))
     _rollout_steps = int(jnp.maximum(jnp.array(rollout_steps), 1.0) + 1)
     _action_size = int(jnp.maximum(jnp.array(action_size), 1.0))
-    _observation_size = int(jnp.maximum(jnp.array(obs_size), 1.0))
+    _policy_obs_size = int(jnp.maximum(jnp.array(policy_obs_size), 1.0))
+    _value_obs_size = int(jnp.maximum(jnp.array(value_obs_size), 1.0))
 
     return RolloutBuffer(
-        jnp.zeros((_rollout_steps, _num_envs, _observation_size), dtype=jnp.float32),
-        jnp.zeros((_rollout_steps, _num_envs, 3), dtype=jnp.float32),
-        jnp.zeros((_rollout_steps, _num_envs, _action_size), dtype=jnp.float32),
-        jnp.zeros((_rollout_steps, _num_envs),  dtype=jnp.float32),
-        jnp.zeros((_rollout_steps, _num_envs), dtype=jnp.float32),
+        jnp.zeros((_rollout_steps, _num_enviroments, _policy_obs_size), dtype=jnp.float32),
+        jnp.zeros((_rollout_steps, _num_enviroments, _value_obs_size), dtype=jnp.float32),
+        jnp.zeros((_rollout_steps, _num_enviroments, _action_size), dtype=jnp.float32),
+        jnp.zeros((_rollout_steps, _num_enviroments),  dtype=jnp.float32),
+        jnp.zeros((_rollout_steps, _num_enviroments), dtype=jnp.float32),
+        jnp.zeros((_rollout_steps, _num_enviroments), dtype=jnp.bool),
     )
 
 def add_on_buffer(
     buffer: RolloutBuffer, 
-    index: jax.Array,
-    data: StepData
+    index: int,
+    policy_obs: jax.Array,
+    value_obs: jax.Array,
+    action: jax.Array,
+    reward: jax.Array,
+    logprob: jax.Array,
+    done: jax.Array,
 )->RolloutBuffer:
     """
     Adiciona dados no buffer em uma determinada posição
@@ -88,125 +98,49 @@ def add_on_buffer(
     RolloutBuffer atualizado
     """
     return buffer.replace(
-        observations = buffer.observations.at[index].set(data.observation),
-        tool_pos = buffer.tool_pos.at[index].set(data.tool_pos),
-        actions = buffer.actions.at[index].set(data.action),
-        rewards = buffer.rewards.at[index].set(data.reward),
-        logprobs = buffer.logprobs.at[index].set(data.logprob),
+        policy_obs = buffer.policy_obs.at[index].set(policy_obs),
+        value_obs = buffer.value_obs.at[index].set(value_obs),
+        actions = buffer.actions.at[index].set(action),
+        rewards = buffer.rewards.at[index].set(reward),
+        logprobs = buffer.logprobs.at[index].set(logprob),
+        dones = buffer.dones.at[index].set(done),
     )
 
-####################################################################################################
-def update_obs(rng: jax.Array, obs:jax.Array, obs_noise=0.0):
-    rng, rng1 = jax.random.split(rng)
-    obs_processed = jnp.nan_to_num(obs, nan=0.0, posinf=5.0, neginf=-5.0)
-
-    noise = jax.random.uniform(rng, obs_processed.shape, minval=-1.0, maxval=1.0)
-    obs_processed = obs_processed + (obs_noise * noise)
-    return rng1, obs_processed
-
-def action_sample_betadist(
-    rng: jax.Array,
-    alpha: jax.Array,
-    beta: jax.Array,
-):
-    actions = jax.random.beta(rng, alpha, beta)
-    logprobs = jax.scipy.stats.beta.logpdf(actions, alpha, beta)
-    return actions, jnp.sum(logprobs, axis=-1)
-    
-def get_action(
-    rng: jax.Array,
-    obs: jax.Array,
-    actor: Actor,
-):
-    alpha, beta = actor(obs)
-    action, logprob = action_sample_betadist(rng, alpha, beta)
-    return action, logprob
-    
-def get_ctrl(mjx_data: mjx.Data, action: jax.Array, max_step_rads = 0.05 ):
-   
-    #muda a escala das ações de [0, 1] para [-max_step_rad, max_step_rad]
-    delta = (2*action - 1) * max_step_rads  
-    return mjx_data.ctrl + delta
+##################################################### TEST#############################################
 
 
-def get_reward(tool_pos: jax.Array, qpos: jax.Array, qvel:jax.Array, target:jax.Array)->jax.Array:
-    error = target - tool_pos
-    return -jnp.linalg.norm(error, ord=2)
 
-####################################################################################################
-def batched_step_wrapper(
-    rng: jax.Array,
+def rollout(
+    agent: Agent,
+    env: mjenv.MujocoEnv,
+    rngs: nnx.Rngs,
     mjx_data: mjx.Data,
     target: jax.Array,
-    fail_flag: jax.Array,
-    index: jax.Array,
-    env: MujocoEnv,       
-    actor_graph: nnx.GraphDef, # Replaces Actor
-    actor_state: nnx.State     # Replaces Actor
+    rollout_steps: int,
+    buffer: RolloutBuffer,
 ):
-    #reconstroi o ator
-    actor = nnx.merge(actor_graph, actor_state)
+    #reseta o agente e coleta as primeiras observações do ambiente
+    mjx_data, reset_data = agent.reset(env, mjx_data, rngs)
+    policy_obs, value_obs = agent.compose_obs(env, mjx_data)
 
 
-    fail_flag |= env.failed(mjx_data)
+    def rollout_step(carry, step):
+        policy_obs, value_obs, mjx_data, buffer = carry
 
-    def finished(carry):
-        rng, mjx_data, fail_flag= carry
-        new_mjx_data = mujoco_reset(env, mjx_data, env.def_qpos)
-        return (rng, new_mjx_data, jnp.zeros(env.observation_size), jnp.zeros(3), 0.5*jnp.ones(env.action_size), jnp.array(0.0, dtype=jnp.float32), jnp.array(1.0, dtype=jnp.float32), fail_flag, index)
+        #obtem a ação, e avalia logprob e entropia relativas
+        action = agent.policy().sample(policy_obs, rngs)
+
+        #logprob segundo a politica atual
+        logprob, _ = agent.policy().evaluate_actions(policy_obs, action)
+        
+        #avança o agente
+        mjx_data, step_data = agent.step(env, mjx_data, action, target)
+        
+        # guarda no buffer
+        buffer = add_on_buffer(buffer, step, policy_obs, value_obs, action, step_data.reward, logprob, step_data.done)
+        
+        #obtem a proxima observação
+        policy_obs, value_obs = agent.compose_obs(env, mjx_data)
+        return (policy_obs, value_obs, mjx_data, buffer), None
     
-    def not_finished(carry):
-        rng, mjx_data, fail_flag = carry
-
-        #lê o sensor e compôe o tensor de observação
-        tool_pos, qpos, qvel = mujoco_sensors(env, mjx_data)
-        obs = jnp.concatenate((qpos, qvel, target))
-
-        #obtem uma nova ação
-        rng, rng1 = jax.random.split(rng)
-        action, logprob = get_action(rng1, obs, actor)
-
-        #novo valor de controle para a dada ação
-        ctrl_action  = get_ctrl(mjx_data, action)
-
-        #avança a fisica, lê os sensores novamente e calcula as recompensas
-        mjx_data = mujoco_step(env, mjx_data, ctrl_action)
-        tool_pos, qpos, qvel = mujoco_sensors(env, mjx_data)
-        reward = get_reward(tool_pos, qpos, qvel, target)
-
-        return rng, mjx_data, obs, tool_pos, action, reward, logprob, fail_flag, index +1
-
-    return jax.lax.cond(fail_flag, finished, not_finished, (rng, mjx_data, fail_flag))
-
-def rollout_step(
-        rng: jax.Array,
-        mjx_data: mjx.Data,
-        env: MujocoEnv,
-        targets: jax.Array,
-        fail_flag: jax.Array,
-        index: jax.Array,
-        buffer: RolloutBuffer,
-        actor_graph: nnx.GraphDef, 
-        actor_state: nnx.State   
-    ):
-        vmapped_step = jax.vmap(
-            batched_step_wrapper,
-            in_axes=(
-                0,     # rng: diferente para cada ambiente
-                0,     # mjx_data: cada ambiente tem o seu estado unico
-                0,     # target: cada ambiente tem um alvo diferente
-                0,     # fail_flag: cada ambiente pode falhar em momentos distintos
-                0,     # index: aponta para prox timestep
-                None,  # MujocoEnv é um dataclass que é compartilhado
-                None,  # actor_graph: compartilhado (arquitetura estática)
-                None   # actor_state: compartilhado (todos os ambientes usam os mesmos pesos para a política)
-            )
-        )
-        rng, mjx_data, obs, tool_pos, action, reward, logprob, fail_flag, index = vmapped_step(
-            rng, mjx_data, targets, fail_flag, index , env, actor_graph, actor_state
-        )
-        new_buffer = add_on_buffer(buffer, index, StepData(obs, tool_pos, action, reward, logprob))
-        return rng, mjx_data, new_buffer, fail_flag, index
-
-
-##################################################### TEST#############################################
+    (policy_obs, value_obs, mjx_data, buffer), _ = jax.lax.scan(rollout_step, (policy_obs, value_obs, mjx_data, buffer), jnp.arange(rollout_steps))
