@@ -4,7 +4,7 @@
 # Created Date: 30/05/2026 09:59:47
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 30/05/2026 07:02:50
+# Last Modified: 31/05/2026 12:16:47
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -32,7 +32,7 @@ def shared_parameters():
     key = jax.random.PRNGKey(0)
     rngs = nnx.Rngs(key)
     model = Actor(obs_size=obs_size, action_size=action_size, rngs=rngs)
-    obs = jax.random.normal(key, (batch_size, obs_size))
+    obs = jax.random.normal(rngs(), (batch_size, obs_size))
 
     return model, obs, rngs
 

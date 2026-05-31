@@ -4,7 +4,7 @@
 # Created Date: 25/05/2026 11:54:02
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 30/05/2026 04:08:42
+# Last Modified: 31/05/2026 01:26:03
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -20,12 +20,10 @@
 
 import jax
 import jax.numpy as jnp
-import src.enviroment as mjenv
+import algorithms.ppo.src.enviroment as mjenv
 from mujoco import mjx
 from flax import struct, nnx
-from typing import Tuple
-from src.agent import Agent
-from utils.monads import State
+from algorithms.ppo.src.agent import Agent
 
 class RolloutBuffer(struct.PyTreeNode):
     policy_obs: jax.Array       # (rollout_steps +1, num_enviroments, *obs_shape)
@@ -112,35 +110,43 @@ def add_on_buffer(
 
 def rollout(
     agent: Agent,
-    env: mjenv.MujocoEnv,
+    enviroment: mjenv.MujocoEnv,
     rngs: nnx.Rngs,
     mjx_data: mjx.Data,
     target: jax.Array,
     rollout_steps: int,
     buffer: RolloutBuffer,
 ):
+    #cria vmaps para para funcionar com dados em batch
+    vmap_agent_reset = jax.vmap(agent.reset, in_axes=(None, None, 0))
+    vmap_agent_step = jax.vmap(agent.step, in_axes = (None, 0, 0, 0))
+    vmap_agent_compose_obs = jax.vmap(agent.compose_obs, in_axes=(None, 0))
+
     #reseta o agente e coleta as primeiras observações do ambiente
-    mjx_data, reset_data = agent.reset(env, mjx_data, rngs)
-    policy_obs, value_obs = agent.compose_obs(env, mjx_data)
+    _, mjx_data = vmap_agent_reset(enviroment, rngs, mjx_data)
+
+    policy_obs, value_obs = vmap_agent_compose_obs(enviroment, mjx_data)
 
 
     def rollout_step(carry, step):
-        policy_obs, value_obs, mjx_data, buffer = carry
+        policy_obs, value_obs, mjx_data, buffer, rngs = carry
 
         #obtem a ação, e avalia logprob e entropia relativas
-        action = agent.policy().sample(policy_obs, rngs)
+        actions = agent.policy().sample(policy_obs, rngs)
 
         #logprob segundo a politica atual
-        logprob, _ = agent.policy().evaluate_actions(policy_obs, action)
+        logprob, _ = agent.policy().evaluate_actions(policy_obs, actions)
         
         #avança o agente
-        mjx_data, step_data = agent.step(env, mjx_data, action, target)
+        step_data, mjx_data = vmap_agent_step(enviroment, actions, target, mjx_data)
         
         # guarda no buffer
-        buffer = add_on_buffer(buffer, step, policy_obs, value_obs, action, step_data.reward, logprob, step_data.done)
+        buffer = add_on_buffer(buffer, step, policy_obs, value_obs, actions, step_data.reward, logprob, step_data.done)
         
         #obtem a proxima observação
-        policy_obs, value_obs = agent.compose_obs(env, mjx_data)
-        return (policy_obs, value_obs, mjx_data, buffer), None
+        policy_obs, value_obs = vmap_agent_compose_obs(enviroment, mjx_data)
+        return (policy_obs, value_obs, mjx_data, buffer, rngs), None
     
-    (policy_obs, value_obs, mjx_data, buffer), _ = jax.lax.scan(rollout_step, (policy_obs, value_obs, mjx_data, buffer), jnp.arange(rollout_steps))
+    (policy_obs, value_obs, mjx_data, buffer, rngs), _ = jax.lax.scan(rollout_step, (policy_obs, value_obs, mjx_data, buffer, rngs), jnp.arange(rollout_steps+1))
+
+    return buffer, mjx_data

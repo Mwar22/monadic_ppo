@@ -4,7 +4,7 @@
 # Created Date: 30/05/2026 03:33:57
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 31/05/2026 12:03:51
+# Last Modified: 31/05/2026 12:48:27
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -23,12 +23,10 @@ import jax.numpy as jnp
 from etils import epath
 from flax import nnx
 from mujoco import mjx
-from algorithms.ppo.utils.gae import general_advantage_estimator
 from algorithms.ppo.task.thor import ThorEnv, ThorAgent
 from algorithms.ppo.utils.canonical_space import new_cs
 from algorithms.ppo.src.enviroment import MujocoEnv
 from algorithms.ppo.src.agent import Agent
-from functools import partial
 
 model_path = "/home/lucas/Documentos/MLProjects/monadic_ppo"
 

@@ -4,7 +4,7 @@
 # Created Date: 24/05/2026 08:47:36
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 31/05/2026 11:38:20
+# Last Modified: 31/05/2026 01:17:58
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -230,8 +230,6 @@ class ThorAgent:
     
 
     def reset(self, env: mjenv.MujocoEnv,  rngs: nnx.Rngs, mjx_data:mjx.Data)->Tuple[ResetData, mjx.Data]:
-        jax.debug.print("mjx_data.qpos.shape: {}", mjx_data.qpos.shape)
-
         
         mjx_data = mjenv.mujoco_reset(env, env.def_qpos, mjx_data)
 

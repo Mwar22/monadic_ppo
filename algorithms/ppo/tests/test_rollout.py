@@ -1,10 +1,10 @@
 ﻿# -*- coding:utf-8 -*-
 ###
-# File:  test_loss.py
-# Created Date: 30/05/2026 04:12:14
+# File:  test_rollout.py
+# Created Date: 31/05/2026 12:47:24
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 31/05/2026 12:27:23
+# Last Modified: 31/05/2026 01:12:34
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -17,18 +17,16 @@
 # Date      	By	Comments
 # ----------	---	----------------------------------------------------------
 ###
-
-"""import pytest
+import pytest
 import jax
 import jax.numpy as jnp
 from etils import epath
 from flax import nnx
 from mujoco import mjx
-from algorithms.ppo.utils.gae import general_advantage_estimator
 from algorithms.ppo.task.thor import ThorEnv, ThorAgent
 from algorithms.ppo.utils.canonical_space import new_cs
 from algorithms.ppo.src.agent import Agent
-from algorithms.ppo.utils.loss import ppo_loss
+from algorithms.ppo.rollout import rollout, new_buffer
 
 model_path = "/home/lucas/Documentos/MLProjects/monadic_ppo"
 
@@ -62,7 +60,7 @@ def agent_par(enviroment):
 
 @pytest.fixture(scope="session")
 def batch_and_mjx_data(enviroment):
-    num_envs = 2
+    num_envs = 5
 
     #cria um mjx_data inicial e reseta um dado ambiente
     initial_mjx_data = mjx.make_data(enviroment.mjx_model)
@@ -72,28 +70,13 @@ def batch_and_mjx_data(enviroment):
     )
     return num_envs, batched_mjx_data
 
-def test_loss_shape(agent_par, batch_and_mjx_data):
+def test_rollout(enviroment, agent_par, batch_and_mjx_data):
     agent, rngs = agent_par
     num_envs, batched_mjx_data = batch_and_mjx_data
+
+    rollout_steps = 25
+
+    dummy_target = jax.random.normal(rngs(), (num_envs, 3))
+    buffer = new_buffer(num_envs, rollout_steps, agent.policy().obs_size, agent.value().obs_size, agent.policy().action_size)
     
-    rollout_steps = 15
-
-    key = jax.random.PRNGKey(0)
-    rngs = nnx.Rngs(key)
-
-    vmap_agent_step = jax.vmap(agent.step, in_axes = (None, 0, 0, 0))
-   
-    advantages, returns = general_advantage_estimator(rewards, dones, values, gamma=0.01, lam=0.01)
-
-    policy_obs_size = agent.policy().obs_size
-    value_obs_size = agent.value().obs_size
-
-    policy_obs = jax.random.uniform(rngs(), (rollout_steps +1, policy_obs_size))
-    value_obs = jax.random.uniform(rngs(), (rollout_steps +1, value_obs_size))
-
-    action = agent.policy().sample(policy_obs, rngs)
-
-    x = ppo_loss(agent, policy_obs, value_obs, action, advantages, )
-
-    assert advantages.shape == (rollout_steps, num_envs)
-    assert returns.shape == (rollout_steps, num_envs)"""
+    buffer, mjx_data = rollout(agent, enviroment, rngs, batched_mjx_data, dummy_target, rollout_steps, buffer)
