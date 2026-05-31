@@ -4,7 +4,7 @@
 # Created Date: 24/05/2026 08:47:36
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 30/05/2026 10:30:30
+# Last Modified: 31/05/2026 09:57:44
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -175,7 +175,7 @@ class ThorEnv(struct.PyTreeNode):
 
         return ground_hit|self_hit
     
-    def sensor_data(self, mjx_data: mjx.Data, sensor_name: str) -> jax.Array:
+    def sensor_data(self, sensor_name: str, mjx_data: mjx.Data) -> jax.Array:
         adr, dim = self.sensor_map[sensor_name]
         return mjx_data.sensordata[adr : adr + dim]
     
@@ -220,7 +220,7 @@ class ThorAgent:
 
     @staticmethod
     def compose_obs(env: mjenv.MujocoEnv, mjx_data:mjx.Data)->Tuple[jax.Array, jax.Array]:
-        cs_tool_pos = transform_to_cs(env.world_space, env.sensor_data(mjx_data, "tool_position"))
+        cs_tool_pos = transform_to_cs(env.world_space, env.sensor_data("tool_position", mjx_data,))
         cs_qpos = transform_to_cs(env.joint_space, mjx_data.qpos)
         cs_qvel = transform_vel_to_cs(env.joint_space, mjx_data.qvel)
 
@@ -229,8 +229,11 @@ class ThorAgent:
         return policy_obs, value_obs
     
 
-    def reset(self, env: mjenv.MujocoEnv, mjx_data:mjx.Data, rngs: nnx.Rngs)->Tuple[mjx.Data, ResetData]:
-        mjx_data = mjenv.mujoco_reset(env, mjx_data, env.def_qpos)
+    def reset(self, env: mjenv.MujocoEnv,  rngs: nnx.Rngs, mjx_data:mjx.Data)->Tuple[ResetData, mjx.Data]:
+        jax.debug.print("mjx_data.qpos.shape: {}", mjx_data.qpos.shape)
+
+        
+        mjx_data = mjenv.mujoco_reset(env, env.def_qpos, mjx_data)
 
         # coleta observações para o novo mjx_data
         policy_obs, value_obs = ThorAgent.compose_obs(env, mjx_data)
@@ -242,17 +245,16 @@ class ThorAgent:
         logprob, entropy = self.policy().evaluate_actions(policy_obs, action)
         value = self.value()(value_obs)
 
-        return mjx_data, ResetData(action, logprob, value, entropy)
+        return ResetData(action, logprob, value, entropy), mjx_data
     
-    def step(self, env: mjenv.MujocoEnv, mjx_data:mjx.Data, action: jax.Array, target: jax.Array)->Tuple[mjx.Data, StepData]:
+    def step(self, env: mjenv.MujocoEnv,  action: jax.Array, target: jax.Array, mjx_data:mjx.Data,)->Tuple[StepData, mjx.Data]:
         #avança a física de acordo com a ação 
         delta = (2*action - 1) * self.max_step_rads
-        print(f"delta shape: {delta.shape}, ctrl shape: {mjx_data.ctrl.shape}")
-        
-        mjx_data = mjenv.mujoco_step(env, mjx_data, mjx_data.ctrl + delta)
+
+        mjx_data = mjenv.mujoco_step(env, mjx_data.ctrl + delta, mjx_data)
     
         #calcula o erro de posição
-        cs_tool_pos = transform_to_cs(env.world_space, env.sensor_data(mjx_data, "tool_position"))
+        cs_tool_pos = transform_to_cs(env.world_space, env.sensor_data("tool_position", mjx_data))
         error = cast(jax.Array, jnp.linalg.norm(target - cs_tool_pos, ord=2))
 
         # sucesso se o erro for menor que uma dada tolerância
@@ -265,4 +267,4 @@ class ThorAgent:
         done = failed | success
 
         reward = -error  + 100*success -100*failed
-        return mjx_data, StepData(reward, done, {})
+        return StepData(reward, done, {}), mjx_data

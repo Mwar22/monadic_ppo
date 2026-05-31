@@ -4,7 +4,7 @@
 # Created Date: 26/05/2026 06:04:50
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 30/05/2026 11:17:08
+# Last Modified: 31/05/2026 09:53:39
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -55,7 +55,7 @@ class MujocoEnv(Protocol):
     def def_qvel(self)->jax.Array:
         ...
 
-    def sensor_data(self, mjx_data: mjx.Data, sensor_name: str)->jax.Array:
+    def sensor_data(self, sensor_name: str, mjx_data: mjx.Data)->jax.Array:
         ...
 
     def failed(self, mjx_data: mjx.Data)->jax.Array:
@@ -65,8 +65,8 @@ class MujocoEnv(Protocol):
 ########################## Métodos aplicáveis a toda classe que segue MujocoEnv#####################################      
 def mujoco_step(
     env: MujocoEnv,
+    ctrl_action: jax.Array,
     mjx_data:mjx.Data,
-    ctrl_action: jax.Array
 )->mjx.Data:
     
     def single_step(data, _):
@@ -78,21 +78,11 @@ def mujoco_step(
 
 def mujoco_reset(
     env: MujocoEnv,
-    mjx_data: mjx.Data,
     def_qpos: jax.Array,
+    mjx_data: mjx.Data,
 )->mjx.Data:
-    
-    #adiciona uma dimensão de batch caso não tenha
-    qpos_ready = def_qpos.reshape(-1, def_qpos.shape[-1])
-
-    # qpos_ready.shape ou é (1, N) ou (batch_sz, N) test
-    # qpos.shape ou é (N, ) ou é (batch_sz, N)
-    num_repeats = mjx_data.qpos.shape[0] // qpos_ready.shape[0]
-    # faz um broadcast de env.def_qpos para o mesmo shape de mjx_data.qpos, para lidar com o caso de mjx_data em batch
-    broadcasted_qpos = jnp.broadcast_to(qpos_ready, mjx_data.qpos.shape)
-    print(f"qpos.shape:{def_qpos.shape}, mjx_data.qpos.shape: {mjx_data.qpos.shape}, broadcast_def_qpos.shape{broadcasted_qpos.shape}")
     new_mjx_data = mjx_data.replace(
-        qpos=broadcasted_qpos,
+        qpos=def_qpos,
         qvel=jnp.zeros_like(mjx_data.qvel),
         qacc=jnp.zeros_like(mjx_data.qacc)
     )

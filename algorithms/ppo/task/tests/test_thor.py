@@ -4,7 +4,7 @@
 # Created Date: 30/05/2026 03:33:57
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 30/05/2026 10:52:51
+# Last Modified: 31/05/2026 10:10:31
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -28,6 +28,7 @@ from algorithms.ppo.task.thor import ThorEnv, ThorAgent
 from algorithms.ppo.utils.canonical_space import new_cs
 from algorithms.ppo.src.enviroment import MujocoEnv
 from algorithms.ppo.src.agent import Agent
+from functools import partial
 
 model_path = "/home/lucas/Documentos/MLProjects/monadic_ppo"
 
@@ -75,13 +76,13 @@ def test_thor_sizes(agent_par):
 import jax.numpy as jnp
 from jax.tree_util import tree_map
 
-def are_data_equal(data1, data2, atol=1e-6):
+"""def are_data_equal(data1, data2, atol=1e-6):
     # tree_map applies the comparison to every leaf of the mjx.Data struct
     # (qpos, qvel, ctrl, etc.)
     comparisons = tree_map(lambda x, y: jnp.isclose(x, y, atol=atol), data1, data2)
     
     # Check if all comparisons across the entire tree are True
-    return jnp.all(jax.tree_util.tree_leaves(comparisons))
+    return jnp.all(jax.tree_util.tree_leaves(comparisons))"""
 
 def test_thor_step_and_reset(enviroment, agent_par):
     agent, rngs = agent_par
@@ -90,19 +91,24 @@ def test_thor_step_and_reset(enviroment, agent_par):
 
     #cria um mjx_data inicial e reseta um dado ambiente
     initial_mjx_data = mjx.make_data(enviroment.mjx_model)
+    
     batched_mjx_data = jax.tree_util.tree_map(
         lambda x: jax.numpy.repeat(x[None], num_envs, axis=0), initial_mjx_data
     )
 
-    reset_mjx_data, reset_data = agent.reset(enviroment, batched_mjx_data, rngs)
+    #cria mapas vetoriais para as funções step e reset, para funcinar com mjx_data em batch
+    vmap_agent_reset = jax.vmap(agent.reset, in_axes=(None, None, 0))
+    vmap_agent_step = jax.vmap(agent.step, in_axes = (None, 0, 0, 0))
 
-    #cria uma observação qualquer (batch de 1), e obtem a ação relativa
-    dummy_policy_obs = jax.random.normal(rngs(), (1, agent.policy().obs_size))
+    reset_data, reset_mjx_data = vmap_agent_reset(enviroment, rngs, batched_mjx_data)
+
+    #cria uma observação qualquer  e obtem a ação relativa
+    dummy_policy_obs = jax.random.normal(rngs(), (num_envs, agent.policy().obs_size))
     action = agent.policy().sample(dummy_policy_obs, rngs)
 
-    assert action.shape == (1, agent.policy().action_size)
+    assert action.shape == (num_envs, agent.policy().action_size)
 
-    dummy_target = jax.random.normal(rngs(), (3,))
-    step_mjx_data, step_data = agent.step(enviroment, reset_mjx_data, action, dummy_target)
+    #dummy_target = jax.random.normal(rngs(), (3,))
+    #step_mjx_data, step_data = agent.step(enviroment, reset_mjx_data, action, dummy_target)
 
    # assert are_data_equal(reset_mjx_data, reset_mjx_data), "mjx_data após tomada de ação deve ser diferente"

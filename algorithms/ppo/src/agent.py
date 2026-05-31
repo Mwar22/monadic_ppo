@@ -4,7 +4,7 @@
 # Created Date: 29/05/2026 01:06:35
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 30/05/2026 06:43:50
+# Last Modified: 31/05/2026 09:56:29
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -138,8 +138,8 @@ class Agent(Protocol):
         """
         ...
 
-    def reset(self, env: MujocoEnv, mjx_data:mjx.Data, rngs: nnx.Rngs)->Tuple[mjx.Data, ResetData]:
+    def reset(self, env: MujocoEnv,  rngs: nnx.Rngs, mjx_data:mjx.Data)->Tuple[ResetData, mjx.Data]:
         ...
 
-    def step(self, env: MujocoEnv, mjx_data:mjx.Data, action: jax.Array, target: jax.Array)->Tuple[mjx.Data, StepData]:
+    def step(self, env: MujocoEnv,  action: jax.Array, target: jax.Array, mjx_data:mjx.Data,)->Tuple[StepData, mjx.Data]:
         ...
