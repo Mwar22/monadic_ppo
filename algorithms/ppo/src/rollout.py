@@ -4,7 +4,7 @@
 # Created Date: 25/05/2026 11:54:02
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 03/06/2026 05:41:15
+# Last Modified: 03/06/2026 07:51:01
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -28,6 +28,7 @@ class RolloutBuffer(struct.PyTreeNode):
     policy_obs: jax.Array       # (rollout_steps +1, num_enviroments, *obs_shape)
     value_obs: jax.Array
     actions: jax.Array    # (rollout_steps +1, num_enviroments, *action_shape)
+    values: jax.Array    # (rollout_steps +1, num_enviroments,)
     rewards: jax.Array    # (rollout_steps +1, num_enviroments,)
     logprobs: jax.Array   # (rollout_steps +1, num_enviroments,)
     dones: jax.Array       #(rollout_steps +1, num_enviroments,)
@@ -64,6 +65,7 @@ def new_buffer(
         jnp.zeros((_rollout_steps, _num_enviroments, _value_obs_size), dtype=jnp.float32),
         jnp.zeros((_rollout_steps, _num_enviroments, _action_size), dtype=jnp.float32),
         jnp.zeros((_rollout_steps, _num_enviroments),  dtype=jnp.float32),
+        jnp.zeros((_rollout_steps, _num_enviroments),  dtype=jnp.float32),
         jnp.zeros((_rollout_steps, _num_enviroments), dtype=jnp.float32),
         jnp.zeros((_rollout_steps, _num_enviroments), dtype=jnp.bool),
     )
@@ -74,6 +76,7 @@ def add_on_buffer(
     policy_obs: jax.Array,
     value_obs: jax.Array,
     action: jax.Array,
+    value: jax.Array,
     reward: jax.Array,
     logprob: jax.Array,
     done: jax.Array,
@@ -98,6 +101,7 @@ def add_on_buffer(
         policy_obs = buffer.policy_obs.at[index].set(policy_obs),
         value_obs = buffer.value_obs.at[index].set(value_obs),
         actions = buffer.actions.at[index].set(action),
+        values = buffer.values.at[index].set(value),
         rewards = buffer.rewards.at[index].set(reward),
         logprobs = buffer.logprobs.at[index].set(logprob),
         dones = buffer.dones.at[index].set(done),
@@ -107,6 +111,7 @@ def add_on_buffer(
 
 
 
+@nnx.jit(static_argnames=['rollout_steps'])
 def rollout(
     agent: Agent,
     enviroment: MujocoEnv,
@@ -132,6 +137,7 @@ def rollout(
 
         #obtem a ação, e avalia logprob e entropia relativas
         actions = agent.policy.sample(policy_obs, rngs)
+        values = agent.value(value_obs)
 
         #logprob segundo a politica atual
         logprob, _ = agent.policy.evaluate_actions(policy_obs, actions)
@@ -140,7 +146,7 @@ def rollout(
         step_data, mjx_data = vmap_agent_step(enviroment, actions, target, mjx_data)
         
         # guarda no buffer
-        buffer = add_on_buffer(buffer, step, policy_obs, value_obs, actions, step_data.reward, logprob, step_data.done)
+        buffer = add_on_buffer(buffer, step, policy_obs, value_obs, actions, values, step_data.reward, logprob, step_data.done)
         
         #obtem a proxima observação
         policy_obs, value_obs = vmap_agent_compose_obs(enviroment, mjx_data)

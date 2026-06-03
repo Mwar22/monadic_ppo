@@ -4,7 +4,7 @@
 # Created Date: 30/05/2026 10:29:43
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 03/06/2026 06:18:04
+# Last Modified: 03/06/2026 07:16:24
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -20,7 +20,7 @@
 import pytest
 import jax
 from flax import nnx
-from ..src import general_advantage_estimator
+from src.gae import general_advantage_estimator
 
 rollout_steps = 10
 num_envs = 5

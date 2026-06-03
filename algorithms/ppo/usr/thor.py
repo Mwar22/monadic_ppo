@@ -4,7 +4,7 @@
 # Created Date: 24/05/2026 08:47:36
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 03/06/2026 06:25:43
+# Last Modified: 03/06/2026 07:18:44
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -33,11 +33,11 @@ from jax import numpy as jnp
 from etils import epath
 from flax import struct, nnx
 from typing import Any, Dict, Self, Union, List, Tuple, cast
-from ..src.canonical_space import CanonicalSpace, new_cs, transform_to_cs, transform_vel_to_cs
+from src.canonical_space import CanonicalSpace, new_cs, transform_to_cs, transform_vel_to_cs
+from src.agent import Policy, Value, Agent, ResetData, StepData
+from src.enviroment import MujocoEnv, mujoco_step, mujoco_reset
 from .actor import Actor
 from .critic import Critic
-from ..src.agent import Policy, Value, Agent, ResetData, StepData
-from ..src.enviroment import MujocoEnv, mujoco_step, mujoco_reset
 
 
 ########################################## para o pylance não reclamar #############################################
