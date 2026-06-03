@@ -4,7 +4,7 @@
 # Created Date: 31/05/2026 12:47:24
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 31/05/2026 02:36:35
+# Last Modified: 03/06/2026 06:22:19
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -23,10 +23,10 @@ import jax.numpy as jnp
 from etils import epath
 from flax import nnx
 from mujoco import mjx
-from algorithms.ppo.task.thor import ThorEnv, ThorAgent
-from algorithms.ppo.utils.canonical_space import new_cs
-from algorithms.ppo.src.agent import Agent
-from algorithms.ppo.rollout import rollout, new_buffer
+from ..usr.thor import ThorEnv, ThorAgent
+from ..src.canonical_space import new_cs
+from ..src.agent import Agent
+from ..src.rollout import *
 
 model_path = "/home/lucas/Documentos/MLProjects/monadic_ppo"
 

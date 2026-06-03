@@ -4,7 +4,7 @@
 # Created Date: 30/05/2026 09:59:47
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 30/05/2026 10:26:41
+# Last Modified: 03/06/2026 06:17:47
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -21,7 +21,7 @@ import pytest
 import jax
 import jax.numpy as jnp
 from flax import nnx
-from algorithms.ppo.task.critic import Critic
+from ..usr.critic import Critic
 
 obs_size = 10
 batch_size = 32

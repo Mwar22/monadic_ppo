@@ -4,7 +4,7 @@
 # Created Date: 25/05/2026 11:54:02
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 31/05/2026 02:37:31
+# Last Modified: 03/06/2026 05:41:15
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -20,10 +20,9 @@
 
 import jax
 import jax.numpy as jnp
-import algorithms.ppo.src.enviroment as mjenv
 from mujoco import mjx
 from flax import struct, nnx
-from algorithms.ppo.src.agent import Agent
+from .agent import Agent, MujocoEnv
 
 class RolloutBuffer(struct.PyTreeNode):
     policy_obs: jax.Array       # (rollout_steps +1, num_enviroments, *obs_shape)
@@ -110,7 +109,7 @@ def add_on_buffer(
 
 def rollout(
     agent: Agent,
-    enviroment: mjenv.MujocoEnv,
+    enviroment: MujocoEnv,
     rngs: nnx.Rngs,
     mjx_data: mjx.Data,
     target: jax.Array,

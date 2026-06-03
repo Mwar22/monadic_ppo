@@ -4,7 +4,7 @@
 # Created Date: 25/05/2026 07:23:03
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 31/05/2026 02:36:57
+# Last Modified: 03/06/2026 05:40:42
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -21,7 +21,7 @@
 
 import jax
 import jax.numpy as jnp
-from algorithms.ppo.src.agent import Agent
+from .agent import Agent
 
 def ppo_loss(
     agent: Agent,

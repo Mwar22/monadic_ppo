@@ -4,7 +4,7 @@
 # Created Date: 26/05/2026 06:04:50
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 31/05/2026 09:53:39
+# Last Modified: 03/06/2026 05:40:29
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -20,11 +20,9 @@
 
 import jax
 import jax.numpy as jnp
-from typing import Protocol, runtime_checkable, cast
+from typing import Protocol, runtime_checkable
 from mujoco import mjx
-from flax import struct
-from algorithms.ppo.utils.canonical_space import CanonicalSpace, transform_to_cs, transform_vel_to_cs
-from algorithms.ppo.utils.monads import State
+from .canonical_space import CanonicalSpace
 
 class EnvState(Protocol):
     def failed(self)->jax.Array:

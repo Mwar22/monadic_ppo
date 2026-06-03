@@ -4,7 +4,7 @@
 # Created Date: 29/05/2026 01:06:35
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 31/05/2026 03:07:43
+# Last Modified: 03/06/2026 05:40:14
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -22,7 +22,7 @@ import jax
 from mujoco import mjx
 from typing import Protocol, Tuple, Dict, Any, runtime_checkable
 from flax import nnx, struct
-from .enviroment import MujocoEnv, mujoco_step, mujoco_reset
+from .enviroment import MujocoEnv
 from abc import ABC, abstractmethod
 
 @runtime_checkable

@@ -4,7 +4,7 @@
 # Created Date: 24/05/2026 08:47:36
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 31/05/2026 03:09:18
+# Last Modified: 03/06/2026 06:25:43
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -28,17 +28,16 @@ Tarefa para o thor alcançar um alvo
 from __future__ import annotations
 import mujoco
 import jax
-import algorithms.ppo.src.enviroment as mjenv
-from mujoco import MjModel  # type: ignore
+from mujoco import mjx, MjModel  # type: ignore
 from jax import numpy as jnp
-from mujoco import mjx
 from etils import epath
 from flax import struct, nnx
 from typing import Any, Dict, Self, Union, List, Tuple, cast
-from algorithms.ppo.utils.canonical_space import CanonicalSpace, new_cs, transform_to_cs, transform_vel_to_cs
-from algorithms.ppo.task.actor import Actor
-from algorithms.ppo.task.critic import Critic
-from algorithms.ppo.src.agent import Policy, Value, Agent, ResetData, StepData
+from ..src.canonical_space import CanonicalSpace, new_cs, transform_to_cs, transform_vel_to_cs
+from .actor import Actor
+from .critic import Critic
+from ..src.agent import Policy, Value, Agent, ResetData, StepData
+from ..src.enviroment import MujocoEnv, mujoco_step, mujoco_reset
 
 
 ########################################## para o pylance não reclamar #############################################
@@ -199,7 +198,7 @@ class ThorAgent(Agent):
 
     def __init__(
         self,
-        env: mjenv.MujocoEnv,
+        env: MujocoEnv,
         rngs,
         max_step_rads = 0.05
         
@@ -222,7 +221,7 @@ class ThorAgent(Agent):
     
 
     @staticmethod
-    def compose_obs(env: mjenv.MujocoEnv, mjx_data:mjx.Data)->Tuple[jax.Array, jax.Array]:
+    def compose_obs(env: MujocoEnv, mjx_data:mjx.Data)->Tuple[jax.Array, jax.Array]:
         cs_tool_pos = transform_to_cs(env.world_space, env.sensor_data("tool_position", mjx_data,))
         cs_qpos = transform_to_cs(env.joint_space, mjx_data.qpos)
         cs_qvel = transform_vel_to_cs(env.joint_space, mjx_data.qvel)
@@ -232,9 +231,9 @@ class ThorAgent(Agent):
         return policy_obs, value_obs
     
 
-    def reset(self, env: mjenv.MujocoEnv,  rngs: nnx.Rngs, mjx_data:mjx.Data)->Tuple[ResetData, mjx.Data]:
+    def reset(self, env: MujocoEnv,  rngs: nnx.Rngs, mjx_data:mjx.Data)->Tuple[ResetData, mjx.Data]:
         
-        mjx_data = mjenv.mujoco_reset(env, env.def_qpos, mjx_data)
+        mjx_data = mujoco_reset(env, env.def_qpos, mjx_data)
 
         # coleta observações para o novo mjx_data
         policy_obs, value_obs = ThorAgent.compose_obs(env, mjx_data)
@@ -248,11 +247,11 @@ class ThorAgent(Agent):
 
         return ResetData(action, logprob, value, entropy), mjx_data
     
-    def step(self, env: mjenv.MujocoEnv,  action: jax.Array, target: jax.Array, mjx_data:mjx.Data,)->Tuple[StepData, mjx.Data]:
+    def step(self, env: MujocoEnv,  action: jax.Array, target: jax.Array, mjx_data:mjx.Data,)->Tuple[StepData, mjx.Data]:
         #avança a física de acordo com a ação 
         delta = (2*action - 1) * self.max_step_rads
 
-        mjx_data = mjenv.mujoco_step(env, mjx_data.ctrl + delta, mjx_data)
+        mjx_data = mujoco_step(env, mjx_data.ctrl + delta, mjx_data)
     
         #calcula o erro de posição
         cs_tool_pos = transform_to_cs(env.world_space, env.sensor_data("tool_position", mjx_data))

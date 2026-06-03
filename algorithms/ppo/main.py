@@ -4,7 +4,7 @@
 # Created Date: 26/05/2026 09:58:32
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 29/05/2026 01:41:13
+# Last Modified: 03/06/2026 05:42:26
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -61,10 +61,10 @@ from etils import epath
 from flax import nnx
 from mujoco import mjx
 from reach_target.actor import Actor
-from rollout import new_buffer, rollout_step
+from algorithms.ppo.src.rollout import new_buffer, rollout_step
 
 from algorithms.ppo.reach_target.thor import ThorEnv
-from utils.canonical_space import new_cs
+from algorithms.ppo.src.canonical_space import new_cs
 
 world_space = new_cs(jnp.array([-0.468, -0.468, 0]), jnp.array([0.468, 0.468, 0.664]))
 env =  ThorEnv.init(

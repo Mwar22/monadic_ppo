@@ -4,7 +4,7 @@
 # Created Date: 30/05/2026 09:59:47
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 31/05/2026 12:16:47
+# Last Modified: 03/06/2026 06:17:37
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -21,7 +21,7 @@ import pytest
 import jax
 import jax.numpy as jnp
 from flax import nnx
-from algorithms.ppo.task.actor import Actor 
+from ..usr.actor import Actor 
 
 obs_size = 10
 action_size = 2
