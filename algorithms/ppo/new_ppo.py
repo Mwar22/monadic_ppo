@@ -4,7 +4,7 @@
 # Created Date: 31/05/2026 01:29:51
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 03/06/2026 07:42:34
+# Last Modified: 04/06/2026 10:24:40
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -60,11 +60,144 @@ from src.rollout import new_buffer, rollout
 from src.gae import general_advantage_estimator
 
 
+@nnx.jit(static_argnums=(4, 5)) 
+def train_epochs(model, optimizer, buffer, rngs: nnx.Rngs, k_epochs: int, minibatch_size: int):
+     #calcula as vantagens e os retornos, como um tensor 2d (rollout_steps, num_envs)
+    advantages, returns = general_advantage_estimator(
+        buffer.rewards, buffer.dones, buffer.values, gamma=0.99, lam=0.95
+    )
+    
+    # exclui os valores de bootstrap com [:-1], e aplica um flatten, 
+    # onde batch_size = rollout_steps * num_envs. Então os tensores vão de (rollout_steps, num_envs, ...) -> (batch_size, ...)
+    policy_obs = buffer.policy_obs[:-1].reshape(-1, buffer.policy_obs.shape[-1])
+    value_obs = buffer.value_obs[:-1].reshape(-1, buffer.value_obs.shape[-1])
+    actions = buffer.actions[:-1].reshape(-1, buffer.actions.shape[-1])
+    old_logprobs = buffer.logprobs[:-1].reshape(-1)
+    advantages = advantages.reshape(-1)
+    returns = returns.reshape(-1)
+
+    batch_size = policy_obs.shape[0]
+    num_minibatches = batch_size // minibatch_size
+    
+    # separa o modelo, optimizer e rngs em estrutura e estado (para funcionar no scan)
+    graphdef, state = nnx.split((model, optimizer, rngs))
+    
+    def epoch_step(epoch_state, _):
+        #recostroi o agente, o optimizer e o rngs para o estado da epoca
+        ep_agent, ep_opt, ep_rngs = nnx.merge(graphdef, epoch_state)
+        
+        # Calling ep_rngs() generates a new key AND advances its internal state automatically
+        permutation = jax.random.permutation(ep_rngs(), batch_size)
+        
+        #avançamos o estado novamente, pois utilizamos  rngs
+        _, pre_mb_state = nnx.split((ep_agent, ep_opt, ep_rngs))
+        
+        def minibatch_step(mb_state, mb_idx):
+            mb_agent, mb_opt, mb_rngs = nnx.merge(graphdef, mb_state)
+            
+            # THE FIX: Use dynamic_slice_in_dim instead of standard python slicing
+            start_index = mb_idx * minibatch_size
+            idx = jax.lax.dynamic_slice_in_dim(
+                permutation, 
+                start_index, 
+                minibatch_size  # The size is explicitly static!
+            )
+            
+            def loss_fn(agent):
+                return ppo_loss(
+                    agent, 
+                    policy_obs[idx], 
+                    value_obs[idx], 
+                    actions[idx], 
+                    advantages[idx], 
+                    returns[idx], 
+                    old_logprobs[idx]
+                )
+
+            (loss, aux_metrics), grads = nnx.value_and_grad(loss_fn, has_aux=True)(mb_agent)
+            mb_opt.update(mb_agent, grads)
+            
+            # Pack it all back up
+            _, updated_mb_state = nnx.split((mb_agent, mb_opt, mb_rngs))
+            return updated_mb_state, (loss, aux_metrics)
+
+        #executa os minibatches
+        post_mb_state, (mb_losses, mb_metrics) = jax.lax.scan(
+            minibatch_step, 
+            pre_mb_state, 
+            jnp.arange(num_minibatches)
+        )
+        
+        epoch_loss = jnp.mean(mb_losses)
+        epoch_metrics = tuple(jnp.mean(m) for m in mb_metrics)
+        
+        return post_mb_state, (epoch_loss, epoch_metrics)
+
+    # executa as epocas
+    final_state, (losses, metrics) = jax.lax.scan(
+        epoch_step, 
+        state, 
+        None,             # No external arrays needed!
+        length=k_epochs   # JAX knows exactly how many times to loop
+    )
+    
+    # faz o udate seguro dos pesos, otimizer e estado do rngs de volta
+    nnx.update((model, optimizer, rngs), final_state)
+    return losses, metrics
+
+
+@nnx.jit(static_argnums=(6, 7, 8, 9))
+def run_multiple_updates(
+    model, optimizer, rngs, mjx_data, buffer, dummy_target, 
+    rollout_steps: int, k_epochs: int, minibatch_size: int, num_updates: int
+):
+    # separa o grafo dos estados (puramente funcional)
+    graphdef, state = nnx.split((model, optimizer, rngs))
+
+    def update_step(carry, _):
+        state_carry, mjx_carry, buffer_carry = carry
+        
+        #reconstroi os modelos para este passo especifico 
+        step_model, step_opt, step_rngs = nnx.merge(graphdef, state_carry)
+        
+        next_buffer, next_mjx_data = rollout(
+            step_model, env, step_rngs, mjx_carry, dummy_target, rollout_steps, buffer_carry
+        )
+        
+        # otimiza
+        losses, metrics = train_epochs(
+            step_model, step_opt, next_buffer, step_rngs, k_epochs, minibatch_size
+        )
+        
+        # separa o modelo novamente para a forma funcional com o estado
+        _, next_state = nnx.split((step_model, step_opt, step_rngs))
+        
+        return (next_state, next_mjx_data, next_buffer), (losses, metrics)
+
+   
+    final_carry, (all_losses, all_metrics) = jax.lax.scan(
+        update_step, 
+        (state, mjx_data, buffer), 
+        None, 
+        length=num_updates
+    )
+
+    final_state, final_mjx_data, final_buffer = final_carry
+    
+    #aplica o estado final nas instancias que estão fora do loop
+    nnx.update((model, optimizer, rngs), final_state)
+    
+    return final_mjx_data, final_buffer, all_losses, all_metrics
+
+
+######################################################################################################################
+
 model_path = "/home/lucas/Documentos/MLProjects/monadic_ppo"
-K_epochs = 5
-num_envs = 5
-rollout_steps = 25
-total_updates = 100
+EPOCHS = 10
+NUM_ENVS =4096 
+ROLLOUT_STEPS = 256
+UPDATES = 20
+MINIBATCH_SIZE = 4096
 
 
 env = ThorEnv.init(
@@ -77,85 +210,62 @@ env = ThorEnv.init(
     ctrl_dt=1.0/50,
     sim_dt= 1.0/1000
 )
+
 key = jax.random.PRNGKey(0)
 rngs = nnx.Rngs(key)
 model = ThorAgent(env, rngs)
-
-
-
 optimizer = nnx.Optimizer(model, optax.adam(1e-3), wrt=nnx.Param)
-
 
 #cria um mjx_data inicial e reseta um dado ambiente
 initial_mjx_data = mjx.make_data(env.mjx_model)
 
 batched_mjx_data = jax.tree_util.tree_map(
-    lambda x: jax.numpy.repeat(x[None], num_envs, axis=0), initial_mjx_data
+    lambda x: jax.numpy.repeat(x[None], NUM_ENVS, axis=0), initial_mjx_data
 )
 
-
-dummy_target = jax.random.normal(rngs(), (num_envs, 3))
-buffer = new_buffer(num_envs, rollout_steps, model.policy.obs_size, model.value.obs_size, model.policy.action_size)
-
-@nnx.jit(static_argnames=['k_epochs'])
-def train_epochs(model, optimizer, buffer, k_epochs: int):
-
-    advantages, returns = general_advantage_estimator(buffer.rewards, buffer.dones, buffer.values, gamma=0.01, lam=0.01)
-    
-    # This is the function that runs for a single epoch
-    def epoch_step(carry, _):
-        agent, opt = carry
-        
-        # Use your exact ppo_loss function here
-        def loss_fn(agent):
-            return ppo_loss(
-                agent, 
-                buffer.policy_obs, 
-                buffer.value_obs, 
-                buffer.actions, 
-                advantages, 
-                returns, 
-                buffer.logprobs # Ensure this is from the OLD policy
-            )
-
-        # Calculate gradients and metrics
-        (loss, aux_metrics), grads = nnx.value_and_grad(loss_fn, has_aux=True)(agent)
-        
-        # Apply updates to the agent
-        opt.update(agent, grads)
-        
-        # Return the updated state, and save the metrics for this epoch
-        return (agent, opt), (loss, aux_metrics)
-
-    # jax.lax.scan can act like a 'for' loop if you pass None for the array
-    # and specify the length (k_epochs)
-    (model, optimizer), (losses, metrics) = jax.lax.scan(
-        epoch_step, 
-        (model, optimizer), 
-        None, 
-        length=k_epochs
-    )
-    
-    # 'losses' and 'metrics' will now be arrays containing the values for every epoch
-    return losses, metrics
-
-for update in range(total_updates):
-    # 1. ROLLOUT: Collect experience with the CURRENT policy ONCE
-    # This creates a fresh buffer and fills it.
-    buffer = new_buffer(num_envs, rollout_steps, model.policy.obs_size, model.value.obs_size, model.policy.action_size)
-    buffer, mjx_data = rollout(model, env, rngs, batched_mjx_data, dummy_target, rollout_steps, buffer)
-    
-    # Note: If your rollout doesn't calculate advantages/returns, 
-    # you must calculate them right here before passing to train_epochs.
+dummy_target = jax.random.normal(rngs(), (NUM_ENVS, 3))
+buffer = new_buffer(NUM_ENVS, ROLLOUT_STEPS, model.policy.obs_size, model.value.obs_size, model.policy.action_size)
 
 
-    # 2. OPTIMIZE: Train for K epochs on that SAME buffer
-    # The JIT function handles the looping internally via scan
-    losses, metrics = train_epochs(model, optimizer, buffer, k_epochs=K_epochs)
-    
-    # 3. LOGGING: Take the mean of the metrics across the K epochs for logging
-    mean_loss = jnp.mean(losses)
-    entropy, p_loss, v_loss, kl = [jnp.mean(m) for m in metrics]
-    
-    if update % 10 == 0:
-        print(f"Update {update} | Loss: {mean_loss:.4f} | KL: {kl:.4f}")
+#treino
+mjx_data, buffer, losses, metrics = run_multiple_updates(
+    model, optimizer, rngs, batched_mjx_data, buffer, dummy_target, 
+    ROLLOUT_STEPS, EPOCHS, MINIBATCH_SIZE, UPDATES
+)
+
+entropy_loss, policy_loss, value_loss, kl_div = metrics
+
+print(f"losses shape: {losses.shape}")
+print(f"entropy  loss shape: {entropy_loss.shape}")
+print(f"policy loss shape: {policy_loss.shape}")
+print(f"value loss shape: {value_loss.shape}")
+print(f"kl_div shape: {kl_div.shape}")
+
+#(updates, epochs)
+loss_across_updates = jnp.mean(losses, axis=0)
+entropy_across_updates = jnp.mean(losses, axis=0)
+kl_div_across_updates = jnp.mean(losses, axis=0)
+
+import matplotlib.pyplot as plt
+
+
+fig, axs = plt.subplots(2, 2, figsize=(10, 8), tight_layout=True)
+axs[0][0].plot(loss_across_updates)
+axs[0][0].set_title("Training Loss")
+axs[0][0].set_xlabel("Epochs")
+axs[0][0].set_ylabel("Loss")
+axs[0][0].grid(True)
+
+axs[0][1].plot(entropy_across_updates)
+axs[0][1].set_title("Entropy")
+axs[0][1].set_xlabel("Epochs")
+axs[0][1].grid(True)
+
+
+axs[1][0].plot(kl_div)
+axs[1][0].set_title("KL Divergence")
+axs[1][0].set_xlabel("Epoch")
+axs[1][0].grid(True)
+
+plt.savefig(f"training_plots.png")
+print("\nTraining plots saved to training_plots.png")

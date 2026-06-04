@@ -4,7 +4,7 @@
 # Created Date: 25/05/2026 09:38:11
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 30/05/2026 06:45:19
+# Last Modified: 03/06/2026 02:25:14
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -59,8 +59,16 @@ class Actor(nnx.Module):
         raw_alpha = self.alpha_layer(x3)
         raw_beta = self.beta_layer(x3)
         
-        alpha = jnp.clip(jax.nn.softplus(raw_alpha) + self.ab_min, self.ab_max)
-        beta  = jnp.clip(jax.nn.softplus(raw_beta) + self.ab_min, self.ab_max)
+        alpha = jnp.clip(
+            jax.nn.softplus(raw_alpha) + self.ab_min, 
+            a_min=self.ab_min, 
+            a_max=self.ab_max
+        )
+        beta = jnp.clip(
+            jax.nn.softplus(raw_beta) + self.ab_min, 
+            a_min=self.ab_min, 
+            a_max=self.ab_max
+        )
         return alpha, beta
     
     @property

@@ -4,7 +4,7 @@
 # Created Date: 25/05/2026 07:23:03
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 03/06/2026 05:40:42
+# Last Modified: 03/06/2026 03:05:31
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -32,8 +32,8 @@ def ppo_loss(
     returns,  
     old_log_probs,
     c1=0.5,
-    c2=0.1,
-    eps=1e-4,
+    c2=0.001,
+    eps=0.2,
 ):
     
     advantages = jax.lax.stop_gradient(advantages)
@@ -50,7 +50,7 @@ def ppo_loss(
     logprobs, entropy = agent.policy.evaluate_actions(policy_obs, actions)
 
     # value segundo parametros atuais
-    values = agent.value(policy_obs).squeeze(-1)
+    values = agent.value(value_obs)
 
     # clipa log_ratio (jnp.exp(10) é ~22000 (bem grande) e  jnp.exp(-10) é ~0.00004, sendo mais que suficiente)
     safe_logratio = jnp.clip(logprobs - old_log_probs, -10.0, 10.0)
