@@ -4,7 +4,7 @@
 # Created Date: 24/05/2026 08:47:36
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 03/06/2026 07:18:44
+# Last Modified: 04/06/2026 11:01:01
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -267,4 +267,4 @@ class ThorAgent(Agent):
         done = failed | success
 
         reward = -error  + 100*success -100*failed
-        return StepData(reward, done, {}), mjx_data
+        return StepData(reward, done, {"error": error}), mjx_data

@@ -4,7 +4,7 @@
 # Created Date: 25/05/2026 11:54:02
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 03/06/2026 07:51:01
+# Last Modified: 04/06/2026 11:05:37
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -150,8 +150,8 @@ def rollout(
         
         #obtem a proxima observação
         policy_obs, value_obs = vmap_agent_compose_obs(enviroment, mjx_data)
-        return (policy_obs, value_obs, mjx_data, buffer, rngs), None
+        return (policy_obs, value_obs, mjx_data, buffer, rngs), step_data
     
-    (policy_obs, value_obs, mjx_data, buffer, rngs), _ = jax.lax.scan(rollout_step, (policy_obs, value_obs, mjx_data, buffer, rngs), jnp.arange(rollout_steps+1))
+    (policy_obs, value_obs, mjx_data, buffer, rngs), data = jax.lax.scan(rollout_step, (policy_obs, value_obs, mjx_data, buffer, rngs), jnp.arange(rollout_steps+1))
 
-    return buffer, mjx_data
+    return buffer, data, mjx_data
