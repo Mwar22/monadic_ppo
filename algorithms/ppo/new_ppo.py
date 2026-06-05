@@ -4,7 +4,7 @@
 # Created Date: 31/05/2026 01:29:51
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 04/06/2026 10:24:40
+# Last Modified: 05/06/2026 05:56:59
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -146,6 +146,13 @@ def train_epochs(model, optimizer, buffer, rngs: nnx.Rngs, k_epochs: int, miniba
     return losses, metrics
 
 
+def exp_mean(x: jax.Array, alpha=0.9):
+    """ Gera uma média ponderada considerando os valores finais em especial"""
+    N =x.shape[0]
+    gain = (1-alpha)/(1-alpha**N)
+    weights = alpha**jnp.arange(N)[::-1]    #utiliza uma sequencia inversa
+    return gain*jnp.inner(weights, x)
+
 @nnx.jit(static_argnums=(6, 7, 8, 9))
 def run_multiple_updates(
     model, optimizer, rngs, mjx_data, buffer, dummy_target, 
@@ -160,7 +167,7 @@ def run_multiple_updates(
         #reconstroi os modelos para este passo especifico 
         step_model, step_opt, step_rngs = nnx.merge(graphdef, state_carry)
         
-        next_buffer, next_mjx_data = rollout(
+        next_buffer, steps_data,  next_mjx_data = rollout(
             step_model, env, step_rngs, mjx_carry, dummy_target, rollout_steps, buffer_carry
         )
         
@@ -168,6 +175,19 @@ def run_multiple_updates(
         losses, metrics = train_epochs(
             step_model, step_opt, next_buffer, step_rngs, k_epochs, minibatch_size
         )
+        
+        #erro esperado entre os ambientes
+        expected_error = jnp.mean(steps_data.info["error"], axis=1) #erro médio entre ambientes
+        accumulated_error = exp_mean(expected_error)
+
+        #cada rollout só termina ou em sucesso ou falha. Neste caso, contamos quantas falhas e quantos sucessos tivemos
+        success_count = jnp.sum(steps_data.info["success"], axis=0)
+        failure_count = jnp.sum(steps_data.info["failure"], axis=0)
+        success_rate = success_count/(success_count+failure_count + 1e-6)
+        success_rate = jnp.mean(success_rate)
+        
+        #adiciona às metricas os dados dos passos (como o erro: shape = (rollout_steps+1, num_envs))
+        metrics = (*metrics, accumulated_error, success_rate)
         
         # separa o modelo novamente para a forma funcional com o estado
         _, next_state = nnx.split((step_model, step_opt, step_rngs))
@@ -193,10 +213,10 @@ def run_multiple_updates(
 ######################################################################################################################
 
 model_path = "/home/lucas/Documentos/MLProjects/monadic_ppo"
-EPOCHS = 10
-NUM_ENVS =4096 
+EPOCHS = 150
+NUM_ENVS =8192
 ROLLOUT_STEPS = 256
-UPDATES = 20
+UPDATES = 50
 MINIBATCH_SIZE = 4096
 
 
@@ -214,7 +234,7 @@ env = ThorEnv.init(
 key = jax.random.PRNGKey(0)
 rngs = nnx.Rngs(key)
 model = ThorAgent(env, rngs)
-optimizer = nnx.Optimizer(model, optax.adam(1e-3), wrt=nnx.Param)
+optimizer = nnx.Optimizer(model, optax.adam(1e-4), wrt=nnx.Param)
 
 #cria um mjx_data inicial e reseta um dado ambiente
 initial_mjx_data = mjx.make_data(env.mjx_model)
@@ -223,7 +243,7 @@ batched_mjx_data = jax.tree_util.tree_map(
     lambda x: jax.numpy.repeat(x[None], NUM_ENVS, axis=0), initial_mjx_data
 )
 
-dummy_target = jax.random.normal(rngs(), (NUM_ENVS, 3))
+dummy_target = jax.random.uniform(rngs(), (NUM_ENVS, 3), minval=-1, maxval=1)
 buffer = new_buffer(NUM_ENVS, ROLLOUT_STEPS, model.policy.obs_size, model.value.obs_size, model.policy.action_size)
 
 
@@ -233,39 +253,53 @@ mjx_data, buffer, losses, metrics = run_multiple_updates(
     ROLLOUT_STEPS, EPOCHS, MINIBATCH_SIZE, UPDATES
 )
 
-entropy_loss, policy_loss, value_loss, kl_div = metrics
+entropy_loss, policy_loss, value_loss, kl_div, error, success_rate = metrics
 
 print(f"losses shape: {losses.shape}")
 print(f"entropy  loss shape: {entropy_loss.shape}")
 print(f"policy loss shape: {policy_loss.shape}")
 print(f"value loss shape: {value_loss.shape}")
 print(f"kl_div shape: {kl_div.shape}")
+print(f"error shape: {error.shape}")
+print(f"success rate shape:{success_rate.shape}")
 
 #(updates, epochs)
-loss_across_updates = jnp.mean(losses, axis=0)
-entropy_across_updates = jnp.mean(losses, axis=0)
-kl_div_across_updates = jnp.mean(losses, axis=0)
+loss = jnp.mean(losses, axis=1)
+entropy = jnp.mean(entropy_loss, axis=1)
+kl_div = jnp.mean(kl_div, axis=1)
+
 
 import matplotlib.pyplot as plt
 
 
-fig, axs = plt.subplots(2, 2, figsize=(10, 8), tight_layout=True)
-axs[0][0].plot(loss_across_updates)
+fig, axs = plt.subplots(3, 2, figsize=(10, 8), tight_layout=True)
+axs[0][0].plot(loss)
 axs[0][0].set_title("Training Loss")
-axs[0][0].set_xlabel("Epochs")
+axs[0][0].set_xlabel("Updates")
 axs[0][0].set_ylabel("Loss")
 axs[0][0].grid(True)
 
-axs[0][1].plot(entropy_across_updates)
+axs[0][1].plot(entropy)
 axs[0][1].set_title("Entropy")
-axs[0][1].set_xlabel("Epochs")
+axs[0][1].set_xlabel("Updates")
 axs[0][1].grid(True)
 
 
 axs[1][0].plot(kl_div)
 axs[1][0].set_title("KL Divergence")
-axs[1][0].set_xlabel("Epoch")
+axs[1][0].set_xlabel("Updates")
 axs[1][0].grid(True)
+
+axs[1][1].plot(error)
+axs[1][1].set_title("exp mean rollout error")
+axs[1][1].set_xlabel("Updates")
+axs[1][1].grid(True)
+
+axs[2][0].plot(success_rate)
+axs[2][0].set_title("Success rate")
+axs[2][0].set_xlabel("Updates")
+axs[2][0].grid(True)
+
 
 plt.savefig(f"training_plots.png")
 print("\nTraining plots saved to training_plots.png")

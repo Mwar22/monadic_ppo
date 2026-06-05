@@ -4,7 +4,7 @@
 # Created Date: 24/05/2026 08:47:36
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 04/06/2026 11:01:01
+# Last Modified: 05/06/2026 03:48:54
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -258,7 +258,7 @@ class ThorAgent(Agent):
         error = cast(jax.Array, jnp.linalg.norm(target - cs_tool_pos, ord=2))
 
         # sucesso se o erro for menor que uma dada tolerância
-        success = error < 1e-2
+        success = error <= 0.01
 
         #falha se auto-colidiu ou colidiu com o solo
         failed = env.failed(mjx_data)
@@ -266,5 +266,5 @@ class ThorAgent(Agent):
         #a coleta terminou se o robô atingiu o alvo ou se auto-colidiu ou colidiu com o solo
         done = failed | success
 
-        reward = -error  + 100*success -100*failed
-        return StepData(reward, done, {"error": error}), mjx_data
+        reward = -error  + 200*success -100*failed
+        return StepData(reward, done, {"error": error, "success": success, "failure": failed}), mjx_data
