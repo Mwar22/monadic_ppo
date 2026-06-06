@@ -4,7 +4,7 @@
 # Created Date: 25/05/2026 11:54:02
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 04/06/2026 11:05:37
+# Last Modified: 06/06/2026 08:32:27
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -119,11 +119,12 @@ def rollout(
     mjx_data: mjx.Data,
     target: jax.Array,
     rollout_steps: int,
+    progress:float,
     buffer: RolloutBuffer,
 ):
     #cria vmaps para para funcionar com dados em batch
     vmap_agent_reset = jax.vmap(agent.reset, in_axes=(None, None, 0))
-    vmap_agent_step = jax.vmap(agent.step, in_axes = (None, 0, 0, 0))
+    vmap_agent_step = jax.vmap(agent.step, in_axes = (None, 0, 0, None, 0))
     vmap_agent_compose_obs = jax.vmap(agent.compose_obs, in_axes=(None, 0))
 
     #reseta o agente e coleta as primeiras observações do ambiente
@@ -143,7 +144,7 @@ def rollout(
         logprob, _ = agent.policy.evaluate_actions(policy_obs, actions)
         
         #avança o agente
-        step_data, mjx_data = vmap_agent_step(enviroment, actions, target, mjx_data)
+        step_data, mjx_data = vmap_agent_step(enviroment, actions, target, progress, mjx_data)
         
         # guarda no buffer
         buffer = add_on_buffer(buffer, step, policy_obs, value_obs, actions, values, step_data.reward, logprob, step_data.done)
@@ -152,6 +153,10 @@ def rollout(
         policy_obs, value_obs = vmap_agent_compose_obs(enviroment, mjx_data)
         return (policy_obs, value_obs, mjx_data, buffer, rngs), step_data
     
-    (policy_obs, value_obs, mjx_data, buffer, rngs), data = jax.lax.scan(rollout_step, (policy_obs, value_obs, mjx_data, buffer, rngs), jnp.arange(rollout_steps+1))
+    (policy_obs, value_obs, mjx_data, buffer, rngs), data = jax.lax.scan(
+        rollout_step,
+        (policy_obs, value_obs, mjx_data, buffer, rngs),
+        jnp.arange(rollout_steps+1)
+    )
 
     return buffer, data, mjx_data

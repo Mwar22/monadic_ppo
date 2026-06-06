@@ -4,7 +4,7 @@
 # Created Date: 24/05/2026 08:47:36
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 05/06/2026 03:48:54
+# Last Modified: 06/06/2026 08:20:08
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -247,7 +247,7 @@ class ThorAgent(Agent):
 
         return ResetData(action, logprob, value, entropy), mjx_data
     
-    def step(self, env: MujocoEnv,  action: jax.Array, target: jax.Array, mjx_data:mjx.Data,)->Tuple[StepData, mjx.Data]:
+    def step(self, env: MujocoEnv,  action: jax.Array, target: jax.Array, progress: float, mjx_data:mjx.Data,)->Tuple[StepData, mjx.Data]:
         #avança a física de acordo com a ação 
         delta = (2*action - 1) * self.max_step_rads
 
@@ -258,7 +258,8 @@ class ThorAgent(Agent):
         error = cast(jax.Array, jnp.linalg.norm(target - cs_tool_pos, ord=2))
 
         # sucesso se o erro for menor que uma dada tolerância
-        success = error <= 0.01
+        tolerance = jnp.maximum(0.01, 0.4 * (1.0 - progress))
+        success = error <= tolerance
 
         #falha se auto-colidiu ou colidiu com o solo
         failed = env.failed(mjx_data)
@@ -266,5 +267,9 @@ class ThorAgent(Agent):
         #a coleta terminou se o robô atingiu o alvo ou se auto-colidiu ou colidiu com o solo
         done = failed | success
 
-        reward = -error  + 200*success -100*failed
+        #faz a recompensa em relação ao erro ficar entre [0, 1]
+        alpha = 2.0 
+        dense_reward = jnp.exp(-alpha * (error ** 2))
+
+        reward = dense_reward + 20*success -5*failed
         return StepData(reward, done, {"error": error, "success": success, "failure": failed}), mjx_data

@@ -4,7 +4,7 @@
 # Created Date: 29/05/2026 01:06:35
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 03/06/2026 05:40:14
+# Last Modified: 06/06/2026 08:16:31
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -149,5 +149,5 @@ class Agent(nnx.Module, ABC):
         ...
 
     @abstractmethod
-    def step(self, env: MujocoEnv,  action: jax.Array, target: jax.Array, mjx_data:mjx.Data,)->Tuple[StepData, mjx.Data]:
+    def step(self, env: MujocoEnv,  action: jax.Array, target: jax.Array, progress: float,  mjx_data:mjx.Data,)->Tuple[StepData, mjx.Data]:
         ...

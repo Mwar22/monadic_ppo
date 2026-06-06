@@ -4,7 +4,7 @@
 # Created Date: 31/05/2026 12:47:24
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 04/06/2026 11:08:08
+# Last Modified: 06/06/2026 08:33:02
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -79,5 +79,5 @@ def test_rollout(enviroment, agent_par, batch_and_mjx_data):
     dummy_target = jax.random.normal(rngs(), (num_envs, 3))
     buffer = new_buffer(num_envs, rollout_steps, agent.policy.obs_size, agent.value.obs_size, agent.policy.action_size)
     
-    buffer, data, mjx_data = rollout(agent, enviroment, rngs, batched_mjx_data, dummy_target, rollout_steps, buffer)
+    buffer, data, mjx_data = rollout(agent, enviroment, rngs, batched_mjx_data, dummy_target, rollout_steps, 0.0, buffer)
     assert data.info["error"].shape == (rollout_steps+1, num_envs)

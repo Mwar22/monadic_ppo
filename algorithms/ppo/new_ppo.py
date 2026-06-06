@@ -4,7 +4,7 @@
 # Created Date: 31/05/2026 01:29:51
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 05/06/2026 05:56:59
+# Last Modified: 06/06/2026 08:37:00
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -161,14 +161,15 @@ def run_multiple_updates(
     # separa o grafo dos estados (puramente funcional)
     graphdef, state = nnx.split((model, optimizer, rngs))
 
-    def update_step(carry, _):
+    def update_step(carry, idx):
         state_carry, mjx_carry, buffer_carry = carry
         
         #reconstroi os modelos para este passo especifico 
         step_model, step_opt, step_rngs = nnx.merge(graphdef, state_carry)
         
+        progress = idx/(num_updates-1)
         next_buffer, steps_data,  next_mjx_data = rollout(
-            step_model, env, step_rngs, mjx_carry, dummy_target, rollout_steps, buffer_carry
+            step_model, env, step_rngs, mjx_carry, dummy_target, rollout_steps, progress, buffer_carry
         )
         
         # otimiza
@@ -198,8 +199,7 @@ def run_multiple_updates(
     final_carry, (all_losses, all_metrics) = jax.lax.scan(
         update_step, 
         (state, mjx_data, buffer), 
-        None, 
-        length=num_updates
+        jnp.arange(num_updates)
     )
 
     final_state, final_mjx_data, final_buffer = final_carry
