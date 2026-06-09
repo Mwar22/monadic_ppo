@@ -4,7 +4,7 @@
 # Created Date: 30/05/2026 10:29:43
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 03/06/2026 07:16:24
+# Last Modified: 07/06/2026 06:09:23
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -22,21 +22,21 @@ import jax
 from flax import nnx
 from src.gae import general_advantage_estimator
 
-rollout_steps = 10
+buffer_length = 10
 num_envs = 5
 
 def test_gae_shape():
     key = jax.random.PRNGKey(0)
     rngs = nnx.Rngs(key)
 
-    rewards = jax.random.normal(rngs(), (rollout_steps + 1, num_envs))
-    dones = jax.random.bernoulli(rngs(), p=0.1, shape=(rollout_steps + 1, num_envs)).astype(int)
-    values = jax.random.normal(rngs(), (rollout_steps+1, num_envs))
+    rewards = jax.random.normal(rngs(), (buffer_length + 1, num_envs))
+    dones = jax.random.bernoulli(rngs(), p=0.1, shape=(buffer_length + 1, num_envs)).astype(int)
+    values = jax.random.normal(rngs(), (buffer_length+1, num_envs))
    
     advantages, returns = general_advantage_estimator(rewards, dones, values, gamma=0.01, lam=0.01)
 
     print(f"advantages: {advantages}")
     print(f"returns: {returns}")
 
-    assert advantages.shape == (rollout_steps, num_envs)
-    assert returns.shape == (rollout_steps, num_envs)
+    assert advantages.shape == (buffer_length, num_envs)
+    assert returns.shape == (buffer_length, num_envs)

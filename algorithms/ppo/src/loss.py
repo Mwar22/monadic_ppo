@@ -5,10 +5,10 @@
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
 # Last Modified: 03/06/2026 03:05:31
-# Modified By: Lucas de Jesus 
+# Modified By: Lucas de Jesus
 # -----
 # Copyright (c) 2026
-# 
+#
 # This file is subject to the terms and conditions defined in
 # the 'LICENSE.txt' file found in the root of this source tree.
 # Please read LICENSE.txt for full copyright and licensing details.
@@ -23,19 +23,20 @@ import jax
 import jax.numpy as jnp
 from .agent import Agent
 
+
 def ppo_loss(
     agent: Agent,
     policy_obs,
     value_obs,
-    actions,  
-    advantages,  
-    returns,  
+    actions,
+    advantages,
+    returns,
     old_log_probs,
     c1=0.5,
-    c2=0.001,
+    c2=0.05,
     eps=0.2,
 ):
-    
+
     advantages = jax.lax.stop_gradient(advantages)
     returns = jax.lax.stop_gradient(returns)
     policy_obs = jax.lax.stop_gradient(policy_obs)
@@ -43,7 +44,7 @@ def ppo_loss(
     actions = jax.lax.stop_gradient(actions)
     old_log_probs = jax.lax.stop_gradient(old_log_probs)
 
-    #normalizamos as vantagens
+    # normalizamos as vantagens
     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
     # logprob, entropia segundo a politica atual
@@ -65,10 +66,11 @@ def ppo_loss(
     # perda para a política
     unclipped = ratio * advantages
     clipped = jnp.clip(ratio, 1 - eps, 1 + eps) * advantages
-    policy_loss = -jnp.mean(jnp.minimum(unclipped, clipped)) 
+    policy_loss = -jnp.mean(jnp.minimum(unclipped, clipped))
 
     # perdas pela função de valor
-    value_loss = jnp.mean((returns -values) ** 2)
+    value_loss = jnp.mean((returns - values) ** 2)
 
-    total_loss = policy_loss + c1*value_loss - c2*entropy_loss
+    total_loss = policy_loss + c1 * value_loss - c2 * entropy_loss
     return total_loss, (entropy_loss, policy_loss, value_loss, kl_div)
+
