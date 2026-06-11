@@ -200,11 +200,11 @@ def run_multiple_updates(
         )
 
         # erro esperado entre os ambientes
+        # erro.shape (buffer_length+1, num_envs)
         expected_error = jnp.mean(
             steps_data.info["error"], axis=1
         )  # erro médio entre ambientes
 
-        last_expected_error = expected_error[-1]
         accumulated_error = exp_mean(expected_error)
 
         # cada rollout só termina ou em sucesso ou falha. Neste caso, contamos quantas falhas e quantos sucessos tivemos
@@ -212,18 +212,17 @@ def run_multiple_updates(
         success_count = jnp.sum(steps_data.info["success"], axis=0)
         failure_count = jnp.sum(steps_data.info["failure"], axis=0)
 
-        p_success = success_count / (success_count + failure_count + 1e-6)
-
-        expected_p_success = jnp.mean(p_success)
-        std_p_success = jnp.std(p_success)
+        # média entre ambientes
+        success_count = jnp.mean(success_count)
+        failure_count = jnp.mean(failure_count)
+        expected_p_success = 1.0
 
         # adiciona às metricas os dados dos passos (como o erro: shape = (buffer_length+1, num_envs))
         metrics = (
             *metrics,
             accumulated_error,
-            expected_p_success,
-            std_p_success,
-            last_expected_error,
+            success_count,
+            failure_count,
         )
 
         # separa o modelo novamente para a forma funcional com o estado
@@ -249,11 +248,11 @@ def run_multiple_updates(
 ######################################################################################################################
 
 model_path = "/home/lucas/Documentos/MLProjects/monadic_ppo"
-EPOCHS = 20
-NUM_ENVS = 9216
+EPOCHS = 8
+NUM_ENVS = 10240
 BUFFER_LENGTH = 512
-UPDATES = 6
-MINIBATCH_SIZE = 5120
+UPDATES = 30
+MINIBATCH_SIZE = 32768
 
 
 env = ThorEnv.init(
@@ -304,16 +303,7 @@ mjx_data, buffer, losses, metrics = run_multiple_updates(
     UPDATES,
 )
 
-(
-    entropy_loss,
-    policy_loss,
-    value_loss,
-    kl_div,
-    error,
-    expected_p_sucess,
-    std_p_sucess,
-    last_error,
-) = metrics
+(entropy_loss, policy_loss, value_loss, kl_div, error, success, failure) = metrics
 
 # (updates, epoch)
 print(f"losses shape: {losses.shape}")
@@ -332,10 +322,10 @@ losses_np, entropy_np, kl_np = (
     np.asarray(entropy_loss),
     np.asarray(kl_div),
 )
-error_np, success_np, std_np = (
+error_np, success_np, failure_np = (
     np.asarray(error),
-    np.asarray(expected_p_sucess),
-    np.asarray(std_p_sucess),
+    np.asarray(sucess),
+    np.asarray(failure),
 )
 
 last_error_np = np.asarray(last_error)
@@ -378,14 +368,8 @@ ax4.grid(True, alpha=0.5)
 
 ax5 = fig.add_subplot(3, 2, 5)
 ax5.plot(success_np, color="green")
-ax5.fill_between(
-    np.arange(success_np.shape[0]),
-    success_np - std_np,
-    success_np + std_np,
-    color="orange",
-    alpha=0.2,
-)
-ax5.set(xlabel="Updates", title="Success Rate")
+ax5.plot(failure_np, color="red")
+ax5.set(xlabel="Updates", title="Success and failure avg count")
 ax5.grid(True, alpha=0.5)
 
 ax6 = fig.add_subplot(3, 2, 6)
@@ -395,4 +379,3 @@ ax6.grid(True, alpha=0.5)
 
 plt.savefig("training_plots.png")
 print("\nTraining plots saved to training_plots.png")
-

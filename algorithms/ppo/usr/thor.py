@@ -281,8 +281,8 @@ class ThorAgent(Agent):
         error = cast(jax.Array, jnp.linalg.norm(target - cs_tool_pos, ord=2))
 
         # sucesso se o erro for menor que uma dada tolerância
-        tolerance = jnp.maximum(0.01, 0.4 * (1.0 - progress))
-        # tolerance = 0.1
+        # tolerance = jnp.maximum(0.01, 0.4 * (1.0 - progress))
+        tolerance = 0.2
         success = error <= tolerance
 
         # falha se auto-colidiu ou colidiu com o solo
@@ -297,8 +297,8 @@ class ThorAgent(Agent):
         reward = (
             -1.0 * error
             - 5.0 * error_rate  # queremos minimzar error_rate
-            + 50.0 * success
-            - 10.0 * failed
+            + 10.0 * success
+            - 5.0 * failed
             # - 0.01 * action_norm
         )
 
