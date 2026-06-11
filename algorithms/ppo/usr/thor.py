@@ -28,10 +28,10 @@ Tarefa para o thor alcançar um alvo
 from __future__ import annotations
 import mujoco
 import jax
-from mujoco import mjx, MjModel  # type: ignore
+from mujoco import mjx
 from jax import numpy as jnp
 from etils import epath
-from flax import struct, nnx
+from flax import struct
 from typing import Any, Dict, Self, Union, List, Tuple, cast
 from src.canonical_space import (
     CanonicalSpace,
@@ -39,7 +39,7 @@ from src.canonical_space import (
     transform_to_cs,
     transform_vel_to_cs,
 )
-from src.agent import Policy, Value, Agent, ResetData, StepData
+from src.agent import Policy, Value, Agent, StepData
 from src.enviroment import MujocoEnv, mujoco_step, mujoco_reset
 from .actor import Actor
 from .critic import Critic
@@ -244,30 +244,27 @@ class ThorAgent(Agent):
         return policy_obs, value_obs
 
     def reset(
-        self, env: MujocoEnv, rngs: nnx.Rngs, mjx_data: mjx.Data
-    ) -> Tuple[ResetData, mjx.Data]:
+        self, env: MujocoEnv, mjx_data: mjx.Data, target: jax.Array
+    ) -> Tuple[jax.Array, mjx.Data]:
 
         mjx_data = mujoco_reset(env, env.def_qpos, mjx_data)
 
-        # coleta observações para o novo mjx_data
-        policy_obs, value_obs = ThorAgent.compose_obs(env, mjx_data)
+        # calcula o erro de posição
+        cs_tool_pos = transform_to_cs(
+            env.world_space, env.sensor_data("tool_position", mjx_data)
+        )
+        error = cast(jax.Array, jnp.linalg.norm(target - cs_tool_pos, ord=2))
 
-        # obtem uma ação com base na observação para a política
-        action = self.policy.sample(policy_obs, rngs)
-
-        # calcula logprob, entropia e value
-        logprob, entropy = self.policy.evaluate_actions(policy_obs, action)
-        value = self.value(value_obs)
-
-        return ResetData(action, logprob, value, entropy), mjx_data
+        return error, mjx_data
 
     def step(
         self,
         env: MujocoEnv,
-        action: jax.Array,
-        target: jax.Array,
-        progress: float,
         mjx_data: mjx.Data,
+        target: jax.Array,
+        action: jax.Array,
+        last_error: jax.Array,
+        progress: jax.Array,
     ) -> Tuple[StepData, mjx.Data]:
 
         action_norm = jnp.linalg.norm(action, ord=2)
@@ -285,6 +282,7 @@ class ThorAgent(Agent):
 
         # sucesso se o erro for menor que uma dada tolerância
         tolerance = jnp.maximum(0.01, 0.4 * (1.0 - progress))
+        # tolerance = 0.1
         success = error <= tolerance
 
         # falha se auto-colidiu ou colidiu com o solo
@@ -293,15 +291,21 @@ class ThorAgent(Agent):
         # a coleta terminou se o robô atingiu o alvo ou se auto-colidiu ou colidiu com o solo
         done = failed | success
 
-        # faz a recompensa em relação ao erro ficar entre [0, 1]
-        alpha = 0.5
-        dense_reward = jnp.exp(-alpha * (error**2))
+        # verifica a variação no erro
+        error_rate = error - last_error
 
-        reward = dense_reward + 10 * success - 0.5 * failed - 0.01 * action_norm
+        reward = (
+            -1.0 * error
+            - 5.0 * error_rate  # queremos minimzar error_rate
+            + 50.0 * success
+            - 10.0 * failed
+            # - 0.01 * action_norm
+        )
+
         info = {
             "error": error,
             "success": success,
             "failure": failed,
         }
-        return StepData(reward, done, info), mjx_data
+        return StepData(error, reward, done, info), mjx_data
 

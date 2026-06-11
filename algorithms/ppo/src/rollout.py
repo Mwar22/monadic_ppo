@@ -138,17 +138,17 @@ def rollout(
     buffer: RolloutBuffer,
 ):
     # cria vmaps para para funcionar com dados em batch
-    vmap_agent_reset = jax.vmap(agent.reset, in_axes=(None, None, 0))
-    vmap_agent_step = jax.vmap(agent.step, in_axes=(None, 0, 0, None, 0))
+    vmap_agent_reset = jax.vmap(agent.reset, in_axes=(None, 0, 0))
+    vmap_agent_step = jax.vmap(agent.step, in_axes=(None, 0, 0, 0, 0, None))
     vmap_agent_compose_obs = jax.vmap(agent.compose_obs, in_axes=(None, 0))
 
     # reseta o agente e coleta as primeiras observações do ambiente
-    _, mjx_data = vmap_agent_reset(enviroment, rngs, mjx_data)
+    reset_error, reset_mjx_data = vmap_agent_reset(enviroment, mjx_data, target)
 
-    policy_obs, value_obs = vmap_agent_compose_obs(enviroment, mjx_data)
+    policy_obs, value_obs = vmap_agent_compose_obs(enviroment, reset_mjx_data)
 
     def rollout_step(carry, step):
-        policy_obs, value_obs, mjx_data, buffer, rngs = carry
+        policy_obs, value_obs, last_error, mjx_data, buffer, rngs = carry
 
         # obtem a ação, e avalia logprob e entropia relativas
         actions = agent.policy.sample(policy_obs, rngs)
@@ -159,7 +159,7 @@ def rollout(
 
         # avança o agente
         step_data, mjx_data = vmap_agent_step(
-            enviroment, actions, target, progress, mjx_data
+            enviroment, mjx_data, target, actions, last_error, progress
         )
 
         # guarda no buffer
@@ -175,19 +175,25 @@ def rollout(
             step_data.done,
         )
 
-        # gera um mjx_data considerando como se o ambiente estivesse resetado
-        _, reset_mjx_data = vmap_agent_reset(enviroment, rngs, mjx_data)
-
         # substitui os dados pelo de reset onde estiver como done
         mjx_data = select_done(step_data.done, reset_mjx_data, mjx_data)
+        last_error = select_done(step_data.done, reset_error, step_data.error)
 
         # obtem a proxima observação
         policy_obs, value_obs = vmap_agent_compose_obs(enviroment, mjx_data)
-        return (policy_obs, value_obs, mjx_data, buffer, rngs), step_data
 
-    (policy_obs, value_obs, mjx_data, buffer, rngs), data = jax.lax.scan(
+        return (
+            policy_obs,
+            value_obs,
+            last_error,
+            mjx_data,
+            buffer,
+            rngs,
+        ), step_data
+
+    (policy_obs, value_obs, last_error, mjx_data, buffer, rngs), data = jax.lax.scan(
         rollout_step,
-        (policy_obs, value_obs, mjx_data, buffer, rngs),
+        (policy_obs, value_obs, reset_error, reset_mjx_data, buffer, rngs),
         jnp.arange(buffer_length + 1),
     )
 

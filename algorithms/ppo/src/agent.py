@@ -5,10 +5,10 @@
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
 # Last Modified: 06/06/2026 08:16:31
-# Modified By: Lucas de Jesus 
+# Modified By: Lucas de Jesus
 # -----
 # Copyright (c) 2026
-# 
+#
 # This file is subject to the terms and conditions defined in
 # the 'LICENSE.txt' file found in the root of this source tree.
 # Please read LICENSE.txt for full copyright and licensing details.
@@ -25,9 +25,10 @@ from flax import nnx, struct
 from .enviroment import MujocoEnv
 from abc import ABC, abstractmethod
 
+
 @runtime_checkable
 class Policy(Protocol):
-    def __call__(self, obs: jax.Array)->jax.Array | Tuple[jax.Array, ...]:
+    def __call__(self, obs: jax.Array) -> jax.Array | Tuple[jax.Array, ...]:
         """
         Forward pass para a politica
 
@@ -40,15 +41,13 @@ class Policy(Protocol):
         jax.Array | Tuple[jax.Array, ...]
         """
         ...
-    
+
     @property
-    def obs_size(self)->int:
-        ...
-        
+    def obs_size(self) -> int: ...
+
     @property
-    def action_size(self)->int:
-        ...
-        
+    def action_size(self) -> int: ...
+
     def sample(self, obs: jax.Array, rngs: nnx.Rngs) -> jax.Array:
         """
         Realiza a coleta de uma ação dado uma observação.
@@ -65,10 +64,12 @@ class Policy(Protocol):
         """
         ...
 
-    def evaluate_actions(self, obs: jax.Array, actions: jax.Array)->Tuple[jax.Array, jax.Array]:
+    def evaluate_actions(
+        self, obs: jax.Array, actions: jax.Array
+    ) -> Tuple[jax.Array, jax.Array]:
         """
         Avalia uma dada ação tomada a partir de uma dada observação, segundo os parametros atuais.
-        
+
         Parameters
         ----------
         obs : jax.Array
@@ -81,9 +82,10 @@ class Policy(Protocol):
         """
         ...
 
+
 @runtime_checkable
 class Value(Protocol):
-    def __call__(self, obs: jax.Array)->jax.Array:
+    def __call__(self, obs: jax.Array) -> jax.Array:
         """_summary_
 
         Parameters
@@ -97,41 +99,34 @@ class Value(Protocol):
             _description_
         """
         ...
+
     @property
-    def obs_size(self)->int:
-        ...
+    def obs_size(self) -> int: ...
 
-
-class ResetData(struct.PyTreeNode):
-    action: jax.Array
-    logprob: jax.Array
-    value: jax.Array
-    entropy: jax.Array
 
 class StepData(struct.PyTreeNode):
+    error: jax.Array
     reward: jax.Array
     done: jax.Array
     info: Dict[str, Any]
-    
-#@runtime_checkable
+
+
+# @runtime_checkable
 class Agent(nnx.Module, ABC):
+    @property
+    @abstractmethod
+    def policy(self) -> Policy: ...
 
     @property
     @abstractmethod
-    def policy(self)->Policy:
-        ...
-
-    @property
-    @abstractmethod
-    def value(self)-> Value:
-        ...
+    def value(self) -> Value: ...
 
     @staticmethod
     @abstractmethod
-    def compose_obs(env: MujocoEnv, mjx_data:mjx.Data)->Tuple[jax.Array, jax.Array]:
+    def compose_obs(env: MujocoEnv, mjx_data: mjx.Data) -> Tuple[jax.Array, jax.Array]:
         """
         Deve coletar informações de um ambiente 'MujocoEnv' e compor observações para a política e para a função de valor.
-        
+
         Parameters
         ----------
         env : MujocoEnv
@@ -145,9 +140,23 @@ class Agent(nnx.Module, ABC):
         ...
 
     @abstractmethod
-    def reset(self, env: MujocoEnv,  rngs: nnx.Rngs, mjx_data:mjx.Data)->Tuple[ResetData, mjx.Data]:
-        ...
+    def reset(
+        self,
+        env: MujocoEnv,
+        mjx_data: mjx.Data,
+        target: jax.Array,
+        *args,
+        **kwargs,
+    ) -> Tuple[jax.Array, mjx.Data]: ...
 
     @abstractmethod
-    def step(self, env: MujocoEnv,  action: jax.Array, target: jax.Array, progress: float,  mjx_data:mjx.Data,)->Tuple[StepData, mjx.Data]:
-        ...
+    def step(
+        self,
+        env: MujocoEnv,
+        mjx_data: mjx.Data,
+        target: jax.Array,
+        action: jax.Array,
+        *args,
+        **kwargs,
+    ) -> Tuple[StepData, mjx.Data]: ...
+

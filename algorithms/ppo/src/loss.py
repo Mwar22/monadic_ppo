@@ -33,7 +33,7 @@ def ppo_loss(
     returns,
     old_log_probs,
     c1=0.5,
-    c2=0.05,
+    c2=0.02,
     eps=0.2,
 ):
 

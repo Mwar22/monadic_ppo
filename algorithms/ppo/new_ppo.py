@@ -100,7 +100,6 @@ def train_epochs(
         def minibatch_step(mb_state, mb_idx):
             mb_agent, mb_opt, mb_rngs = nnx.merge(graphdef, mb_state)
 
-            # THE FIX: Use dynamic_slice_in_dim instead of standard python slicing
             start_index = mb_idx * minibatch_size
             idx = jax.lax.dynamic_slice_in_dim(
                 permutation,
@@ -204,6 +203,8 @@ def run_multiple_updates(
         expected_error = jnp.mean(
             steps_data.info["error"], axis=1
         )  # erro médio entre ambientes
+
+        last_expected_error = expected_error[-1]
         accumulated_error = exp_mean(expected_error)
 
         # cada rollout só termina ou em sucesso ou falha. Neste caso, contamos quantas falhas e quantos sucessos tivemos
@@ -217,7 +218,13 @@ def run_multiple_updates(
         std_p_success = jnp.std(p_success)
 
         # adiciona às metricas os dados dos passos (como o erro: shape = (buffer_length+1, num_envs))
-        metrics = (*metrics, accumulated_error, expected_p_success, std_p_success)
+        metrics = (
+            *metrics,
+            accumulated_error,
+            expected_p_success,
+            std_p_success,
+            last_expected_error,
+        )
 
         # separa o modelo novamente para a forma funcional com o estado
         _, next_state = nnx.split((step_model, step_opt, step_rngs))
@@ -244,8 +251,8 @@ def run_multiple_updates(
 model_path = "/home/lucas/Documentos/MLProjects/monadic_ppo"
 EPOCHS = 20
 NUM_ENVS = 9216
-BUFFER_LENGTH = 300
-UPDATES = 30
+BUFFER_LENGTH = 512
+UPDATES = 6
 MINIBATCH_SIZE = 5120
 
 
@@ -263,7 +270,7 @@ env = ThorEnv.init(
 key = jax.random.PRNGKey(0)
 rngs = nnx.Rngs(key)
 model = ThorAgent(env, rngs)
-optimizer = nnx.Optimizer(model, optax.adam(5e-4), wrt=nnx.Param)
+optimizer = nnx.Optimizer(model, optax.adam(1e-4), wrt=nnx.Param)
 
 # cria um mjx_data inicial e reseta um dado ambiente
 initial_mjx_data = mjx.make_data(env.mjx_model)
@@ -305,6 +312,7 @@ mjx_data, buffer, losses, metrics = run_multiple_updates(
     error,
     expected_p_sucess,
     std_p_sucess,
+    last_error,
 ) = metrics
 
 # (updates, epoch)
@@ -315,7 +323,8 @@ print(f"value loss shape: {value_loss.shape}")
 print(f"kl_div shape: {kl_div.shape}")
 print(f"error shape: {error.shape}")
 print(f"success rate shape:{expected_p_sucess.shape}")
-
+print(f"last error shape:{last_error.shape}")
+print(buffer.dones)
 
 # 1. Convert JAX arrays to NumPy in one clean line
 losses_np, entropy_np, kl_np = (
@@ -329,24 +338,19 @@ error_np, success_np, std_np = (
     np.asarray(std_p_sucess),
 )
 
+last_error_np = np.asarray(last_error)
+
 # We only average the 2D arrays (Loss, Entropy, KL)
 plot_configs = [
-    # (losses_np, "Training Loss", "blue"),
+    (losses_np, "Training Loss", "blue"),
     (entropy_np, "Entropy", "orange"),
     (kl_np, "KL Divergence", "red"),
 ]
 
 fig = plt.figure(figsize=(12, 9), tight_layout=True)
 
-ax1 = fig.add_subplot(3, 2, 1)
-im1 = ax1.imshow(losses_np, cmap="viridis", interpolation="nearest")
-fig.colorbar(im1, ax=ax1, label="Loss value")
-ax1.set(xlabel="Updates", ylabel="Epochs", title="Loss")
-ax1.grid(True, alpha=0.5)
-
-
 # Plot the 2D data (Averaged across Epochs)
-for i, (data, title, color) in enumerate(plot_configs, start=2):
+for i, (data, title, color) in enumerate(plot_configs, start=1):
     ax = fig.add_subplot(3, 2, i)
 
     updates = np.arange(data.shape[0])
@@ -384,6 +388,11 @@ ax5.fill_between(
 ax5.set(xlabel="Updates", title="Success Rate")
 ax5.grid(True, alpha=0.5)
 
-plt.savefig(f"training_plots.png")
+ax6 = fig.add_subplot(3, 2, 6)
+ax6.plot(last_error_np)
+ax6.set(xlabel="Updates", title="Last error")
+ax6.grid(True, alpha=0.5)
+
+plt.savefig("training_plots.png")
 print("\nTraining plots saved to training_plots.png")
 
