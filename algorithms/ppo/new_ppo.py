@@ -312,8 +312,7 @@ print(f"policy loss shape: {policy_loss.shape}")
 print(f"value loss shape: {value_loss.shape}")
 print(f"kl_div shape: {kl_div.shape}")
 print(f"error shape: {error.shape}")
-print(f"success rate shape:{expected_p_sucess.shape}")
-print(f"last error shape:{last_error.shape}")
+print(f"success rate shape:{success.shape}")
 print(buffer.dones)
 
 # 1. Convert JAX arrays to NumPy in one clean line
@@ -324,11 +323,11 @@ losses_np, entropy_np, kl_np = (
 )
 error_np, success_np, failure_np = (
     np.asarray(error),
-    np.asarray(sucess),
+    np.asarray(success),
     np.asarray(failure),
 )
 
-last_error_np = np.asarray(last_error)
+error_np = np.asarray(error)
 
 # We only average the 2D arrays (Loss, Entropy, KL)
 plot_configs = [
@@ -367,13 +366,14 @@ ax4.set(xlabel="Updates", title="Exp Mean Rollout Error")
 ax4.grid(True, alpha=0.5)
 
 ax5 = fig.add_subplot(3, 2, 5)
-ax5.plot(success_np, color="green")
-ax5.plot(failure_np, color="red")
+ax5.plot(success_np, color="green", label="Success")
+ax5.plot(failure_np, color="red", label="Failure")
 ax5.set(xlabel="Updates", title="Success and failure avg count")
 ax5.grid(True, alpha=0.5)
+ax5.legend()
 
 ax6 = fig.add_subplot(3, 2, 6)
-ax6.plot(last_error_np)
+ax6.plot(error_np)
 ax6.set(xlabel="Updates", title="Last error")
 ax6.grid(True, alpha=0.5)
 

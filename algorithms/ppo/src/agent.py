@@ -123,7 +123,9 @@ class Agent(nnx.Module, ABC):
 
     @staticmethod
     @abstractmethod
-    def compose_obs(env: MujocoEnv, mjx_data: mjx.Data) -> Tuple[jax.Array, jax.Array]:
+    def compose_obs(
+        env: MujocoEnv, mjx_data: mjx.Data, target: jax.Array
+    ) -> Tuple[jax.Array, jax.Array]:
         """
         Deve coletar informações de um ambiente 'MujocoEnv' e compor observações para a política e para a função de valor.
 
@@ -159,4 +161,3 @@ class Agent(nnx.Module, ABC):
         *args,
         **kwargs,
     ) -> Tuple[StepData, mjx.Data]: ...
-

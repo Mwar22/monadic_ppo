@@ -213,7 +213,7 @@ class ThorAgent(Agent):
     def __init__(self, env: MujocoEnv, rngs, max_step_rads=0.05):
         # mjx_data temporário
         mjx_data = mjx.make_data(env.mjx_model)
-        policy_obs, action_obs = ThorAgent.compose_obs(env, mjx_data)
+        policy_obs, action_obs = ThorAgent.compose_obs(env, mjx_data, jnp.zeros(3))
 
         self._policy = Actor(policy_obs.shape[0], mjx_data.ctrl.shape[0], rngs)
         self._value = Critic(action_obs.shape[0], rngs)
@@ -228,7 +228,9 @@ class ThorAgent(Agent):
         return self._value
 
     @staticmethod
-    def compose_obs(env: MujocoEnv, mjx_data: mjx.Data) -> Tuple[jax.Array, jax.Array]:
+    def compose_obs(
+        env: MujocoEnv, mjx_data: mjx.Data, target: jax.Array
+    ) -> Tuple[jax.Array, jax.Array]:
         cs_tool_pos = transform_to_cs(
             env.world_space,
             env.sensor_data(
@@ -239,7 +241,7 @@ class ThorAgent(Agent):
         cs_qpos = transform_to_cs(env.joint_space, mjx_data.qpos)
         cs_qvel = transform_vel_to_cs(env.joint_space, mjx_data.qvel)
 
-        policy_obs = jnp.concat([cs_qpos, cs_qvel])
+        policy_obs = jnp.concat([cs_qpos, cs_qvel, target])
         value_obs = jnp.concat([cs_tool_pos, policy_obs])
         return policy_obs, value_obs
 
@@ -294,11 +296,18 @@ class ThorAgent(Agent):
         # verifica a variação no erro
         error_rate = error - last_error
 
+        alpha = 2.0
+
+        # queremos que a recompensa comece a ficar negativa a partir de um certo erro critico
+        # consideramos então um valor beta subtraindo do exponencial.erro_critico = sqrt(ln(1/beta)/alpha)
+        beta = 0.05  # = exp(-alpha * erro_critico**2) -> erro_critico ~ 1.22
+        close_reward = jnp.exp(-alpha * error**2) - beta
+
         reward = (
-            -1.0 * error
-            - 5.0 * error_rate  # queremos minimzar error_rate
-            + 10.0 * success
-            - 5.0 * failed
+            close_reward
+            - 2.0 * error_rate  # queremos minimzar error_rate
+            + 1000.0 * success
+            - 10.0 * failed
             # - 0.01 * action_norm
         )
 
@@ -308,4 +317,3 @@ class ThorAgent(Agent):
             "failure": failed,
         }
         return StepData(error, reward, done, info), mjx_data
-
