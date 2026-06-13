@@ -98,8 +98,7 @@ def test_rollout(enviroment, agent_par, batch_and_mjx_data):
         batched_mjx_data,
         dummy_target,
         buffer_length,
-        0.0,
+        0.2,
         buffer,
     )
     assert data.info["error"].shape == (buffer_length + 1, num_envs)
-

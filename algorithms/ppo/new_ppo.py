@@ -165,17 +165,18 @@ def run_multiple_updates(
     rngs,
     mjx_data,
     buffer,
-    dummy_target,
+    target,
     buffer_length: int,
     k_epochs: int,
     minibatch_size: int,
     num_updates: int,
+    start_error_tol: float = 0.2,
 ):
     # separa o grafo dos estados (puramente funcional)
     graphdef, state = nnx.split((model, optimizer, rngs))
 
     def update_step(carry, idx):
-        state_carry, mjx_carry, buffer_carry, p_success = carry
+        state_carry, mjx_carry, buffer_carry, error_tol = carry
 
         # reconstroi os modelos para este passo especifico
         step_model, step_opt, step_rngs = nnx.merge(graphdef, state_carry)
@@ -188,9 +189,9 @@ def run_multiple_updates(
             env,
             step_rngs,
             mjx_carry,
-            dummy_target,
+            target,
             buffer_length,
-            p_success,
+            error_tol,
             buffer_carry,
         )
 
@@ -215,7 +216,14 @@ def run_multiple_updates(
         # média entre ambientes
         success_count = jnp.mean(success_count)
         failure_count = jnp.mean(failure_count)
-        expected_p_success = 1.0
+
+        expected_p_success = success_count / (success_count + failure_count + 1e-6)
+
+        error_tol = jnp.where(
+            expected_p_success < 0.8,
+            error_tol * 0.8,  # torna 20% mais dificil
+            error_tol,
+        )
 
         # adiciona às metricas os dados dos passos (como o erro: shape = (buffer_length+1, num_envs))
         metrics = (
@@ -228,16 +236,16 @@ def run_multiple_updates(
         # separa o modelo novamente para a forma funcional com o estado
         _, next_state = nnx.split((step_model, step_opt, step_rngs))
 
-        return (next_state, next_mjx_data, next_buffer, expected_p_success), (
+        return (next_state, next_mjx_data, next_buffer, error_tol), (
             losses,
             metrics,
         )
 
     final_carry, (all_losses, all_metrics) = jax.lax.scan(
-        update_step, (state, mjx_data, buffer, 0.0), jnp.arange(num_updates)
+        update_step, (state, mjx_data, buffer, start_error_tol), jnp.arange(num_updates)
     )
 
-    final_state, final_mjx_data, final_buffer, expected_p_sucess = final_carry
+    final_state, final_mjx_data, final_buffer, final_error_tol = final_carry
 
     # aplica o estado final nas instancias que estão fora do loop
     nnx.update((model, optimizer, rngs), final_state)

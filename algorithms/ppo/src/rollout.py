@@ -134,7 +134,7 @@ def rollout(
     mjx_data: mjx.Data,
     target: jax.Array,
     buffer_length: int,
-    progress: float,
+    error_tol: float,
     buffer: RolloutBuffer,
 ):
     # cria vmaps para para funcionar com dados em batch
@@ -159,7 +159,7 @@ def rollout(
 
         # avança o agente
         step_data, mjx_data = vmap_agent_step(
-            enviroment, mjx_data, target, actions, last_error, progress
+            enviroment, mjx_data, target, actions, last_error, error_tol
         )
 
         # guarda no buffer
