@@ -22,35 +22,31 @@ import sys
 
 sys.stdout.flush()
 
-# Tell XLA to use Triton GEMM, this improves steps/sec by ~30% on some GPUs
 xla_flags = os.environ.get("XLA_FLAGS", "")
 
-xla_flags += (
-    " --xla_gpu_triton_gemm_any=True --xla_dump_to=/tmp/xla_dump --xla_dump_hlo_as_text"
-)
+# diminui a carga na cpu, ao agrupar camadas da GPU
+xla_flags += " --xla_gpu_enable_command_buffer=1"
+
+# faz o xla usar Triton GEMM, o que melhora o desempenho em até 30% em algumas gpus
+xla_flags += " --xla_gpu_triton_gemm_any=True"
+
+# força o xla a testar varios algoritmos de multiplicaçao/convolução e escolhe o melhor para
+# a gpu
+xla_flags += " --xla_gpu_autotune_level=4"
 os.environ["XLA_FLAGS"] = xla_flags
 
-# alocação dinamica
-# os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
-
 # evita do jax prealocar a gpu inteira
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-
-# limite, pois tbm precisamos de um pouco de vram para o sistema
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.60"
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "true"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.95"
 
 import jax
 from jax import config
 
-config.update("jax_debug_nans", True)
 config.update("jax_enable_x64", False)
 print(f"jax_enable_x64: {jax.config.read('jax_enable_x64')}")
 
-import numpy as np
 import matplotlib.pyplot as plt
-
-from os import wait
-import jax
+import numpy as np
 import jax.numpy as jnp
 import optax
 from etils import epath
