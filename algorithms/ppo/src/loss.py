@@ -58,7 +58,7 @@ def ppo_loss(
     ratio = jnp.exp(safe_logratio)
 
     # KL divergence
-    kl_div = jnp.mean(-safe_logratio)
+    kl_div = 0.5 * jnp.mean(safe_logratio**2)
 
     # perdas de entropia
     entropy_loss = jnp.mean(entropy)
@@ -73,4 +73,3 @@ def ppo_loss(
 
     total_loss = policy_loss + c1 * value_loss - c2 * entropy_loss
     return total_loss, (entropy_loss, policy_loss, value_loss, kl_div)
-

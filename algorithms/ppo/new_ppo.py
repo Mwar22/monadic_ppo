@@ -57,7 +57,13 @@ from src.gae import general_advantage_estimator
 
 @nnx.jit(static_argnums=(4, 5))
 def train_epochs(
-    model, optimizer, buffer, rngs: nnx.Rngs, k_epochs: int, minibatch_size: int
+    model,
+    optimizer,
+    buffer,
+    rngs: nnx.Rngs,
+    k_epochs: int,
+    minibatch_size: int,
+    target_kl: float = 0.015,
 ):
     # calcula as vantagens e os retornos, como um tensor 2d (buffer_length, num_envs)
     advantages, returns = general_advantage_estimator(
@@ -113,21 +119,27 @@ def train_epochs(
             (loss, aux_metrics), grads = nnx.value_and_grad(loss_fn, has_aux=True)(
                 mb_agent
             )
+
             mb_opt.update(mb_agent, grads)
 
-            # Pack it all back up
+            # estado após update
             _, updated_mb_state = nnx.split((mb_agent, mb_opt, mb_rngs))
-            return updated_mb_state, (loss, aux_metrics)
+
+            is_safe = aux_metrics["kl_div"] < (1.5 * target_kl)
+            aux_metrics["is_safe"] = is_safe
+
+            mb_state = jax.lax.cond(is_safe, lambda: updated_mb_state, lambda: mb_state)
+            return mb_state, (loss, aux_metrics)
 
         # executa os minibatches
-        post_mb_state, (mb_losses, mb_metrics) = jax.lax.scan(
+        epoch_state, (epoch_losses, epoch_metrics) = jax.lax.scan(
             minibatch_step, pre_mb_state, jnp.arange(num_minibatches)
         )
 
-        epoch_loss = jnp.mean(mb_losses)
-        epoch_metrics = tuple(jnp.mean(m) for m in mb_metrics)
+        epoch_avg_loss = jnp.mean(epoch_losses)
+        epoch_avg_metrics = tuple(jnp.mean(m) for m in epoch_metrics)
 
-        return post_mb_state, (epoch_loss, epoch_metrics)
+        return epoch_state, (epoch_avg_loss, epoch_avg_metrics)
 
     # executa as epocas
     final_state, (losses, metrics) = jax.lax.scan(
