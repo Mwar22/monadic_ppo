@@ -24,16 +24,12 @@ sys.stdout.flush()
 
 xla_flags = os.environ.get("XLA_FLAGS", "")
 
-# diminui a carga na cpu, ao agrupar camadas da GPU
-xla_flags += " --xla_gpu_enable_command_buffer=1"
-
-# faz o xla usar Triton GEMM, o que melhora o desempenho em até 30% em algumas gpus
-xla_flags += " --xla_gpu_triton_gemm_any=True"
-
 # força o xla a testar varios algoritmos de multiplicaçao/convolução e escolhe o melhor para
 # a gpu
 xla_flags += " --xla_gpu_autotune_level=4"
-os.environ["XLA_FLAGS"] = xla_flags
+
+# faz o xla usar Triton GEMM, o que melhora o desempenho em até 30% em algumas gpus
+xla_flags += " --xla_gpu_triton_gemm_any=True"
 
 # evita do jax prealocar a gpu inteira
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "true"
