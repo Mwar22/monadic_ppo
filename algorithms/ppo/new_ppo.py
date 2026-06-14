@@ -256,10 +256,10 @@ def run_multiple_updates(
 ######################################################################################################################
 
 model_path = "/home/lucas/Documentos/MLProjects/monadic_ppo"
-EPOCHS = 10
-NUM_ENVS = 12288
+EPOCHS = 8
+NUM_ENVS = 10240
 BUFFER_LENGTH = 512
-UPDATES = 30
+UPDATES = 25
 MINIBATCH_SIZE = 32768
 
 
