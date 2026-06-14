@@ -220,7 +220,7 @@ def run_multiple_updates(
         expected_p_success = success_count / (success_count + failure_count + 1e-6)
 
         error_tol = jnp.where(
-            expected_p_success < 0.8,
+            expected_p_success > 0.8,
             error_tol * 0.8,  # torna 20% mais dificil
             error_tol,
         )
@@ -256,8 +256,8 @@ def run_multiple_updates(
 ######################################################################################################################
 
 model_path = "/home/lucas/Documentos/MLProjects/monadic_ppo"
-EPOCHS = 8
-NUM_ENVS = 10240
+EPOCHS = 10
+NUM_ENVS = 12288
 BUFFER_LENGTH = 512
 UPDATES = 30
 MINIBATCH_SIZE = 32768
@@ -277,7 +277,7 @@ env = ThorEnv.init(
 key = jax.random.PRNGKey(0)
 rngs = nnx.Rngs(key)
 model = ThorAgent(env, rngs)
-optimizer = nnx.Optimizer(model, optax.adam(1e-4), wrt=nnx.Param)
+optimizer = nnx.Optimizer(model, optax.adam(5e-4), wrt=nnx.Param)
 
 # cria um mjx_data inicial e reseta um dado ambiente
 initial_mjx_data = mjx.make_data(env.mjx_model)
