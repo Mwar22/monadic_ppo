@@ -48,20 +48,81 @@ class Actor(nnx.Module):
         self._action_size = action_size
         self.eps = eps
 
-        self.linear1 = nnx.Linear(obs_size, 256, kernel_init=hidden_init, rngs=rngs)
-        self.linear2 = nnx.Linear(256, 256, kernel_init=hidden_init, rngs=rngs)
-        self.linear3 = nnx.Linear(256, 64, kernel_init=hidden_init, rngs=rngs)
+        self.linear1 = nnx.Linear(
+            obs_size,
+            256,
+            kernel_init=hidden_init,
+            rngs=rngs,
+            dtype=jnp.float16,
+            param_dtype=jnp.float32,
+        )
+        self.linear2 = nnx.Linear(
+            256,
+            256,
+            kernel_init=hidden_init,
+            rngs=rngs,
+            dtype=jnp.float16,
+            param_dtype=jnp.float32,
+        )
+        self.linear3 = nnx.Linear(
+            256,
+            64,
+            kernel_init=hidden_init,
+            rngs=rngs,
+            dtype=jnp.float16,
+            param_dtype=jnp.float32,
+        )
 
-        self.alinear1 = nnx.Linear(64, 64, kernel_init=hidden_init, rngs=rngs)
-        self.alinear2 = nnx.Linear(64, 64, kernel_init=hidden_init, rngs=rngs)
+        self.alinear1 = nnx.Linear(
+            64,
+            64,
+            kernel_init=hidden_init,
+            rngs=rngs,
+            dtype=jnp.float16,
+            param_dtype=jnp.float32,
+        )
+        self.alinear2 = nnx.Linear(
+            64,
+            64,
+            kernel_init=hidden_init,
+            rngs=rngs,
+            dtype=jnp.float16,
+            param_dtype=jnp.float32,
+        )
 
-        self.blinear1 = nnx.Linear(64, 64, kernel_init=hidden_init, rngs=rngs)
-        self.blinear2 = nnx.Linear(64, 64, kernel_init=hidden_init, rngs=rngs)
+        self.blinear1 = nnx.Linear(
+            64,
+            64,
+            kernel_init=hidden_init,
+            rngs=rngs,
+            dtype=jnp.float16,
+            param_dtype=jnp.float32,
+        )
+        self.blinear2 = nnx.Linear(
+            64,
+            64,
+            kernel_init=hidden_init,
+            rngs=rngs,
+            dtype=jnp.float16,
+            param_dtype=jnp.float32,
+        )
 
         self.alpha_layer = nnx.Linear(
-            64, action_size, kernel_init=actor_init, rngs=rngs
+            64,
+            action_size,
+            kernel_init=actor_init,
+            rngs=rngs,
+            dtype=jnp.float32,
+            param_dtype=jnp.float32,
         )
-        self.beta_layer = nnx.Linear(64, action_size, kernel_init=actor_init, rngs=rngs)
+        self.beta_layer = nnx.Linear(
+            64,
+            action_size,
+            kernel_init=actor_init,
+            rngs=rngs,
+            dtype=jnp.float32,
+            param_dtype=jnp.float32,
+        )
 
     def __call__(self, obs: jax.Array) -> Tuple[jax.Array, jax.Array]:
         x1 = self.linear1(obs)
@@ -135,4 +196,3 @@ class Actor(nnx.Module):
         entropy = jnp.sum(entropy_per_dim, axis=-1)
 
         return logprobs, entropy
-

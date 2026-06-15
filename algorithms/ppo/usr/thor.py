@@ -266,10 +266,7 @@ class ThorAgent(Agent):
         target: jax.Array,
         action: jax.Array,
         last_error: jax.Array,
-        error_tol: jax.Array,
     ) -> Tuple[StepData, mjx.Data]:
-
-        action_norm = jnp.linalg.norm(action, ord=2)
 
         # avança a física de acordo com a ação
         delta = (2 * action - 1) * self.max_step_rads
@@ -282,6 +279,7 @@ class ThorAgent(Agent):
         )
         error = cast(jax.Array, jnp.linalg.norm(target - cs_tool_pos, ord=2))
 
+        error_tol = 0.2
         success = error <= error_tol
 
         # falha se auto-colidiu ou colidiu com o solo
@@ -305,7 +303,6 @@ class ThorAgent(Agent):
             - 2.0 * error_rate  # queremos minimzar error_rate
             + 1000.0 * success
             - 10.0 * failed
-            - 1.0 * action_norm
         )
 
         info = {
