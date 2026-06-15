@@ -53,8 +53,8 @@ from src.canonical_space import new_cs
 from src.loss import LossMetrics, ppo_loss
 from src.rollout import new_buffer, rollout
 from src.gae import general_advantage_estimator
+from src.agent import StepData
 from typing import Self
-from algorithms.ppo.src.agent import StepData
 
 
 @nnx.jit(static_argnums=(4, 5))
@@ -244,11 +244,11 @@ def run_multiple_updates(
 ######################################################################################################################
 
 model_path = "/home/lucas/Documentos/MLProjects/monadic_ppo"
-EPOCHS = 8
-NUM_ENVS = 10240
-BUFFER_LENGTH = 512
-UPDATES = 25
-MINIBATCH_SIZE = 512
+EPOCHS = 4
+NUM_ENVS = 8192
+BUFFER_LENGTH = 32
+UPDATES = 100
+MINIBATCH_SIZE = 32768
 
 
 env = ThorEnv.init(
@@ -265,7 +265,7 @@ env = ThorEnv.init(
 key = jax.random.PRNGKey(0)
 rngs = nnx.Rngs(key)
 model = ThorAgent(env, rngs)
-optimizer = nnx.Optimizer(model, optax.adam(1e-4), wrt=nnx.Param)
+optimizer = nnx.Optimizer(model, optax.adam(1e-3), wrt=nnx.Param)
 
 # cria um mjx_data inicial e reseta um dado ambiente
 initial_mjx_data = mjx.make_data(env.mjx_model)
@@ -314,11 +314,10 @@ losses_np, entropy_np, kl_np, is_safe_np = (
     np.asarray(metrics.loss_metrics.kl_div),
     np.asarray(metrics.loss_metrics.is_safe),
 )
-error_np, success_np, failure_np, error_np = (
-    np.asarray(metrics.loss_metrics.acumulated_error),
+error_np, success_np, failure_np = (
+    np.asarray(metrics.acumulated_error),
     np.asarray(metrics.success_count),
     np.asarray(metrics.failure_count),
-    np.asarray(metrics.acumulated_error),
 )
 
 # We only average the 2D arrays (Loss, Entropy, KL)
@@ -353,22 +352,17 @@ for i, (data, title, color) in enumerate(plot_configs, start=1):
     ax.grid(True, alpha=0.5)
 
 # Plot the standard 1D Rollout metrics in the remaining slots
-ax4 = fig.add_subplot(3, 2, 4)
+ax4 = fig.add_subplot(3, 2, 5)
 ax4.plot(error_np, color="purple")
 ax4.set(xlabel="Updates", title="Exp Mean Rollout Error")
 ax4.grid(True, alpha=0.5)
 
-ax5 = fig.add_subplot(3, 2, 5)
+ax5 = fig.add_subplot(3, 2, 6)
 ax5.plot(success_np, color="green", label="Success")
 ax5.plot(failure_np, color="red", label="Failure")
 ax5.set(xlabel="Updates", title="Success and failure avg count")
 ax5.grid(True, alpha=0.5)
 ax5.legend()
-
-ax6 = fig.add_subplot(3, 2, 6)
-ax6.plot(is_safe_np)
-ax6.set(xlabel="Updates", title="Safe rate")
-ax6.grid(True, alpha=0.5)
 
 plt.savefig("training_plots.png")
 print("\nTraining plots saved to training_plots.png")
