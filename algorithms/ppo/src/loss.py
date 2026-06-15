@@ -21,7 +21,35 @@
 
 import jax
 import jax.numpy as jnp
+from flax import struct
+from typing import Tuple, Self
 from .agent import Agent
+
+
+class LossMetrics(struct.PyTreeNode):
+    entropy_loss: jax.Array
+    policy_loss: jax.Array
+    value_loss: jax.Array
+    kl_div: jax.Array
+    is_safe: jax.Array
+
+    @classmethod
+    def init(
+        cls,
+        entropy_loss: jax.Array,
+        policy_loss: jax.Array,
+        value_loss: jax.Array,
+        kl_div: jax.Array,
+        target_kl=0.015,
+    ) -> Self:
+
+        return cls(
+            entropy_loss,
+            policy_loss,
+            value_loss,
+            kl_div,
+            kl_div < (1.5 * target_kl),  # 1.5 é um fator de segurança
+        )
 
 
 def ppo_loss(
@@ -35,7 +63,7 @@ def ppo_loss(
     c1=0.5,
     c2=0.02,
     eps=0.2,
-):
+) -> Tuple[jax.Array, LossMetrics]:
 
     advantages = jax.lax.stop_gradient(advantages)
     returns = jax.lax.stop_gradient(returns)
@@ -72,4 +100,5 @@ def ppo_loss(
     value_loss = jnp.mean((returns - values) ** 2)
 
     total_loss = policy_loss + c1 * value_loss - c2 * entropy_loss
-    return total_loss, (entropy_loss, policy_loss, value_loss, kl_div)
+
+    return total_loss, LossMetrics.init(entropy_loss, policy_loss, value_loss, kl_div)

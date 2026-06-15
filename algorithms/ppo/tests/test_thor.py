@@ -118,7 +118,7 @@ def test_thor_step(enviroment, agent_par, batch_and_mjx_data):
     num_envs, batched_mjx_data = batch_and_mjx_data
 
     # cria mapas vetoriais para as funções step e reset, para funcinar com mjx_data em batch
-    vmap_agent_step = jax.vmap(agent.step, in_axes=(None, 0, 0, 0, 0, None))
+    vmap_agent_step = jax.vmap(agent.step, in_axes=(None, 0, 0, 0, 0))
 
     # cria uma observação qualquer  e obtem a ação relativa
     dummy_policy_obs = jax.random.normal(rngs(), (num_envs, agent.policy.obs_size))
@@ -130,7 +130,7 @@ def test_thor_step(enviroment, agent_par, batch_and_mjx_data):
     last_error = jax.random.uniform(rngs(), (num_envs,))
 
     step_data, step_mjx_data = vmap_agent_step(
-        enviroment, batched_mjx_data, dummy_target, action, last_error, 0
+        enviroment, batched_mjx_data, dummy_target, action, last_error
     )
 
     # testa se o shape das recompensas vai bater com o batch
@@ -138,4 +138,3 @@ def test_thor_step(enviroment, agent_par, batch_and_mjx_data):
 
     # testa se o mjx_data resultante também terá o shape de batch, como inicial
     assert step_mjx_data.qpos.shape == batched_mjx_data.qpos.shape
-

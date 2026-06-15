@@ -134,12 +134,11 @@ def rollout(
     mjx_data: mjx.Data,
     target: jax.Array,
     buffer_length: int,
-    progress: float,
     buffer: RolloutBuffer,
 ):
     # cria vmaps para para funcionar com dados em batch
     vmap_agent_reset = jax.vmap(agent.reset, in_axes=(None, 0, 0))
-    vmap_agent_step = jax.vmap(agent.step, in_axes=(None, 0, 0, 0, 0, None))
+    vmap_agent_step = jax.vmap(agent.step, in_axes=(None, 0, 0, 0, 0))
     vmap_agent_compose_obs = jax.vmap(agent.compose_obs, in_axes=(None, 0, 0))
 
     # reseta o agente e coleta as primeiras observações do ambiente
@@ -159,7 +158,7 @@ def rollout(
 
         # avança o agente
         step_data, mjx_data = vmap_agent_step(
-            enviroment, mjx_data, target, actions, last_error, progress
+            enviroment, mjx_data, target, actions, last_error
         )
 
         # guarda no buffer

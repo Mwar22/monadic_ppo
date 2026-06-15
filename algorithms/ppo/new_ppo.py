@@ -46,13 +46,15 @@ import numpy as np
 import jax.numpy as jnp
 import optax
 from etils import epath
-from flax import nnx
+from flax import nnx, struct
 from mujoco import mjx
 from usr.thor import ThorEnv, ThorAgent
 from src.canonical_space import new_cs
-from src.loss import ppo_loss
+from src.loss import LossMetrics, ppo_loss
 from src.rollout import new_buffer, rollout
 from src.gae import general_advantage_estimator
+from typing import Self
+from algorithms.ppo.src.agent import StepData
 
 
 @nnx.jit(static_argnums=(4, 5))
@@ -63,7 +65,6 @@ def train_epochs(
     rngs: nnx.Rngs,
     k_epochs: int,
     minibatch_size: int,
-    target_kl: float = 0.015,
 ):
     # calcula as vantagens e os retornos, como um tensor 2d (buffer_length, num_envs)
     advantages, returns = general_advantage_estimator(
@@ -116,7 +117,7 @@ def train_epochs(
                     old_logprobs[idx],
                 )
 
-            (loss, aux_metrics), grads = nnx.value_and_grad(loss_fn, has_aux=True)(
+            (loss, loss_metrics), grads = nnx.value_and_grad(loss_fn, has_aux=True)(
                 mb_agent
             )
 
@@ -125,11 +126,10 @@ def train_epochs(
             # estado após update
             _, updated_mb_state = nnx.split((mb_agent, mb_opt, mb_rngs))
 
-            is_safe = aux_metrics["kl_div"] < (1.5 * target_kl)
-            aux_metrics["is_safe"] = is_safe
-
-            mb_state = jax.lax.cond(is_safe, lambda: updated_mb_state, lambda: mb_state)
-            return mb_state, (loss, aux_metrics)
+            mb_state = jax.lax.cond(
+                loss_metrics.is_safe, lambda: updated_mb_state, lambda: mb_state
+            )
+            return mb_state, (loss, loss_metrics)
 
         # executa os minibatches
         epoch_state, (epoch_losses, epoch_metrics) = jax.lax.scan(
@@ -137,7 +137,7 @@ def train_epochs(
         )
 
         epoch_avg_loss = jnp.mean(epoch_losses)
-        epoch_avg_metrics = tuple(jnp.mean(m) for m in epoch_metrics)
+        epoch_avg_metrics = jax.tree.map(jnp.mean, epoch_metrics)
 
         return epoch_state, (epoch_avg_loss, epoch_avg_metrics)
 
@@ -145,8 +145,8 @@ def train_epochs(
     final_state, (losses, metrics) = jax.lax.scan(
         epoch_step,
         state,
-        None,  # No external arrays needed!
-        length=k_epochs,  # JAX knows exactly how many times to loop
+        None,
+        length=k_epochs,
     )
 
     # faz o udate seguro dos pesos, otimizer e estado do rngs de volta
@@ -154,12 +154,29 @@ def train_epochs(
     return losses, metrics
 
 
-def exp_mean(x: jax.Array, alpha=0.9):
-    """Gera uma média ponderada considerando os valores finais em especial"""
-    N = x.shape[0]
-    gain = (1 - alpha) / (1 - alpha**N)
-    weights = alpha ** jnp.arange(N)[::-1]  # utiliza uma sequencia inversa
-    return gain * jnp.inner(weights, x)
+class TrainingMetrics(struct.PyTreeNode):
+    loss_metrics: LossMetrics
+    acumulated_error: jax.Array
+    success_count: jax.Array
+    failure_count: jax.Array
+
+    @classmethod
+    def init(cls, loss_metrics: LossMetrics, steps_data: StepData) -> Self:
+
+        def exp_mean(x: jax.Array, alpha=0.9):
+            """Gera uma média ponderada considerando os valores finais em especial"""
+            N = x.shape[0]
+            gain = (1 - alpha) / (1 - alpha**N)
+            weights = alpha ** jnp.arange(N)[::-1]  # utiliza uma sequencia inversa
+            return gain * jnp.inner(weights, x)
+
+        # steps_data.error.shape = (buffer_length + 1, num_envs)
+        acumulated_error = exp_mean(jnp.mean(steps_data.info["error"], axis=1))
+
+        success_count = jnp.mean(jnp.sum(steps_data.info["success"], axis=0))
+        failure_count = jnp.mean(jnp.sum(steps_data.info["failure"], axis=0))
+
+        return cls(loss_metrics, acumulated_error, success_count, failure_count)
 
 
 @nnx.jit(static_argnums=(6, 7, 8, 9))
@@ -178,8 +195,8 @@ def run_multiple_updates(
     # separa o grafo dos estados (puramente funcional)
     graphdef, state = nnx.split((model, optimizer, rngs))
 
-    def update_step(carry, idx):
-        state_carry, mjx_carry, buffer_carry, p_success = carry
+    def update_step(carry, _):
+        state_carry, mjx_carry, buffer_carry = carry
 
         # reconstroi os modelos para este passo especifico
         step_model, step_opt, step_rngs = nnx.merge(graphdef, state_carry)
@@ -194,54 +211,29 @@ def run_multiple_updates(
             mjx_carry,
             dummy_target,
             buffer_length,
-            p_success,
             buffer_carry,
         )
 
         # otimiza
-        losses, metrics = train_epochs(
+        losses, loss_metrics = train_epochs(
             step_model, step_opt, next_buffer, step_rngs, k_epochs, minibatch_size
         )
 
-        # erro esperado entre os ambientes
-        # erro.shape (buffer_length+1, num_envs)
-        expected_error = jnp.mean(
-            steps_data.info["error"], axis=1
-        )  # erro médio entre ambientes
-
-        accumulated_error = exp_mean(expected_error)
-
-        # cada rollout só termina ou em sucesso ou falha. Neste caso, contamos quantas falhas e quantos sucessos tivemos
-        # (buffer_length+1, num_envs)
-        success_count = jnp.sum(steps_data.info["success"], axis=0)
-        failure_count = jnp.sum(steps_data.info["failure"], axis=0)
-
-        # média entre ambientes
-        success_count = jnp.mean(success_count)
-        failure_count = jnp.mean(failure_count)
-        expected_p_success = 1.0
-
-        # adiciona às metricas os dados dos passos (como o erro: shape = (buffer_length+1, num_envs))
-        metrics = (
-            *metrics,
-            accumulated_error,
-            success_count,
-            failure_count,
-        )
+        metrics = TrainingMetrics.init(loss_metrics, steps_data)
 
         # separa o modelo novamente para a forma funcional com o estado
         _, next_state = nnx.split((step_model, step_opt, step_rngs))
 
-        return (next_state, next_mjx_data, next_buffer, expected_p_success), (
+        return (next_state, next_mjx_data, next_buffer), (
             losses,
             metrics,
         )
 
     final_carry, (all_losses, all_metrics) = jax.lax.scan(
-        update_step, (state, mjx_data, buffer, 0.0), jnp.arange(num_updates)
+        update_step, (state, mjx_data, buffer), jnp.arange(num_updates)
     )
 
-    final_state, final_mjx_data, final_buffer, expected_p_sucess = final_carry
+    final_state, final_mjx_data, final_buffer = final_carry
 
     # aplica o estado final nas instancias que estão fora do loop
     nnx.update((model, optimizer, rngs), final_state)
@@ -255,8 +247,8 @@ model_path = "/home/lucas/Documentos/MLProjects/monadic_ppo"
 EPOCHS = 8
 NUM_ENVS = 10240
 BUFFER_LENGTH = 512
-UPDATES = 30
-MINIBATCH_SIZE = 32768
+UPDATES = 25
+MINIBATCH_SIZE = 512
 
 
 env = ThorEnv.init(
@@ -307,37 +299,34 @@ mjx_data, buffer, losses, metrics = run_multiple_updates(
     UPDATES,
 )
 
-(entropy_loss, policy_loss, value_loss, kl_div, error, success, failure) = metrics
-
 # (updates, epoch)
 print(f"losses shape: {losses.shape}")
-print(f"entropy  loss shape: {entropy_loss.shape}")
-print(f"policy loss shape: {policy_loss.shape}")
-print(f"value loss shape: {value_loss.shape}")
-print(f"kl_div shape: {kl_div.shape}")
-print(f"error shape: {error.shape}")
-print(f"success rate shape:{success.shape}")
-print(buffer.dones)
+print(f"entropy  loss shape: {metrics.loss_metrics.entropy_loss.shape}")
+print(f"policy loss shape: {metrics.loss_metrics.policy_loss.shape}")
+print(f"value loss shape: {metrics.loss_metrics.value_loss.shape}")
+print(f"kl_div shape: {metrics.loss_metrics.kl_div.shape}")
+print(f"error shape: {metrics.acumulated_error.shape}")
 
 # 1. Convert JAX arrays to NumPy in one clean line
-losses_np, entropy_np, kl_np = (
+losses_np, entropy_np, kl_np, is_safe_np = (
     np.asarray(losses),
-    np.asarray(entropy_loss),
-    np.asarray(kl_div),
+    np.asarray(metrics.loss_metrics.entropy_loss),
+    np.asarray(metrics.loss_metrics.kl_div),
+    np.asarray(metrics.loss_metrics.is_safe),
 )
-error_np, success_np, failure_np = (
-    np.asarray(error),
-    np.asarray(success),
-    np.asarray(failure),
+error_np, success_np, failure_np, error_np = (
+    np.asarray(metrics.loss_metrics.acumulated_error),
+    np.asarray(metrics.success_count),
+    np.asarray(metrics.failure_count),
+    np.asarray(metrics.acumulated_error),
 )
-
-error_np = np.asarray(error)
 
 # We only average the 2D arrays (Loss, Entropy, KL)
 plot_configs = [
     (losses_np, "Training Loss", "blue"),
     (entropy_np, "Entropy", "orange"),
     (kl_np, "KL Divergence", "red"),
+    (is_safe_np, "Safe KL", "black"),
 ]
 
 fig = plt.figure(figsize=(12, 9), tight_layout=True)
@@ -377,8 +366,8 @@ ax5.grid(True, alpha=0.5)
 ax5.legend()
 
 ax6 = fig.add_subplot(3, 2, 6)
-ax6.plot(error_np)
-ax6.set(xlabel="Updates", title="Last error")
+ax6.plot(is_safe_np)
+ax6.set(xlabel="Updates", title="Safe rate")
 ax6.grid(True, alpha=0.5)
 
 plt.savefig("training_plots.png")

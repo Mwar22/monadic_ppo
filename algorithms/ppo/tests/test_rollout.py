@@ -26,7 +26,7 @@ from mujoco import mjx
 from usr.thor import ThorEnv, ThorAgent
 from src.canonical_space import new_cs
 from src.agent import Agent
-from src.rollout import *
+from src.rollout import new_buffer, rollout
 
 model_path = "/home/lucas/Documentos/MLProjects/monadic_ppo"
 
@@ -98,8 +98,6 @@ def test_rollout(enviroment, agent_par, batch_and_mjx_data):
         batched_mjx_data,
         dummy_target,
         buffer_length,
-        0.0,
         buffer,
     )
     assert data.info["error"].shape == (buffer_length + 1, num_envs)
-

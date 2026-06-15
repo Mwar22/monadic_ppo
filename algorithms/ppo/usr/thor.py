@@ -266,10 +266,7 @@ class ThorAgent(Agent):
         target: jax.Array,
         action: jax.Array,
         last_error: jax.Array,
-        progress: jax.Array,
     ) -> Tuple[StepData, mjx.Data]:
-
-        action_norm = jnp.linalg.norm(action, ord=2)
 
         # avança a física de acordo com a ação
         delta = (2 * action - 1) * self.max_step_rads
