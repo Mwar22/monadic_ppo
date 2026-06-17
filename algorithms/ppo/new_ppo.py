@@ -4,8 +4,8 @@
 # Created Date: 31/05/2026 01:29:51
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 07/06/2026 05:21:07
-# Modified By: Lucas de Jesus
+# Last Modified: 16/06/2026 09:06:26
+# Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
 #
@@ -177,6 +177,10 @@ class TrainingMetrics(struct.PyTreeNode):
         failure_count = jnp.mean(jnp.sum(steps_data.info["failure"], axis=0))
 
         return cls(loss_metrics, acumulated_error, success_count, failure_count)
+    
+    @property
+    def success_rate(self):
+        return self.success_count/(self.success_count + self.failure_count +1e-6)
 
 
 @nnx.jit(static_argnums=(6, 7, 8, 9))
@@ -191,13 +195,13 @@ def run_multiple_updates(
     k_epochs: int,
     minibatch_size: int,
     num_updates: int,
-    start_error_tol: float = 0.2,
+    start_error_tol: float = 0.05,
 ):
     # separa o grafo dos estados (puramente funcional)
     graphdef, state = nnx.split((model, optimizer, rngs))
 
     def update_step(carry, _):
-        state_carry, mjx_carry, buffer_carry = carry
+        state_carry, mjx_carry, buffer_carry, error_tol = carry
 
         # reconstroi os modelos para este passo especifico
         step_model, step_opt, step_rngs = nnx.merge(graphdef, state_carry)
@@ -213,6 +217,7 @@ def run_multiple_updates(
             target,
             buffer_length,
             buffer_carry,
+            error_tol
         )
 
         # otimiza
@@ -222,35 +227,43 @@ def run_multiple_updates(
 
         metrics = TrainingMetrics.init(loss_metrics, steps_data)
 
+        #mantêm a tolerancia atual até a taxa de sucesso atingir 0.6
+        #daí pra frente a tolerancia diminui 5% a cada update
+        error_tol = jnp.where(metrics.success_rate < 0.7, error_tol, error_tol * 0.95)
+
         # separa o modelo novamente para a forma funcional com o estado
         _, next_state = nnx.split((step_model, step_opt, step_rngs))
 
-        return (next_state, next_mjx_data, next_buffer), (
+        carry_next = (next_state, next_mjx_data, next_buffer, error_tol)
+        return carry_next, (
             losses,
             metrics,
+            error_tol
         )
 
-    final_carry, (all_losses, all_metrics) = jax.lax.scan(
-        update_step, (state, mjx_data, buffer), jnp.arange(num_updates)
+    final_carry, (all_losses, all_metrics, all_error_tol) = jax.lax.scan(
+        update_step, (state, mjx_data, buffer, start_error_tol), jnp.arange(num_updates)
     )
 
-    final_state, final_mjx_data, final_buffer = final_carry
+    final_state, final_mjx_data, final_buffer, final_error_tol = final_carry
 
     # aplica o estado final nas instancias que estão fora do loop
     nnx.update((model, optimizer, rngs), final_state)
 
-    return final_mjx_data, final_buffer, all_losses, all_metrics
+    return final_mjx_data, final_buffer, all_losses, all_metrics, all_error_tol
 
 
 ######################################################################################################################
 
 model_path = "/home/lucas/Documentos/MLProjects/monadic_ppo"
 
-EPOCHS = 4
+EPOCHS = 3
 NUM_ENVS = 8192
-BUFFER_LENGTH = 32
-UPDATES = 200
+BUFFER_LENGTH = 128
+UPDATES = 75
 MINIBATCH_SIZE = 32768
+
+START_ERROR_TOL = 0.06
 
 
 env = ThorEnv.init(
@@ -264,10 +277,34 @@ env = ThorEnv.init(
     sim_dt=1.0 / 1000,
 )
 
+
+def create_optimizer(epochs, num_envs, buffer_length, updates, minibatch_size):
+    full_batch_size = num_envs * (buffer_length + 1)
+    steps_per_epoch = epochs * (full_batch_size // minibatch_size)
+    total_steps = steps_per_epoch * updates
+
+    lr_scheduler = optax.schedules.cosine_onecycle_schedule(
+        peak_value=5e-4,
+        pct_start=0.3,  # 30% do treino subindo (warm-up), 70% descendo
+        div_factor=5.0,  # LR inicial = peak_value / div_factor
+        final_div_factor=10.0,  # LR final = LR inicial / final_div_factor para o ajuste fino,
+        transition_steps=total_steps,
+    )
+
+    return optax.chain(
+        optax.clip_by_global_norm(1.0),
+        optax.adam(lr_scheduler),
+    )
+
+
 key = jax.random.PRNGKey(0)
 rngs = nnx.Rngs(key)
 model = ThorAgent(env, rngs)
-optimizer = nnx.Optimizer(model, optax.adam(1e-3), wrt=nnx.Param)
+optimizer = nnx.Optimizer(
+    model,
+    create_optimizer(EPOCHS, NUM_ENVS, BUFFER_LENGTH, UPDATES, MINIBATCH_SIZE),
+    wrt=nnx.Param,
+)
 
 # cria um mjx_data inicial e reseta um dado ambiente
 initial_mjx_data = mjx.make_data(env.mjx_model)
@@ -288,7 +325,7 @@ buffer = new_buffer(
 
 
 # treino
-mjx_data, buffer, losses, metrics = run_multiple_updates(
+mjx_data, buffer, losses, metrics, error_tol = run_multiple_updates(
     model,
     optimizer,
     rngs,
@@ -299,6 +336,7 @@ mjx_data, buffer, losses, metrics = run_multiple_updates(
     EPOCHS,
     MINIBATCH_SIZE,
     UPDATES,
+    START_ERROR_TOL
 )
 
 # (updates, epoch)
@@ -327,7 +365,6 @@ plot_configs = [
     (losses_np, "Training Loss", "blue"),
     (entropy_np, "Entropy", "orange"),
     (kl_np, "KL Divergence", "red"),
-    (is_safe_np, "Safe KL", "black"),
 ]
 
 fig = plt.figure(figsize=(12, 9), tight_layout=True)
@@ -352,6 +389,23 @@ for i, (data, title, color) in enumerate(plot_configs, start=1):
 
     ax.set(xlabel="Updates", title=title)
     ax.grid(True, alpha=0.5)
+
+success_rate_np = np.asarray(metrics.success_rate)
+error_tol_np = np.asarray(error_tol)
+
+ax3 = fig.add_subplot(3, 2, 4)
+ax3b = ax3.twinx()
+
+ax3.plot(success_rate_np, color="blue", label="Success rate")
+ax3.set(xlabel="Updates",  ylabel="SR", title="Success Rate/Error tol")
+ax3.grid(True, alpha=0.5)
+ax3.legend()
+
+ax3b.plot(error_tol_np, color="green", label= "Error tol")
+ax3b.set(ylabel="ET")
+ax3b.grid(True, alpha=0.5)
+ax3b.legend()
+
 
 # Plot the standard 1D Rollout metrics in the remaining slots
 ax4 = fig.add_subplot(3, 2, 5)

@@ -4,8 +4,8 @@
 # Created Date: 25/05/2026 11:54:02
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 07/06/2026 06:07:54
-# Modified By: Lucas de Jesus
+# Last Modified: 16/06/2026 07:00:27
+# Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
 #
@@ -135,10 +135,11 @@ def rollout(
     target: jax.Array,
     buffer_length: int,
     buffer: RolloutBuffer,
+    error_tol: float = 0.1
 ):
     # cria vmaps para para funcionar com dados em batch
     vmap_agent_reset = jax.vmap(agent.reset, in_axes=(None, 0, 0))
-    vmap_agent_step = jax.vmap(agent.step, in_axes=(None, 0, 0, 0, 0))
+    vmap_agent_step = jax.vmap(agent.step, in_axes=(None, 0, 0, 0, 0, None))
     vmap_agent_compose_obs = jax.vmap(agent.compose_obs, in_axes=(None, 0, 0))
 
     # reseta o agente e coleta as primeiras observações do ambiente
@@ -158,7 +159,7 @@ def rollout(
 
         # avança o agente
         step_data, mjx_data = vmap_agent_step(
-            enviroment, mjx_data, target, actions, last_error
+            enviroment, mjx_data, target, actions, last_error, error_tol
         )
 
         # guarda no buffer

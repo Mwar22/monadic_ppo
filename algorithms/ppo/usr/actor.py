@@ -4,8 +4,8 @@
 # Created Date: 25/05/2026 09:38:11
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 04/06/2026 11:14:19
-# Modified By: Lucas de Jesus
+# Last Modified: 16/06/2026 02:01:25
+# Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
 #
@@ -22,7 +22,8 @@ import jax
 import jax.numpy as jnp
 import jax.scipy.special as jsp
 from flax import nnx
-from typing import Tuple
+from typing import Callable, Tuple
+from .networks import ReluLinear, CauchyLinear
 
 MIN_ALPHA_BETA = 1.05
 MAX_ALPHA_BETA = 100.0
@@ -38,6 +39,7 @@ class Actor(nnx.Module):
         obs_size: int,
         action_size: int,
         rngs: nnx.Rngs,
+        layer: Callable[[int, int, nnx.Rngs], nnx.Module] = ReluLinear,
         ab_max=1e4,
         ab_min=1.001,
         eps=1e-4,
@@ -48,64 +50,15 @@ class Actor(nnx.Module):
         self._action_size = action_size
         self.eps = eps
 
-        self.linear1 = nnx.Linear(
-            obs_size,
-            256,
-            kernel_init=hidden_init,
-            rngs=rngs,
-            dtype=jnp.float16,
-            param_dtype=jnp.float32,
-        )
-        self.linear2 = nnx.Linear(
-            256,
-            256,
-            kernel_init=hidden_init,
-            rngs=rngs,
-            dtype=jnp.float16,
-            param_dtype=jnp.float32,
-        )
-        self.linear3 = nnx.Linear(
-            256,
-            64,
-            kernel_init=hidden_init,
-            rngs=rngs,
-            dtype=jnp.float16,
-            param_dtype=jnp.float32,
-        )
+        self.linear1 = layer(obs_size, 256, rngs)
+        self.linear2 = layer(256, 256, rngs)
+        self.linear3 = layer(256, 64, rngs)
 
-        self.alinear1 = nnx.Linear(
-            64,
-            64,
-            kernel_init=hidden_init,
-            rngs=rngs,
-            dtype=jnp.float16,
-            param_dtype=jnp.float32,
-        )
-        self.alinear2 = nnx.Linear(
-            64,
-            64,
-            kernel_init=hidden_init,
-            rngs=rngs,
-            dtype=jnp.float16,
-            param_dtype=jnp.float32,
-        )
+        self.alinear1 = layer(64, 64, rngs)
+        self.alinear2 = layer(64, 64, rngs)
 
-        self.blinear1 = nnx.Linear(
-            64,
-            64,
-            kernel_init=hidden_init,
-            rngs=rngs,
-            dtype=jnp.float16,
-            param_dtype=jnp.float32,
-        )
-        self.blinear2 = nnx.Linear(
-            64,
-            64,
-            kernel_init=hidden_init,
-            rngs=rngs,
-            dtype=jnp.float16,
-            param_dtype=jnp.float32,
-        )
+        self.blinear1 = layer(64, 64, rngs)
+        self.blinear2 = layer(64, 64, rngs)
 
         self.alpha_layer = nnx.Linear(
             64,
@@ -126,30 +79,17 @@ class Actor(nnx.Module):
 
     def __call__(self, obs: jax.Array) -> Tuple[jax.Array, jax.Array]:
         x1 = self.linear1(obs)
-        x1 = activation(x1)
-
         x2 = self.linear2(x1)
-        x2 = activation(x2)
-
         x3 = self.linear3(x2)
-        x3 = activation(x3)
 
         # alpha section
         a1 = self.alinear1(x3)
-        a1 = activation(a1)
-
         a2 = self.alinear2(a1)
-        a2 = activation(a2)
-
         raw_alpha = self.alpha_layer(a2)
 
         # beta section
         b1 = self.blinear1(x3)
-        b1 = activation(b1)
-
         b2 = self.blinear2(b1)
-        b2 = activation(b2)
-
         raw_beta = self.beta_layer(b2)
 
         alpha = jnp.clip(

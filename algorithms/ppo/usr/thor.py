@@ -4,8 +4,8 @@
 # Created Date: 24/05/2026 08:47:36
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 06/06/2026 08:20:08
-# Modified By: Lucas de Jesus
+# Last Modified: 16/06/2026 06:58:04
+# Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
 #
@@ -43,6 +43,7 @@ from src.agent import Policy, Value, Agent, StepData
 from src.enviroment import MujocoEnv, mujoco_step, mujoco_reset
 from .actor import Actor
 from .critic import Critic
+from .networks import CauchyLinear, ReluLinear
 
 
 ########################################## para o pylance não reclamar #############################################
@@ -215,7 +216,7 @@ class ThorAgent(Agent):
         mjx_data = mjx.make_data(env.mjx_model)
         policy_obs, action_obs = ThorAgent.compose_obs(env, mjx_data, jnp.zeros(3))
 
-        self._policy = Actor(policy_obs.shape[0], mjx_data.ctrl.shape[0], rngs)
+        self._policy = Actor(policy_obs.shape[0], mjx_data.ctrl.shape[0], rngs, CauchyLinear)
         self._value = Critic(action_obs.shape[0], rngs)
         self.max_step_rads = max_step_rads
 
@@ -266,6 +267,7 @@ class ThorAgent(Agent):
         target: jax.Array,
         action: jax.Array,
         last_error: jax.Array,
+        error_tol:float = 0.1
     ) -> Tuple[StepData, mjx.Data]:
 
         # avança a física de acordo com a ação
@@ -278,8 +280,7 @@ class ThorAgent(Agent):
             env.world_space, env.sensor_data("tool_position", mjx_data)
         )
         error = cast(jax.Array, jnp.linalg.norm(target - cs_tool_pos, ord=2))
-
-        error_tol = 0.2
+        
         success = error <= error_tol
 
         # falha se auto-colidiu ou colidiu com o solo

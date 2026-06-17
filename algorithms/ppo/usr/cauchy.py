@@ -4,7 +4,7 @@
 # Created Date: 25/05/2026 10:55:30
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 25/05/2026 11:04:09
+# Last Modified: 16/06/2026 04:18:27
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -71,7 +71,7 @@ def cauchy_activation_jvp(primals, tangents):
     return y, tangent_out
 
 class CauchyActivationModule(nnx.Module):
-    def __init__(self, init_lambda1: float = 0.01, init_lambda2: float = 0.01, init_d: float = 1.0):
+    def __init__(self, init_lambda1: float = 1.0, init_lambda2: float = 0.0, init_d: float = 1.0):
         self.lambda1 = nnx.Param(jnp.array(init_lambda1))
         self.lambda2 = nnx.Param(jnp.array(init_lambda2))
         self.d = nnx.Param(jnp.array(init_d))
