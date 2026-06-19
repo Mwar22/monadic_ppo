@@ -51,10 +51,11 @@ from mujoco import mjx
 from usr.thor import ThorEnv, ThorAgent
 from src.canonical_space import new_cs
 from src.loss import LossMetrics, ppo_loss
-from src.rollout import new_buffer, rollout
+from src.rollout import RolloutBuffer, new_buffer, rollout
 from src.gae import general_advantage_estimator
-from src.agent import StepData
+from src.agent import StepData, Agent
 from typing import Self
+import orbax.checkpoint as ocp
 
 
 @nnx.jit(static_argnums=(4, 5))
@@ -183,18 +184,18 @@ class TrainingMetrics(struct.PyTreeNode):
         return self.success_count / (self.success_count + self.failure_count + 1e-6)
 
 
-@nnx.jit(static_argnums=(6, 7, 8, 9))
+@nnx.jit(static_argnums=(5, 6, 7, 8, 9))
 def run_multiple_updates(
-    model,
+    model: Agent,
     optimizer,
-    rngs,
-    mjx_data,
-    buffer,
-    target,
+    rngs: nnx.Rngs,
+    mjx_data: mjx.Data,
+    buffer: RolloutBuffer,
     buffer_length: int,
     k_epochs: int,
     minibatch_size: int,
     num_updates: int,
+    num_envs: int,
     start_error_tol: float = 0.05,
 ):
     # separa o grafo dos estados (puramente funcional)
@@ -206,8 +207,8 @@ def run_multiple_updates(
         # reconstroi os modelos para este passo especifico
         step_model, step_opt, step_rngs = nnx.merge(graphdef, state_carry)
 
-        # progress = idx/(num_updates-1)
-        # progress = jnp.clip(success_rate, 0.5, 1.0)
+        # cria um novo alvo
+        target = jax.random.uniform(step_rngs(), (num_envs, 3), minval=-1, maxval=1)
 
         next_buffer, steps_data, next_mjx_data = rollout(
             step_model,
@@ -227,26 +228,11 @@ def run_multiple_updates(
 
         metrics = TrainingMetrics.init(loss_metrics, steps_data)
 
-        """
-        def u(x: jax.Array):
-            return (x >= 0).astype(jnp.float32)
+        # a partir de uma taxa de sucesso de 85%, aumenta a dificuldade em 2%
+        error_tol = jnp.where(metrics.success_rate > 0.85, error_tol * 0.98, error_tol)
 
-        def stairstep(x: jax.Array, steps: int = 3):
-            delta = num_updates // steps
-            val = 0
-            for i in range(1, steps + 1):
-                val += u(delta * i - x)
-
-            return val / steps
-        """
-
-        # mantêm a tolerancia atual até a taxa de sucesso atingir 0.6
-        # daí pra frente a tolerancia diminui 2% a cada update
-        # error_tol = jnp.where(metrics.success_rate < 0.8, start_error_tol, error_tol * 0.98)
-        # error_tol = 0.06 * stairstep(update_idx, steps=6)
-
-        alpha = 2.0
-        error_tol = start_error_tol * jnp.exp(-update_idx / (num_updates * alpha))
+        MIN_TOLERANCE = 0.01
+        error_tol = jnp.maximum(jnp.asarray(error_tol), MIN_TOLERANCE)
 
         # separa o modelo novamente para a forma funcional com o estado
         _, next_state = nnx.split((step_model, step_opt, step_rngs))
@@ -258,7 +244,7 @@ def run_multiple_updates(
         update_step, (state, mjx_data, buffer, start_error_tol), jnp.arange(num_updates)
     )
 
-    final_state, final_mjx_data, final_buffer, final_error_tol = final_carry
+    final_state, final_mjx_data, final_buffer, _ = final_carry
 
     # aplica o estado final nas instancias que estão fora do loop
     nnx.update((model, optimizer, rngs), final_state)
@@ -271,10 +257,10 @@ def run_multiple_updates(
 model_path = "/home/lucas/Documentos/MLProjects/monadic_ppo"
 
 EPOCHS = 3
-NUM_ENVS = 8192
+NUM_ENVS = 4096
 BUFFER_LENGTH = 256
 UPDATES = 150
-MINIBATCH_SIZE = 8192  # 16384
+MINIBATCH_SIZE = 8192
 START_ERROR_TOL = 0.06
 
 
@@ -325,8 +311,6 @@ batched_mjx_data = jax.tree_util.tree_map(
     lambda x: jax.numpy.repeat(x[None], NUM_ENVS, axis=0), initial_mjx_data
 )
 
-dummy_target = jax.random.uniform(rngs(), (NUM_ENVS, 3), minval=-1, maxval=1)
-
 buffer = new_buffer(
     NUM_ENVS,
     BUFFER_LENGTH,
@@ -343,11 +327,11 @@ mjx_data, buffer, losses, metrics, error_tol = run_multiple_updates(
     rngs,
     batched_mjx_data,
     buffer,
-    dummy_target,
     BUFFER_LENGTH,
     EPOCHS,
     MINIBATCH_SIZE,
     UPDATES,
+    NUM_ENVS,
     START_ERROR_TOL,
 )
 
@@ -434,3 +418,21 @@ ax5.legend()
 
 plt.savefig("training_plots.png")
 print("\nTraining plots saved to training_plots.png")
+
+# ==========================================
+# SALVANDO OS PESOS DO MODELO
+# ==========================================
+# Define o caminho (usando o seu model_path existente)
+ckpt_dir = os.path.abspath(f"{model_path}/checkpoints/ppo_thor_final")
+
+# Garante que a pasta pai exista
+os.makedirs(os.path.dirname(ckpt_dir), exist_ok=True)
+
+# 1. Extrai apenas o estado (pesos) do modelo já treinado
+_, model_state = nnx.split(model)
+
+# 2. Salva usando o Orbax
+checkpointer = ocp.PyTreeCheckpointer()
+checkpointer.save(ckpt_dir, model_state, force=True)
+
+print(f"✅ Pesos do modelo salvos com sucesso em: {ckpt_dir}")
