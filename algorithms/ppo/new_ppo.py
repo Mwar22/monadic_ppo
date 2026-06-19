@@ -4,8 +4,8 @@
 # Created Date: 31/05/2026 01:29:51
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 16/06/2026 09:06:26
-# Modified By: Lucas de Jesus 
+# Last Modified: 17/06/2026 10:12:17
+# Modified By: Lucas de Jesus
 # -----
 # Copyright (c) 2026
 #
@@ -177,10 +177,10 @@ class TrainingMetrics(struct.PyTreeNode):
         failure_count = jnp.mean(jnp.sum(steps_data.info["failure"], axis=0))
 
         return cls(loss_metrics, acumulated_error, success_count, failure_count)
-    
+
     @property
     def success_rate(self):
-        return self.success_count/(self.success_count + self.failure_count +1e-6)
+        return self.success_count / (self.success_count + self.failure_count + 1e-6)
 
 
 @nnx.jit(static_argnums=(6, 7, 8, 9))
@@ -200,7 +200,7 @@ def run_multiple_updates(
     # separa o grafo dos estados (puramente funcional)
     graphdef, state = nnx.split((model, optimizer, rngs))
 
-    def update_step(carry, _):
+    def update_step(carry, update_idx):
         state_carry, mjx_carry, buffer_carry, error_tol = carry
 
         # reconstroi os modelos para este passo especifico
@@ -217,7 +217,7 @@ def run_multiple_updates(
             target,
             buffer_length,
             buffer_carry,
-            error_tol
+            error_tol,
         )
 
         # otimiza
@@ -227,19 +227,32 @@ def run_multiple_updates(
 
         metrics = TrainingMetrics.init(loss_metrics, steps_data)
 
-        #mantêm a tolerancia atual até a taxa de sucesso atingir 0.6
-        #daí pra frente a tolerancia diminui 5% a cada update
-        error_tol = jnp.where(metrics.success_rate < 0.7, error_tol, error_tol * 0.95)
+        """
+        def u(x: jax.Array):
+            return (x >= 0).astype(jnp.float32)
+
+        def stairstep(x: jax.Array, steps: int = 3):
+            delta = num_updates // steps
+            val = 0
+            for i in range(1, steps + 1):
+                val += u(delta * i - x)
+
+            return val / steps
+        """
+
+        # mantêm a tolerancia atual até a taxa de sucesso atingir 0.6
+        # daí pra frente a tolerancia diminui 2% a cada update
+        # error_tol = jnp.where(metrics.success_rate < 0.8, start_error_tol, error_tol * 0.98)
+        # error_tol = 0.06 * stairstep(update_idx, steps=6)
+
+        alpha = 2.0
+        error_tol = start_error_tol * jnp.exp(-update_idx / (num_updates * alpha))
 
         # separa o modelo novamente para a forma funcional com o estado
         _, next_state = nnx.split((step_model, step_opt, step_rngs))
 
         carry_next = (next_state, next_mjx_data, next_buffer, error_tol)
-        return carry_next, (
-            losses,
-            metrics,
-            error_tol
-        )
+        return carry_next, (losses, metrics, error_tol)
 
     final_carry, (all_losses, all_metrics, all_error_tol) = jax.lax.scan(
         update_step, (state, mjx_data, buffer, start_error_tol), jnp.arange(num_updates)
@@ -259,10 +272,9 @@ model_path = "/home/lucas/Documentos/MLProjects/monadic_ppo"
 
 EPOCHS = 3
 NUM_ENVS = 8192
-BUFFER_LENGTH = 128
-UPDATES = 75
-MINIBATCH_SIZE = 32768
-
+BUFFER_LENGTH = 256
+UPDATES = 150
+MINIBATCH_SIZE = 8192  # 16384
 START_ERROR_TOL = 0.06
 
 
@@ -336,7 +348,7 @@ mjx_data, buffer, losses, metrics, error_tol = run_multiple_updates(
     EPOCHS,
     MINIBATCH_SIZE,
     UPDATES,
-    START_ERROR_TOL
+    START_ERROR_TOL,
 )
 
 # (updates, epoch)
@@ -397,11 +409,11 @@ ax3 = fig.add_subplot(3, 2, 4)
 ax3b = ax3.twinx()
 
 ax3.plot(success_rate_np, color="blue", label="Success rate")
-ax3.set(xlabel="Updates",  ylabel="SR", title="Success Rate/Error tol")
+ax3.set(xlabel="Updates", ylabel="SR", title="Success Rate/Error tol")
 ax3.grid(True, alpha=0.5)
 ax3.legend()
 
-ax3b.plot(error_tol_np, color="green", label= "Error tol")
+ax3b.plot(error_tol_np, color="green", label="Error tol")
 ax3b.set(ylabel="ET")
 ax3b.grid(True, alpha=0.5)
 ax3b.legend()
