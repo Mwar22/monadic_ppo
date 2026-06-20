@@ -259,7 +259,7 @@ model_path = "/home/lucas/Documentos/MLProjects/monadic_ppo"
 EPOCHS = 3
 NUM_ENVS = 4096
 BUFFER_LENGTH = 256
-UPDATES = 150
+UPDATES = 200
 MINIBATCH_SIZE = 8192
 START_ERROR_TOL = 0.06
 
