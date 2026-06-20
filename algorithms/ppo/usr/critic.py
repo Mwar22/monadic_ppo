@@ -20,48 +20,27 @@
 import jax
 import jax.numpy as jnp
 from flax import nnx
-from typing import Tuple
+from typing import Callable
+from .networks import ReluLinear, CauchyLinear
 
 MIN_ALPHA_BETA = 1.1
 MAX_ALPHA_BETA = 100.0
 
-hidden_init = nnx.initializers.orthogonal(jnp.sqrt(2))
 critic_init = nnx.initializers.orthogonal(0.01)
-activation = jax.nn.leaky_relu
-
-smooth_bound = lambda x: (
-    MIN_ALPHA_BETA + (MAX_ALPHA_BETA - MIN_ALPHA_BETA) * jax.nn.sigmoid(x)
-)
 
 
 class Critic(nnx.Module):
-    def __init__(self, obs_size: int, rngs: nnx.Rngs):
+    def __init__(
+        self,
+        obs_size: int,
+        rngs: nnx.Rngs,
+        layer: Callable[[int, int, nnx.Rngs], nnx.Module] = ReluLinear,
+    ):
         self.obs_size = obs_size
 
-        self.linear1 = nnx.Linear(
-            obs_size,
-            256,
-            kernel_init=hidden_init,
-            rngs=rngs,
-            dtype=jnp.float16,
-            param_dtype=jnp.float32,
-        )
-        self.linear2 = nnx.Linear(
-            256,
-            256,
-            kernel_init=hidden_init,
-            rngs=rngs,
-            dtype=jnp.float16,
-            param_dtype=jnp.float32,
-        )
-        self.linear3 = nnx.Linear(
-            256,
-            64,
-            kernel_init=hidden_init,
-            rngs=rngs,
-            dtype=jnp.float16,
-            param_dtype=jnp.float32,
-        )
+        self.linear1 = layer(obs_size, 256, rngs)
+        self.linear2 = layer(256, 256, rngs)
+        self.linear3 = layer(256, 64, rngs)
 
         self.out_layer = nnx.Linear(
             64,
@@ -74,14 +53,7 @@ class Critic(nnx.Module):
 
     def __call__(self, obs: jax.Array) -> jax.Array:
         x1 = self.linear1(obs)
-        x1 = activation(x1)
-
         x2 = self.linear2(x1)
-        x2 = activation(x2)
-
         x3 = self.linear3(x2)
-        x3 = activation(x3)
-
         out = self.out_layer(x3)
         return out.squeeze(-1)
-

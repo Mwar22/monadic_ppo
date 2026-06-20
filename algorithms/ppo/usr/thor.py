@@ -5,7 +5,7 @@
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
 # Last Modified: 16/06/2026 06:58:04
-# Modified By: Lucas de Jesus 
+# Modified By: Lucas de Jesus
 # -----
 # Copyright (c) 2026
 #
@@ -216,8 +216,10 @@ class ThorAgent(Agent):
         mjx_data = mjx.make_data(env.mjx_model)
         policy_obs, action_obs = ThorAgent.compose_obs(env, mjx_data, jnp.zeros(3))
 
-        self._policy = Actor(policy_obs.shape[0], mjx_data.ctrl.shape[0], rngs, CauchyLinear)
-        self._value = Critic(action_obs.shape[0], rngs)
+        self._policy = Actor(
+            policy_obs.shape[0], mjx_data.ctrl.shape[0], rngs, CauchyLinear
+        )
+        self._value = Critic(action_obs.shape[0], rngs, CauchyLinear)
         self.max_step_rads = max_step_rads
 
     @property
@@ -267,7 +269,7 @@ class ThorAgent(Agent):
         target: jax.Array,
         action: jax.Array,
         last_error: jax.Array,
-        error_tol:float = 0.1
+        error_tol: float = 0.1,
     ) -> Tuple[StepData, mjx.Data]:
 
         # avança a física de acordo com a ação
@@ -280,7 +282,7 @@ class ThorAgent(Agent):
             env.world_space, env.sensor_data("tool_position", mjx_data)
         )
         error = cast(jax.Array, jnp.linalg.norm(target - cs_tool_pos, ord=2))
-        
+
         success = error <= error_tol
 
         # falha se auto-colidiu ou colidiu com o solo
@@ -306,9 +308,5 @@ class ThorAgent(Agent):
             - 10.0 * failed
         )
 
-        info = {
-            "error": error,
-            "success": success,
-            "failure": failed,
-        }
+        info = {"error": error, "success": success, "failure": failed, "done": done}
         return StepData(error, reward, done, info), mjx_data

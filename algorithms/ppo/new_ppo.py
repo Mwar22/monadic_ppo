@@ -158,13 +158,14 @@ def train_epochs(
 class TrainingMetrics(struct.PyTreeNode):
     loss_metrics: LossMetrics
     acumulated_error: jax.Array
-    success_count: jax.Array
-    failure_count: jax.Array
+    avg_success: jax.Array
+    avg_failure: jax.Array
+    avg_done: jax.Array
 
     @classmethod
     def init(cls, loss_metrics: LossMetrics, steps_data: StepData) -> Self:
 
-        def exp_mean(x: jax.Array, alpha=0.9):
+        def exp_mean(x: jax.Array, alpha=0.95):
             """Gera uma média ponderada considerando os valores finais em especial"""
             N = x.shape[0]
             gain = (1 - alpha) / (1 - alpha**N)
@@ -174,14 +175,15 @@ class TrainingMetrics(struct.PyTreeNode):
         # steps_data.error.shape = (buffer_length + 1, num_envs)
         acumulated_error = exp_mean(jnp.mean(steps_data.info["error"], axis=1))
 
-        success_count = jnp.mean(jnp.sum(steps_data.info["success"], axis=0))
-        failure_count = jnp.mean(jnp.sum(steps_data.info["failure"], axis=0))
+        avg_success = jnp.mean(jnp.sum(steps_data.info["success"], axis=0))
+        avg_failure = jnp.mean(jnp.sum(steps_data.info["failure"], axis=0))
+        avg_done = jnp.mean(jnp.sum(steps_data.info["done"], axis=0))
 
-        return cls(loss_metrics, acumulated_error, success_count, failure_count)
+        return cls(loss_metrics, acumulated_error, avg_success, avg_failure, avg_done)
 
     @property
     def success_rate(self):
-        return self.success_count / (self.success_count + self.failure_count + 1e-6)
+        return self.avg_success / (self.avg_done + 1e-6)
 
 
 @nnx.jit(static_argnums=(5, 6, 7, 8, 9))
@@ -201,7 +203,7 @@ def run_multiple_updates(
     # separa o grafo dos estados (puramente funcional)
     graphdef, state = nnx.split((model, optimizer, rngs))
 
-    def update_step(carry, update_idx):
+    def update_step(carry, _):
         state_carry, mjx_carry, buffer_carry, error_tol = carry
 
         # reconstroi os modelos para este passo especifico
@@ -256,9 +258,9 @@ def run_multiple_updates(
 
 model_path = "/home/lucas/Documentos/MLProjects/monadic_ppo"
 
-EPOCHS = 3
+EPOCHS = 2
 NUM_ENVS = 4096
-BUFFER_LENGTH = 256
+BUFFER_LENGTH = 512
 UPDATES = 200
 MINIBATCH_SIZE = 8192
 START_ERROR_TOL = 0.06
@@ -350,10 +352,11 @@ losses_np, entropy_np, kl_np, is_safe_np = (
     np.asarray(metrics.loss_metrics.kl_div),
     np.asarray(metrics.loss_metrics.is_safe),
 )
-error_np, success_np, failure_np = (
+error_np, success_np, failure_np, done_np = (
     np.asarray(metrics.acumulated_error),
-    np.asarray(metrics.success_count),
-    np.asarray(metrics.failure_count),
+    np.asarray(metrics.avg_success),
+    np.asarray(metrics.avg_failure),
+    np.asarray(metrics.avg_done),
 )
 
 # We only average the 2D arrays (Loss, Entropy, KL)
@@ -412,9 +415,16 @@ ax4.grid(True, alpha=0.5)
 ax5 = fig.add_subplot(3, 2, 6)
 ax5.plot(success_np, color="green", label="Success")
 ax5.plot(failure_np, color="red", label="Failure")
-ax5.set(xlabel="Updates", title="Success and failure avg count")
+ax5.set(xlabel="Updates", title="Success and failure avg count", ylabel="Avg")
 ax5.grid(True, alpha=0.5)
 ax5.legend()
+
+ax5b = ax5.twinx()
+ax5b.plot(done_np, color="black", label="Done")
+ax5b.set(ylabel="Avg Dones")
+ax5b.grid(True, alpha=0.5)
+ax5b.legend()
+
 
 plt.savefig("training_plots.png")
 print("\nTraining plots saved to training_plots.png")
