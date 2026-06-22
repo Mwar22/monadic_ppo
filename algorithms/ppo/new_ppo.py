@@ -367,7 +367,7 @@ plot_configs = [
 ]
 
 np.savez(
-    "training_metrics",
+    "training_metrics.npz",
     losses=losses_np,
     entropy=entropy_np,
     kl_div=kl_np,
