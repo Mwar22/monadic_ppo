@@ -366,6 +366,18 @@ plot_configs = [
     (kl_np, "KL Divergence", "red"),
 ]
 
+np.savez(
+    "training_metrics",
+    losses=losses_np,
+    entropy=entropy_np,
+    kl_div=kl_np,
+    is_safe=is_safe_np,
+    error=error_np,
+    success=success_np,
+    failure=failure_np,
+    done=done_np,
+)
+
 fig = plt.figure(figsize=(12, 9), tight_layout=True)
 
 # Plot the 2D data (Averaged across Epochs)
