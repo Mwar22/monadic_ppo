@@ -13,3 +13,5 @@
 *.csv
 *.png
 .vscode/
+
+checkpoints/
