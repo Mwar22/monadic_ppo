@@ -4,7 +4,7 @@
 # Created Date: 16/06/2026 10:41:42
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 16/06/2026 04:24:12
+# Last Modified: 28/07/2026 12:30:00
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -46,7 +46,7 @@ class CauchyLinear(nnx.Module):
         self.layer = nnx.Linear(
             in_dim,
             out_dim,
-            kernel_init=nnx.initializers.orthogonal(jnp.sqrt(2)),
+            kernel_init=nnx.initializers.orthogonal(1.0),
             rngs=rngs,
             dtype=jnp.float16,
             param_dtype=jnp.float32,

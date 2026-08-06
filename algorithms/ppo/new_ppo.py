@@ -4,8 +4,8 @@
 # Created Date: 31/05/2026 01:29:51
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 17/06/2026 10:12:17
-# Modified By: Lucas de Jesus
+# Last Modified: 06/08/2026 06:32:56
+# Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
 #
@@ -359,6 +359,10 @@ error_np, success_np, failure_np, done_np = (
     np.asarray(metrics.avg_done),
 )
 
+success_rate_np = np.asarray(metrics.success_rate)
+error_tol_np = np.asarray(error_tol)
+
+
 # We only average the 2D arrays (Loss, Entropy, KL)
 plot_configs = [
     (losses_np, "Training Loss", "blue"),
@@ -376,6 +380,8 @@ np.savez(
     success=success_np,
     failure=failure_np,
     done=done_np,
+    success_rate=success_rate_np,
+    error_tol=error_tol_np,
 )
 
 fig = plt.figure(figsize=(12, 9), tight_layout=True)
@@ -401,8 +407,6 @@ for i, (data, title, color) in enumerate(plot_configs, start=1):
     ax.set(xlabel="Updates", title=title)
     ax.grid(True, alpha=0.5)
 
-success_rate_np = np.asarray(metrics.success_rate)
-error_tol_np = np.asarray(error_tol)
 
 ax3 = fig.add_subplot(3, 2, 4)
 ax3b = ax3.twinx()
