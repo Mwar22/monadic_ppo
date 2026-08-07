@@ -5,7 +5,7 @@
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
 # Last Modified: 06/08/2026 06:32:56
-# Modified By: Lucas de Jesus 
+# Modified By: Lucas de Jesus
 # -----
 # Copyright (c) 2026
 #
@@ -32,8 +32,8 @@ xla_flags += " --xla_gpu_autotune_level=4"
 xla_flags += " --xla_gpu_triton_gemm_any=True"
 
 # evita do jax prealocar a gpu inteira
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "true"
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.95"
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.85"
 
 import jax
 from jax import config
