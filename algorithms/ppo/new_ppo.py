@@ -4,8 +4,8 @@
 # Created Date: 31/05/2026 01:29:51
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 06/08/2026 06:32:56
-# Modified By: Lucas de Jesus
+# Last Modified: 07/08/2026 07:23:28
+# Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
 #
@@ -284,10 +284,10 @@ def create_optimizer(epochs, num_envs, buffer_length, updates, minibatch_size):
     total_steps = steps_per_epoch * updates
 
     lr_scheduler = optax.schedules.cosine_onecycle_schedule(
-        peak_value=5e-4,
-        pct_start=0.3,  # 30% do treino subindo (warm-up), 70% descendo
-        div_factor=5.0,  # LR inicial = peak_value / div_factor
-        final_div_factor=10.0,  # LR final = LR inicial / final_div_factor para o ajuste fino,
+        peak_value=6.5e-4,
+        pct_start=0.15,  # 15% do treino subindo (warm-up), 85% descendo
+        div_factor=3.25,  # LR inicial = peak_value / div_factor = 2e-4
+        final_div_factor=25.0,  # LR final = LR inicial / final_div_factor para o ajuste fino = 8e-5
         transition_steps=total_steps,
     )
 
