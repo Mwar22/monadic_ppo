@@ -4,8 +4,8 @@
 # Created Date: 24/05/2026 08:47:36
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 16/06/2026 06:58:04
-# Modified By: Lucas de Jesus
+# Last Modified: 17/08/2026 09:55:06
+# Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
 #
@@ -31,7 +31,7 @@ import jax
 from mujoco import mjx
 from jax import numpy as jnp
 from etils import epath
-from flax import struct
+from flax import struct, nnx
 from typing import Any, Dict, Self, Union, List, Tuple, cast
 from src.canonical_space import (
     CanonicalSpace,
@@ -43,8 +43,7 @@ from src.agent import Policy, Value, Agent, StepData
 from src.enviroment import MujocoEnv, mujoco_step, mujoco_reset
 from .actor import Actor
 from .critic import Critic
-from .networks import CauchyLinear, ReluLinear
-
+from .networks import CauchyLinear
 
 ########################################## para o pylance não reclamar #############################################
 mujoco: Any
@@ -211,15 +210,15 @@ class ThorEnv(struct.PyTreeNode):
 
 
 class ThorAgent(Agent):
-    def __init__(self, env: MujocoEnv, rngs, max_step_rads=0.05):
+    def __init__(self, env: MujocoEnv, rngs, max_step_rads=0.05, layer_type: nnx.Module = CauchyLinear):
         # mjx_data temporário
         mjx_data = mjx.make_data(env.mjx_model)
         policy_obs, action_obs = ThorAgent.compose_obs(env, mjx_data, jnp.zeros(3))
 
         self._policy = Actor(
-            policy_obs.shape[0], mjx_data.ctrl.shape[0], rngs, CauchyLinear
+            policy_obs.shape[0], mjx_data.ctrl.shape[0], rngs, layer_type
         )
-        self._value = Critic(action_obs.shape[0], rngs, CauchyLinear)
+        self._value = Critic(action_obs.shape[0], rngs, layer_type)
         self.max_step_rads = max_step_rads
 
     @property

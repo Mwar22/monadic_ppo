@@ -4,7 +4,7 @@
 # Created Date: 31/05/2026 01:29:51
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 07/08/2026 07:23:28
+# Last Modified: 17/08/2026 10:00:13
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -56,6 +56,7 @@ from src.gae import general_advantage_estimator
 from src.agent import StepData, Agent
 from typing import Self
 import orbax.checkpoint as ocp
+from usr.networks import CauchyLinear, TanhLinear, ReluLinear, GeluLinear
 
 
 @nnx.jit(static_argnums=(4, 5))
@@ -257,7 +258,10 @@ def run_multiple_updates(
 ######################################################################################################################
 
 model_path = "/home/lucas/Documentos/MLProjects/monadic_ppo"
+layer_type = CauchyLinear
+metrics_save = "cauchy_metrics.npz"
 
+#####################################################################################################################
 EPOCHS = 2
 NUM_ENVS = 4096
 BUFFER_LENGTH = 512
@@ -299,7 +303,7 @@ def create_optimizer(epochs, num_envs, buffer_length, updates, minibatch_size):
 
 key = jax.random.PRNGKey(0)
 rngs = nnx.Rngs(key)
-model = ThorAgent(env, rngs)
+model = ThorAgent(env, rngs, layer_type=layer_type)
 optimizer = nnx.Optimizer(
     model,
     create_optimizer(EPOCHS, NUM_ENVS, BUFFER_LENGTH, UPDATES, MINIBATCH_SIZE),
@@ -371,7 +375,7 @@ plot_configs = [
 ]
 
 np.savez(
-    "training_metrics.npz",
+    metrics_save,
     losses=losses_np,
     entropy=entropy_np,
     kl_div=kl_np,

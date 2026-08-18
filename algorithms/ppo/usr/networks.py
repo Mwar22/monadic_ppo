@@ -4,7 +4,7 @@
 # Created Date: 16/06/2026 10:41:42
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 28/07/2026 12:30:00
+# Last Modified: 17/08/2026 09:52:26
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -28,7 +28,8 @@ class ReluLinear(nnx.Module):
         self.layer = nnx.Linear(
             in_dim,
             out_dim,
-            kernel_init=nnx.initializers.orthogonal(jnp.sqrt(2)),
+            kernel_init=nnx.initializers.he_normal(),
+            bias_init=nnx.initializers.zeros_init(),
             rngs=rngs,
             dtype=jnp.float16,
             param_dtype=jnp.float32,
@@ -40,6 +41,41 @@ class ReluLinear(nnx.Module):
         x = self.norm(x)
         return jax.nn.relu(x)
 
+class TanhLinear(nnx.Module):
+    def __init__(self, in_dim, out_dim, rngs: nnx.Rngs):
+        self.layer = nnx.Linear(
+            in_dim,
+            out_dim,
+            kernel_init=nnx.initializers.glorot_uniform(),
+            bias_init=nnx.initializers.zeros_init(),
+            rngs=rngs,
+            dtype=jnp.float16,
+            param_dtype=jnp.float32,
+        )
+        self.norm = nnx.LayerNorm(out_dim, rngs=rngs)
+
+    def __call__(self, x: jax.Array):
+        x = self.layer(x)
+        x = self.norm(x)
+        return jax.nn.tanh(x)
+
+class GeluLinear(nnx.Module):
+    def __init__(self, in_dim, out_dim, rngs: nnx.Rngs):
+        self.layer = nnx.Linear(
+            in_dim,
+            out_dim,
+            kernel_init=nnx.initializers.he_normal(),
+            bias_init=nnx.initializers.zeros_init(),
+            rngs=rngs,
+            dtype=jnp.float16,
+            param_dtype=jnp.float32,
+        )
+        self.norm = nnx.LayerNorm(out_dim, rngs=rngs)
+
+    def __call__(self, x: jax.Array):
+        x = self.layer(x)
+        x = self.norm(x)
+        return jax.nn.gelu(x)
 
 class CauchyLinear(nnx.Module):
     def __init__(self, in_dim, out_dim, rngs: nnx.Rngs):
@@ -47,6 +83,7 @@ class CauchyLinear(nnx.Module):
             in_dim,
             out_dim,
             kernel_init=nnx.initializers.orthogonal(1.0),
+            bias_init=nnx.initializers.zeros_init(),
             rngs=rngs,
             dtype=jnp.float16,
             param_dtype=jnp.float32,
