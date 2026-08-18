@@ -4,7 +4,7 @@
 # Created Date: 06/08/2026 06:12:59
 # Author: Lucas de Jesus  (lucasdejesusphysic@gmail.com)
 # -----
-# Last Modified: 17/08/2026 09:15:29
+# Last Modified: 17/08/2026 09:27:48
 # Modified By: Lucas de Jesus 
 # -----
 # Copyright (c) 2026
@@ -109,14 +109,11 @@ def plot_datalist(axis, data_list):
         if "ylabel" in data:
             axis.set_ylabel(data["ylabel"])
 
-        if "label" in data:
-            axis.plot(metric, data["style"], label= data["label"])
-        else:
-            axis.plot(metric, data["style"])
+        axis.plot(metric, data["style"], label= data["label"] if "label" in data else "_nolegend_")
         
 
 for plot in plots:
-    fig, ax = plt.subplots(figsize=(6, 4))
+    fig, ax = plt.subplots(figsize=(8, 6))
     ax.set_title(plot["title"])
     plot_loc = "center right" if "loc" in plot else "best"
     ax.set_xlabel("Update")
@@ -132,19 +129,19 @@ for plot in plots:
         handles1, labels1 = ax.get_legend_handles_labels()
         handles2, labels2 = ax2.get_legend_handles_labels()
 
+        ax.yaxis.set_major_locator(LinearLocator(6))
+        ax2.yaxis.set_major_locator(LinearLocator(6))
+        ax2.grid(False)
         ax.legend(
             handles1 + handles2,
             labels1 + labels2,
             loc=plot_loc
         )
-
-
-        ax.yaxis.set_major_locator(LinearLocator(6))
-        ax2.yaxis.set_major_locator(LinearLocator(6))
-        ax2.grid(False)
         
     else:
-        ax.legend(loc=plot_loc)
+        handles, labels = ax.get_legend_handles_labels()
+        if labels:
+            ax.legend(loc=plot_loc)
     
     ax.grid(True)
     fig.savefig(plot["save_name"])
